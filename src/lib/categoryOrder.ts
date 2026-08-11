@@ -1,10 +1,26 @@
 export const CATEGORY_ORDER_STORAGE_KEY = "codex-board.category-order.v1";
 
 export function reconcileCategoryOrder(current: string[], discovered: string[]): string[] {
-  const available = new Set(discovered);
-  const retained = current.filter((category) => available.has(category));
+  const retained = [...new Set(current)];
   const retainedSet = new Set(retained);
   return [...retained, ...discovered.filter((category) => !retainedSet.has(category))];
+}
+
+export function createCategory(order: string[], category: string): string[] {
+  return order.includes(category) ? order : [...order, category];
+}
+
+export function renameCategory(order: string[], current: string, next: string): string[] {
+  if (current === next || order.includes(next)) return order;
+  return order.map((category) => category === current ? next : category);
+}
+
+export function categoryNameError(value: string, categories: string[], current?: string): string | null {
+  const name = value.trim();
+  if (!name) return "Enter a category name.";
+  if (name.includes(" - ")) return 'Category names cannot contain the " - " separator.';
+  if (name !== current && categories.includes(name)) return "A category with this name already exists.";
+  return null;
 }
 
 export function orderVisibleCategories(discovered: string[], preferred: string[]): string[] {

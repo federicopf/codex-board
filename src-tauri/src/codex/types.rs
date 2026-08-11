@@ -44,6 +44,7 @@ pub struct ThreadDto {
     pub preview: Option<String>,
     pub cwd: Option<String>,
     pub updated_at: Option<i64>,
+    pub status: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -76,6 +77,8 @@ pub(crate) struct RawThread {
     pub preview: Option<String>,
     pub cwd: Option<String>,
     pub updated_at: Option<i64>,
+    #[serde(default)]
+    pub status: Option<Value>,
 }
 
 impl From<RawThread> for ThreadDto {
@@ -86,6 +89,7 @@ impl From<RawThread> for ThreadDto {
             preview: thread.preview,
             cwd: thread.cwd,
             updated_at: thread.updated_at,
+            status: thread.status,
         }
     }
 }

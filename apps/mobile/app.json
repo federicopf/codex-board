@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "Codex Board",
+    "slug": "codex-board-mobile",
+    "scheme": "codex-board",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      ["expo-camera", { "cameraPermission": "Allow Codex Board to scan the pairing QR code", "recordAudioAndroid": false }],
+      ["expo-secure-store", { "configureAndroidBackup": true }]
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.federicogermani.codexboard.mobile",
+      "config": { "usesNonExemptEncryption": false }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.federicogermani.codexboard.mobile"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

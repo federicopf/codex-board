@@ -2,10 +2,10 @@ mod process;
 mod protocol;
 mod types;
 
-use std::{collections::VecDeque, sync::Arc};
+use std::sync::Arc;
 
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, broadcast};
 
 use process::RunningClient;
 use protocol::EventQueue;
@@ -21,7 +21,7 @@ impl CodexClient {
     pub fn new() -> Self {
         Self {
             running: Mutex::new(None),
-            events: Arc::new(Mutex::new(VecDeque::new())),
+            events: EventQueue::new(),
         }
     }
 
@@ -177,7 +177,21 @@ impl CodexClient {
     }
 
     pub async fn drain_events(&self) -> Vec<CodexEventDto> {
-        self.events.lock().await.drain(..).collect()
+        self.events.drain().await
+    }
+
+    pub fn subscribe_events(&self) -> broadcast::Receiver<CodexEventDto> {
+        self.events.subscribe()
+    }
+
+    pub async fn emit_local_event(&self, method: &str, params: Value) {
+        self.events
+            .push(CodexEventDto {
+                method: method.to_owned(),
+                params,
+                request_id: None,
+            })
+            .await;
     }
 
     pub async fn respond_to_request(

@@ -2,6 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { CodexError, CodexEvent, CodexThread, JsonValue, ThreadDto } from "./types";
 
+export interface GatewayInfo { running: boolean; port: number; token: string; error?: string | null; }
+export interface TailscaleInfo { installed: boolean; online: boolean; dnsName?: string | null; baseUrl?: string | null; error?: string | null; }
+export interface BoardConfig { categories: string[]; approvalMode: "auto" | "ask"; revision: number; }
+
 export async function listThreads(): Promise<ThreadDto[]> {
   return invoke<ThreadDto[]>("list_threads");
 }
@@ -33,6 +37,12 @@ export async function drainCodexEvents(): Promise<CodexEvent[]> {
 export async function respondToCodexRequest(requestId: JsonValue, result: JsonValue): Promise<void> {
   return invoke("respond_to_codex_request", { requestId, result });
 }
+
+export async function getGatewayInfo(): Promise<GatewayInfo> { return invoke<GatewayInfo>("gateway_info"); }
+export async function getTailscaleStatus(): Promise<TailscaleInfo> { return invoke<TailscaleInfo>("tailscale_status"); }
+export async function configureTailscaleServe(): Promise<TailscaleInfo> { return invoke<TailscaleInfo>("configure_tailscale_serve"); }
+export async function getBoardConfig(): Promise<BoardConfig> { return invoke<BoardConfig>("get_board_config"); }
+export async function setBoardConfig(config: BoardConfig): Promise<BoardConfig> { return invoke<BoardConfig>("set_board_config", { config }); }
 
 export function asCodexError(error: unknown): CodexError {
   if (

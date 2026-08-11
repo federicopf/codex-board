@@ -4,6 +4,7 @@ export interface ThreadDto {
   preview: string | null;
   cwd: string | null;
   updatedAt: number | null;
+  status?: JsonValue;
 }
 
 export interface CodexError {
@@ -47,6 +48,16 @@ export interface CodexEvent {
   method: string;
   params: JsonValue;
   requestId?: JsonValue;
+}
+
+export interface SequencedCodexEvent {
+  sequence: number;
+  event: CodexEvent;
+}
+
+export interface QueuedMessage {
+  id: string;
+  text: string;
 }
 
 export type ChatItemKind = "user" | "assistant" | "reasoning" | "plan" | "activity" | "notice";
