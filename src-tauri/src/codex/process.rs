@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     io,
+    path::PathBuf,
     process::Stdio,
     sync::{
         Arc, Mutex as StdMutex,
@@ -18,7 +19,7 @@ use tokio::{
 };
 
 use super::{
-    protocol::{PendingMap, fail_all, handle_incoming},
+    protocol::{EventQueue, PendingMap, fail_all, handle_incoming},
     types::{CodexErrorCode, CodexErrorDto},
 };
 
@@ -35,8 +36,8 @@ pub(crate) struct RunningClient {
 }
 
 impl RunningClient {
-    pub(crate) async fn spawn() -> Result<Arc<Self>, CodexErrorDto> {
-        let mut command = Command::new("codex");
+    pub(crate) async fn spawn(events: EventQueue) -> Result<Arc<Self>, CodexErrorDto> {
+        let mut command = Command::new(resolve_codex_executable());
         command
             .arg("app-server")
             .stdin(Stdio::piped())
@@ -100,16 +101,13 @@ impl RunningClient {
         });
 
         let reader_pending = pending.clone();
-        let reader_outbound = outbound.clone();
         let reader_alive = alive.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             loop {
                 match lines.next_line().await {
                     Ok(Some(line)) => {
-                        if let Err(error) =
-                            handle_incoming(&line, &reader_pending, &reader_outbound).await
-                        {
+                        if let Err(error) = handle_incoming(&line, &reader_pending, &events).await {
                             reader_alive.store(false, Ordering::Release);
                             fail_all(&reader_pending, error).await;
                             break;
@@ -269,6 +267,17 @@ impl RunningClient {
             })
     }
 
+    pub(crate) fn respond(&self, id: Value, result: Value) -> Result<(), CodexErrorDto> {
+        self.outbound
+            .send(json!({ "id": id, "result": result }))
+            .map_err(|_| {
+                CodexErrorDto::new(
+                    CodexErrorCode::ProcessExited,
+                    "Codex process is unavailable",
+                )
+            })
+    }
+
     pub(crate) fn shutdown_now(&self) {
         if !self.alive.swap(false, Ordering::AcqRel) {
             return;
@@ -289,12 +298,68 @@ fn classify_spawn_error(error: io::Error) -> CodexErrorDto {
     match error.kind() {
         io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied => CodexErrorDto::new(
             CodexErrorCode::CliNotFound,
-            "Codex CLI not found. Install the standalone Windows CLI and add it to PATH.",
+            "Codex CLI not found. Install Codex or set CODEX_EXECUTABLE to codex.exe.",
         )
         .with_details(error.to_string()),
         _ => CodexErrorDto::new(CodexErrorCode::StartFailed, "Could not start Codex CLI")
             .with_details(error.to_string()),
     }
+}
+
+fn resolve_codex_executable() -> PathBuf {
+    if let Some(configured) = std::env::var_os("CODEX_EXECUTABLE") {
+        let path = PathBuf::from(configured);
+        if path.is_file() {
+            return path;
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            let bin_root = PathBuf::from(local_app_data).join("OpenAI/Codex/bin");
+            if let Some(path) = newest_nested_executable(&bin_root, "codex.exe") {
+                return path;
+            }
+        }
+        if let Some(user_profile) = std::env::var_os("USERPROFILE") {
+            let plugin_runtime =
+                PathBuf::from(user_profile).join(".codex/plugins/.plugin-appserver/codex.exe");
+            if plugin_runtime.is_file() {
+                return plugin_runtime;
+            }
+        }
+    }
+
+    if let Some(paths) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&paths) {
+            #[cfg(windows)]
+            let candidate = directory.join("codex.exe");
+            #[cfg(not(windows))]
+            let candidate = directory.join("codex");
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+
+    PathBuf::from("codex")
+}
+
+#[cfg(windows)]
+fn newest_nested_executable(root: &std::path::Path, name: &str) -> Option<PathBuf> {
+    let mut candidates = std::fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join(name))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+    });
+    candidates.pop()
 }
 
 #[cfg(test)]

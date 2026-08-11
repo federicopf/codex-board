@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -45,12 +46,26 @@ pub struct ThreadDto {
     pub updated_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexEventDto {
+    pub method: String,
+    pub params: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<Value>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ThreadListResponse {
     #[serde(default)]
     pub data: Vec<RawThread>,
     pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ThreadReadResponse {
+    pub thread: RawThread,
 }
 
 #[derive(Debug, Deserialize)]

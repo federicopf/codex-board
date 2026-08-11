@@ -2,23 +2,26 @@ mod process;
 mod protocol;
 mod types;
 
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use process::RunningClient;
-use types::{CodexErrorCode, ThreadListResponse};
-pub use types::{CodexErrorDto, ThreadDto};
+use protocol::EventQueue;
+use types::{CodexErrorCode, ThreadListResponse, ThreadReadResponse};
+pub use types::{CodexErrorDto, CodexEventDto, ThreadDto};
 
 pub struct CodexClient {
     running: Mutex<Option<Arc<RunningClient>>>,
+    events: EventQueue,
 }
 
 impl CodexClient {
     pub fn new() -> Self {
         Self {
             running: Mutex::new(None),
+            events: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -28,7 +31,7 @@ impl CodexClient {
             return Ok(client.clone());
         }
 
-        let client = RunningClient::spawn().await?;
+        let client = RunningClient::spawn(self.events.clone()).await?;
         if let Err(error) = client.initialize().await {
             client.shutdown_now();
             return Err(error);
@@ -76,7 +79,7 @@ impl CodexClient {
         &self,
         thread_id: String,
         new_name: String,
-    ) -> Result<(), CodexErrorDto> {
+    ) -> Result<ThreadDto, CodexErrorDto> {
         let client = self.ensure_running().await?;
         let result = client
             .request(
@@ -91,7 +94,98 @@ impl CodexClient {
             )
             .with_details(result.to_string()));
         }
+        let read_result = client
+            .request(
+                "thread/read",
+                json!({ "threadId": thread_id, "includeTurns": false }),
+            )
+            .await?;
+        let read: ThreadReadResponse =
+            serde_json::from_value(read_result.clone()).map_err(|error| {
+                CodexErrorDto::new(
+                    CodexErrorCode::ProtocolError,
+                    "Unexpected thread/read response after rename",
+                )
+                .with_details(format!("{error}: {read_result}"))
+            })?;
+        if read.thread.name.as_deref() != Some(new_name.as_str()) {
+            return Err(CodexErrorDto::new(
+                CodexErrorCode::RequestFailed,
+                "Codex did not persist the new thread title",
+            )
+            .with_details(format!(
+                "Expected {:?}, received {:?}",
+                new_name, read.thread.name
+            )));
+        }
+        Ok(ThreadDto::from(read.thread))
+    }
+
+    pub async fn load_thread(&self, thread_id: String) -> Result<Value, CodexErrorDto> {
+        let client = self.ensure_running().await?;
+        let result = client
+            .request("thread/resume", json!({ "threadId": thread_id }))
+            .await?;
+        result.get("thread").cloned().ok_or_else(|| {
+            CodexErrorDto::new(
+                CodexErrorCode::ProtocolError,
+                "Unexpected thread/resume response",
+            )
+            .with_details(result.to_string())
+        })
+    }
+
+    pub async fn send_message(
+        &self,
+        thread_id: String,
+        text: String,
+    ) -> Result<Value, CodexErrorDto> {
+        if text.trim().is_empty() {
+            return Err(CodexErrorDto::new(
+                CodexErrorCode::RequestFailed,
+                "Message cannot be empty",
+            ));
+        }
+        let client = self.ensure_running().await?;
+        client
+            .request("thread/resume", json!({ "threadId": thread_id }))
+            .await?;
+        client
+            .request(
+                "turn/start",
+                json!({
+                    "threadId": thread_id,
+                    "input": [{ "type": "text", "text": text }]
+                }),
+            )
+            .await
+    }
+
+    pub async fn interrupt_turn(
+        &self,
+        thread_id: String,
+        turn_id: String,
+    ) -> Result<(), CodexErrorDto> {
+        let client = self.ensure_running().await?;
+        client
+            .request(
+                "turn/interrupt",
+                json!({ "threadId": thread_id, "turnId": turn_id }),
+            )
+            .await?;
         Ok(())
+    }
+
+    pub async fn drain_events(&self) -> Vec<CodexEventDto> {
+        self.events.lock().await.drain(..).collect()
+    }
+
+    pub async fn respond_to_request(
+        &self,
+        request_id: Value,
+        result: Value,
+    ) -> Result<(), CodexErrorDto> {
+        self.ensure_running().await?.respond(request_id, result)
     }
 
     pub fn shutdown_best_effort(&self) {

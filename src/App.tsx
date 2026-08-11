@@ -1,21 +1,38 @@
 import {
   DndContext,
   DragOverlay,
+  KeyboardSensor,
   PointerSensor,
+  closestCenter,
   useDraggable,
-  useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
+import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
-import { asCodexError, listThreads, openThread, renameThread } from "./api";
+import { asCodexError, listThreads, renameThread } from "./api";
 import "./App.css";
+import { ChatPanel } from "./ChatPanel";
 import { moveThread, toBoardThreads } from "./lib/board";
+import {
+  loadCategoryOrder,
+  moveCategory,
+  orderVisibleCategories,
+  reconcileCategoryOrder,
+  saveCategoryOrder,
+} from "./lib/categoryOrder";
 import { ALL_PROJECTS, projectOptions, buildProjectMap } from "./lib/projects";
 import { threadCategories } from "./lib/threadStatus";
 import type { BoardThread, CodexError } from "./types";
+
+const THREAD_DRAG_PREFIX = "thread:";
+const CATEGORY_DRAG_PREFIX = "category:";
+const threadDragId = (threadId: string) => `${THREAD_DRAG_PREFIX}${threadId}`;
+const categoryDragId = (category: string) => `${CATEGORY_DRAG_PREFIX}${encodeURIComponent(category)}`;
+const categoryFromDragId = (id: string) => decodeURIComponent(id.slice(CATEGORY_DRAG_PREFIX.length));
 
 function ThreadCard({
   thread,
@@ -31,7 +48,7 @@ function ThreadCard({
   overlay?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: thread.id,
+    id: threadDragId(thread.id),
     disabled: pending || overlay,
   });
   const style: CSSProperties | undefined = transform
@@ -64,7 +81,7 @@ function ThreadCard({
               onOpen?.(thread.id);
             }}
           >
-            Open ↗
+            Chat
           </button>
         )}
       </footer>
@@ -85,11 +102,15 @@ function Column({
   showProject: boolean;
   onOpen: (threadId: string) => void;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: `column:${encodeURIComponent(category)}` });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } = useSortable({
+    id: categoryDragId(category),
+  });
+  const style: CSSProperties = { transform: CSS.Transform.toString(transform), transition };
   const hue = [...category].reduce((value, character) => value + character.charCodeAt(0), 0) % 360;
   return (
-    <section ref={setNodeRef} className={`board-column${isOver ? " is-over" : ""}`}>
+    <section ref={setNodeRef} style={style} className={`board-column${isOver ? " is-over" : ""}${isDragging ? " is-dragging-column" : ""}`}>
       <header className="column-header">
+        <button className="column-drag-handle" type="button" aria-label={`Move ${category} column`} {...attributes} {...listeners}>⠿</button>
         <span className="status-dot" style={{ backgroundColor: `hsl(${hue} 55% 55%)` }} />
         <h2>{category}</h2>
         <span className="count">{threads.length}</span>
@@ -118,7 +139,13 @@ function App() {
   const [error, setError] = useState<CodexError | null>(null);
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [categoryOrder, setCategoryOrder] = useState<string[]>(loadCategoryOrder);
+  const [chatThreadId, setChatThreadId] = useState<string | null>(null);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   const refresh = useCallback(async (background = false) => {
     background ? setRefreshing(true) : setLoading(true);
@@ -159,30 +186,72 @@ function App() {
     () => (project === ALL_PROJECTS ? threads : threads.filter((item) => item.projectKey === project)),
     [project, threads],
   );
+  const discoveredCategories = useMemo(
+    () => threadCategories(threads.map((thread) => thread.category)),
+    [threads],
+  );
+  useEffect(() => {
+    setCategoryOrder((current) => {
+      const next = reconcileCategoryOrder(current, discoveredCategories);
+      saveCategoryOrder(next);
+      return next;
+    });
+  }, [discoveredCategories]);
   const categories = useMemo(
-    () => threadCategories(visibleThreads.map((thread) => thread.category)),
-    [visibleThreads],
+    () => orderVisibleCategories(
+      threadCategories(visibleThreads.map((thread) => thread.category)),
+      categoryOrder,
+    ),
+    [visibleThreads, categoryOrder],
   );
   const activeThread = threads.find((thread) => thread.id === activeId) ?? null;
+  const chatThread = threads.find((thread) => thread.id === chatThreadId) ?? null;
 
   function handleDragStart(event: DragStartEvent) {
-    setActiveId(String(event.active.id));
+    const id = String(event.active.id);
+    if (id.startsWith(CATEGORY_DRAG_PREFIX)) {
+      setActiveCategory(categoryFromDragId(id));
+      setActiveId(null);
+    } else if (id.startsWith(THREAD_DRAG_PREFIX)) {
+      setActiveId(id.slice(THREAD_DRAG_PREFIX.length));
+      setActiveCategory(null);
+    }
   }
 
   async function handleDragEnd(event: DragEndEvent) {
     setActiveId(null);
-    const threadId = String(event.active.id);
+    setActiveCategory(null);
+    const activeDragId = String(event.active.id);
     const overId = event.over ? String(event.over.id) : "";
-    if (!overId.startsWith("column:") || pendingIds.has(threadId)) return;
-    const targetCategory = decodeURIComponent(overId.slice("column:".length));
+    if (activeDragId.startsWith(CATEGORY_DRAG_PREFIX)) {
+      if (!overId.startsWith(CATEGORY_DRAG_PREFIX)) return;
+      const active = categoryFromDragId(activeDragId);
+      const over = categoryFromDragId(overId);
+      setCategoryOrder((current) => {
+        const next = moveCategory(current, active, over);
+        saveCategoryOrder(next);
+        return next;
+      });
+      return;
+    }
+    if (!activeDragId.startsWith(THREAD_DRAG_PREFIX) || !overId.startsWith(CATEGORY_DRAG_PREFIX)) return;
+    const threadId = activeDragId.slice(THREAD_DRAG_PREFIX.length);
+    if (pendingIds.has(threadId)) return;
+    const targetCategory = categoryFromDragId(overId);
     const result = moveThread(threads, threadId, targetCategory);
     if (!result) return;
 
     setThreads(result.threads);
     setPendingIds((current) => new Set(current).add(threadId));
     try {
-      await renameThread(threadId, result.newName);
-      await refresh(true);
+      const confirmed = await renameThread(threadId, result.newName);
+      setThreads((current) => current.map((thread) => thread.id === threadId ? {
+        ...thread,
+        name: confirmed.name,
+        preview: confirmed.preview,
+        cwd: confirmed.cwd,
+        updatedAt: confirmed.updatedAt,
+      } : thread));
     } catch (cause) {
       setThreads((current) =>
         current.map((thread) => (thread.id === threadId ? result.previous : thread)),
@@ -198,14 +267,6 @@ function App() {
     }
   }
 
-  async function handleOpen(threadId: string) {
-    try {
-      await openThread(threadId);
-    } catch (cause) {
-      setError(asCodexError(cause));
-    }
-  }
-
   if (loading) {
     return <div className="center-state"><div className="spinner" /><p>Loading Codex threads…</p></div>;
   }
@@ -215,14 +276,14 @@ function App() {
       <div className="center-state error-state">
         <div className="error-icon">!</div>
         <h1>Codex CLI not found</h1>
-        <p>Install the standalone Codex CLI for Windows and make sure <code>codex</code> is available in PATH.</p>
+        <p>Install Codex for Windows, or set <code>CODEX_EXECUTABLE</code> to the full path of <code>codex.exe</code>.</p>
         <button onClick={() => void refresh()}>Try again</button>
       </div>
     );
   }
 
   return (
-    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={(event) => void handleDragEnd(event)}>
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={(event) => void handleDragEnd(event)}>
       <main className="app-shell">
         <header className="topbar">
           <div className="brand">
@@ -256,25 +317,36 @@ function App() {
             <p>{project === ALL_PROJECTS ? "Your Codex threads will appear automatically." : "This project has no visible threads."}</p>
           </div>
         ) : (
-          <div
-            className="board"
-            style={{ gridTemplateColumns: `repeat(${categories.length}, minmax(250px, 1fr))` }}
-          >
-            {categories.map((category) => (
-              <Column
-                key={category}
-                category={category}
-                threads={visibleThreads.filter((thread) => thread.category === category)}
-                pendingIds={pendingIds}
-                showProject={project === ALL_PROJECTS}
-                onOpen={(threadId) => void handleOpen(threadId)}
-              />
-            ))}
-          </div>
+          <SortableContext items={categories.map(categoryDragId)} strategy={horizontalListSortingStrategy}>
+            <div
+              className="board"
+              style={{ gridTemplateColumns: `repeat(${categories.length}, minmax(250px, 1fr))` }}
+            >
+              {categories.map((category) => (
+                <Column
+                  key={category}
+                  category={category}
+                  threads={visibleThreads.filter((thread) => thread.category === category)}
+                  pendingIds={pendingIds}
+                  showProject={project === ALL_PROJECTS}
+                  onOpen={setChatThreadId}
+                />
+              ))}
+            </div>
+          </SortableContext>
         )}
       </main>
+      {chatThread && (
+        <ChatPanel
+          thread={chatThread}
+          onClose={() => {
+            setChatThreadId(null);
+            void refresh(true);
+          }}
+        />
+      )}
       <DragOverlay>
-        {activeThread ? <ThreadCard thread={activeThread} pending={false} showProject={project === ALL_PROJECTS} overlay /> : null}
+        {activeThread ? <ThreadCard thread={activeThread} pending={false} showProject={project === ALL_PROJECTS} overlay /> : activeCategory ? <div className="column-overlay">{activeCategory}</div> : null}
       </DragOverlay>
     </DndContext>
   );

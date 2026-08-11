@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 
-const child = spawn("codex", ["app-server"], {
+const codexExecutable = process.env.CODEX_EXECUTABLE || (process.platform === "win32" ? "codex.exe" : "codex");
+const child = spawn(codexExecutable, ["app-server"], {
   stdio: ["pipe", "pipe", "pipe"],
   windowsHide: true,
 });
@@ -60,9 +61,19 @@ try {
 
   const named = threads.find((thread) => typeof thread.name === "string" && thread.name.length > 0);
   let renameVerified = false;
+  let chatHistoryVerified = false;
+  let resumeVerified = false;
   if (named) {
     await request("thread/name/set", { threadId: named.id, name: named.name });
-    renameVerified = true;
+    const renamed = await request("thread/read", { threadId: named.id, includeTurns: false });
+    renameVerified = renamed.thread?.name === named.name;
+  }
+  if (threads[0]) {
+    const read = await request("thread/read", { threadId: threads[0].id, includeTurns: true });
+    chatHistoryVerified = read.thread?.id === threads[0].id && Array.isArray(read.thread?.turns);
+    const resumed = await request("thread/resume", { threadId: threads[0].id });
+    resumeVerified = resumed.thread?.id === threads[0].id;
+    await request("thread/unsubscribe", { threadId: threads[0].id });
   }
 
   console.log(JSON.stringify({
@@ -72,6 +83,8 @@ try {
     threadCount: threads.length,
     namedThreadCount: threads.filter((thread) => thread.name).length,
     renameVerified,
+    chatHistoryVerified,
+    resumeVerified,
     firstThreadFields: threads[0] ? Object.keys(threads[0]).sort() : [],
   }, null, 2));
 } finally {
