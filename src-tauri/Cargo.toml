@@ -1,6 +1,6 @@
 [package]
 name = "codex-board"
-version = "0.2.1"
+version = "0.2.2"
 description = "A native Windows board for organizing Codex threads"
 authors = ["Federico Germani"]
 edition = "2024"
