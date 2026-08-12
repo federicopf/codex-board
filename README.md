@@ -14,7 +14,7 @@ Codex Board is an unofficial, open-source board and chat client for local Codex 
 - Automatic or manual command, file-change and permission approvals.
 - Working indicators on cards and completion notifications.
 - Shared backend persistence for categories, order and approval mode.
-- Authenticated HTTPS/WebSocket access over a private Tailscale network.
+- Authenticated HTTP/WebSocket access inside the encrypted private Tailscale network.
 - Expo mobile client with QR pairing, encrypted credential storage, live board/chat, approvals, questions, card moves and category management.
 
 ## How categories work
@@ -47,11 +47,11 @@ The release APK is built automatically by GitHub Actions. You do not need an Exp
 
 1. Keep Tailscale connected on both devices.
 2. Open Codex Board on Windows and select **Remote**.
-3. Select **Enable remote access**. Codex Board runs `tailscale serve --bg localhost:47821`.
+3. Select **Enable remote access**. Codex Board creates a tailnet-only HTTP proxy on port `47822` to its loopback gateway on port `47821`.
 4. A private pairing QR appears. In the mobile app select **Scan pairing QR** and scan it.
 5. After the first pairing, the credential remains encrypted on the phone; normal use only requires Tailscale and Codex Board to be running.
 
-Tailscale Serve provides the private HTTPS address and TLS certificate. The QR contains that address and a random 256-bit device credential. The Expo client stores the credential with `expo-secure-store` in the iOS Keychain or Android Keystore-backed encrypted storage.
+Tailscale encrypts traffic end-to-end between the devices. The internal HTTP endpoint is reachable only inside the tailnet, does not require public TLS certificates, and every request additionally requires the random 256-bit credential contained in the QR. The Expo client stores that credential with `expo-secure-store` in the iOS Keychain or Android Keystore-backed encrypted storage.
 
 The PC may be on any network and the phone may use another Wi-Fi or mobile data. The PC must be powered on, connected to Tailscale and running Codex Board. No router port forwarding, public tunnel or ngrok session is required.
 

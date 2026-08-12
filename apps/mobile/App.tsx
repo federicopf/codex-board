@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform,
   Pressable, ScrollView, StyleSheet, Text, TextInput, useColorScheme, View,
@@ -6,6 +6,7 @@ import {
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import Markdown from "react-native-markdown-display";
 import {
   categoryFromTitle, displayTitle, parsePairingPayload,
   type BoardConfig, type JsonValue, type PairingCredential,
@@ -56,6 +57,11 @@ function isWorking(thread: ThreadDto): boolean {
   return string(object(thread.status).type) === "active";
 }
 
+function projectLabel(cwd: string | null): string {
+  const parts = (cwd || "Local project").split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) || "Local project";
+}
+
 function taskName(category: string, title: string): string {
   return category === "Uncategorized" ? title : `${category} - ${title}`;
 }
@@ -89,18 +95,20 @@ function PairScreen({ onPair }: { onPair: (credential: PairingCredential) => Pro
   }
 
   return <SafeAreaView style={styles.pairPage}>
-    <View style={styles.logo}><View style={[styles.logoBar, { height: 14 }]} /><View style={[styles.logoBar, { height: 27 }]} /><View style={[styles.logoBar, { height: 20 }]} /></View>
-    <Text style={styles.title}>Codex Board</Text>
-    <Text style={styles.subtitle}>Connect securely to the Board running on your PC through Tailscale.</Text>
-    <Pressable style={styles.primaryButton} onPress={async () => {
-      if (!permission?.granted) { const result = await requestPermission(); if (!result.granted) return; }
-      setScanning(true);
-    }}><Text style={styles.primaryButtonText}>Scan pairing QR</Text></Pressable>
-    <Text style={styles.or}>or paste the pairing code</Text>
-    <TextInput style={styles.input} value={value} onChangeText={setValue} multiline autoCapitalize="none" autoCorrect={false} placeholder="Pairing URL or JSON" />
-    <Pressable disabled={busy || !value.trim()} style={[styles.primaryButton, (busy || !value.trim()) && styles.disabled]} onPress={() => void pair(value)}>
-      {busy ? <ActivityIndicator color="white" /> : <Text style={styles.primaryButtonText}>Connect</Text>}
-    </Pressable>
+    <View style={styles.pairHero}><View style={styles.logo}><View style={[styles.logoBar, { height: 14 }]} /><View style={[styles.logoBar, { height: 27 }]} /><View style={[styles.logoBar, { height: 20 }]} /></View>
+      <Text style={styles.pairEyebrow}>YOUR CODEX, EVERYWHERE</Text><Text style={styles.title}>Codex Board</Text>
+      <Text style={styles.subtitle}>Your projects, conversations and approvals—securely connected to the PC through Tailscale.</Text>
+    </View>
+    <View style={styles.pairCard}><Pressable style={styles.primaryButton} onPress={async () => {
+        if (!permission?.granted) { const result = await requestPermission(); if (!result.granted) return; }
+        setScanning(true);
+      }}><Text style={styles.primaryButtonText}>Scan pairing QR</Text></Pressable>
+      <Text style={styles.or}>OR CONNECT MANUALLY</Text>
+      <TextInput style={styles.input} value={value} onChangeText={setValue} multiline autoCapitalize="none" autoCorrect={false} placeholder="Paste pairing URL or JSON" />
+      <Pressable disabled={busy || !value.trim()} style={[styles.primaryButton, styles.connectButton, (busy || !value.trim()) && styles.disabled]} onPress={() => void pair(value)}>
+        {busy ? <ActivityIndicator color="white" /> : <Text style={styles.primaryButtonText}>Connect securely</Text>}
+      </Pressable>
+    </View><Text style={styles.pairFootnote}>The connection stays private inside your Tailscale network.</Text>
   </SafeAreaView>;
 }
 
@@ -145,14 +153,15 @@ function RequestCard({ request, api, onDone }: { request: PendingRemoteRequest; 
   </View>;
 }
 
-function Chat({ thread, api, queue, requests, onClose, onChanged }: { thread: ThreadDto; api: BoardApi; queue: QueuedMessage[]; requests: PendingRemoteRequest[]; onClose: () => void; onChanged: () => void }) {
+function Chat({ thread, api, queue, requests, eventRevision, onClose, onChanged }: { thread: ThreadDto; api: BoardApi; queue: QueuedMessage[]; requests: PendingRemoteRequest[]; eventRevision: number; onClose: () => void; onChanged: () => void }) {
   const [loaded, setLoaded] = useState<JsonObject | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const chatRef = useRef<FlatList<ChatLine>>(null);
   const lines = useMemo(() => conversation(loaded), [loaded]);
   const refresh = useCallback(() => void api.thread(thread.id).then(setLoaded).catch((error) => Alert.alert("Chat unavailable", error.message)), [api, thread.id]);
   useEffect(refresh, [refresh]);
-  useEffect(() => api.subscribe((event) => { if (string(object(event.params).threadId) === thread.id) { refresh(); onChanged(); } }, () => {}), [api, refresh, thread.id, onChanged]);
+  useEffect(() => { if (eventRevision > 0) refresh(); }, [eventRevision, refresh]);
 
   async function send() {
     const text = draft.trim(); if (!text || busy) return;
@@ -164,8 +173,8 @@ function Chat({ thread, api, queue, requests, onClose, onChanged }: { thread: Th
 
   const turnId = activeTurnId(loaded);
   return <Modal animationType="slide"><SafeAreaView style={styles.page}>
-    <View style={styles.header}><Pressable onPress={onClose}><Text style={styles.back}>‹ Board</Text></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle} numberOfLines={1}>{displayTitle(thread.name, thread.preview)}</Text><Text style={styles.headerMeta} numberOfLines={1}>{thread.cwd}</Text></View>{turnId && <Pressable onPress={() => void api.interrupt(thread.id, turnId)}><Text style={styles.stop}>Stop</Text></Pressable>}</View>
-    <FlatList style={styles.chat} contentContainerStyle={styles.chatContent} data={lines} keyExtractor={(item) => item.id} ListEmptyComponent={<Text style={styles.empty}>No messages yet.</Text>} renderItem={({ item }) => <View style={[styles.bubble, styles[`bubble_${item.role}`]]}><Text style={[styles.bubbleText, item.role === "user" && styles.userText]}>{item.text || "…"}</Text></View>} ListFooterComponent={<>
+    <View style={styles.header}><Pressable style={styles.chatBackButton} onPress={onClose}><Text style={styles.back}>‹</Text></Pressable><View style={styles.headerCopy}><View style={styles.chatTitleRow}><Text style={styles.headerTitle} numberOfLines={1}>{displayTitle(thread.name, thread.preview)}</Text><View style={[styles.chatState, turnId && styles.chatStateLive]}><Text style={[styles.chatStateText, turnId && styles.chatStateTextLive]}>{turnId ? "Working" : "Ready"}</Text></View></View><Text style={styles.headerMeta} numberOfLines={1}>{projectLabel(thread.cwd)}</Text></View>{turnId && <Pressable style={styles.stopButton} onPress={() => void api.interrupt(thread.id, turnId)}><Text style={styles.stop}>Stop</Text></Pressable>}</View>
+    <FlatList ref={chatRef} style={styles.chat} contentContainerStyle={styles.chatContent} data={lines} keyExtractor={(item) => item.id} onContentSizeChange={() => chatRef.current?.scrollToEnd({ animated: false })} ListEmptyComponent={<Text style={styles.empty}>No messages yet.</Text>} renderItem={({ item }) => <View style={[styles.bubble, styles[`bubble_${item.role}`]]}>{item.role !== "user" && <Text style={styles.bubbleLabel}>{item.role === "assistant" ? "CODEX" : "ACTIVITY"}</Text>}{item.role === "assistant" ? <Markdown style={markdownStyles}>{item.text || "…"}</Markdown> : <Text style={[styles.bubbleText, item.role === "user" && styles.userText]}>{item.text || "…"}</Text>}</View>} ListFooterComponent={<>
       {queue.length > 0 && <View style={styles.queueBox}><Text style={styles.requestTitle}>{queue.length} queued</Text>{queue.map((message, index) => <View key={message.id} style={styles.queueRow}><Text style={styles.queueIndex}>{index + 1}</Text><Text style={styles.queueText}>{message.text}</Text><Pressable onPress={() => void api.removeQueued(thread.id, message.id).then(onChanged)}><Text style={styles.remove}>×</Text></Pressable></View>)}</View>}
       {requests.map((request) => <RequestCard key={JSON.stringify(request.requestId)} request={request} api={api} onDone={onChanged} />)}
     </>} />
@@ -209,8 +218,8 @@ function CategoryManager({ config, threads, api, onClose, onSaved }: { config: B
     finally { setBusy(false); }
   }
 
-  return <Modal animationType="slide"><SafeAreaView style={styles.page}><View style={styles.header}><Pressable onPress={onClose}><Text style={styles.back}>Done</Text></Pressable><Text style={styles.headerTitle}>Categories</Text><View style={styles.headerCopy} /></View><ScrollView contentContainerStyle={styles.manager}>
-    <Text style={styles.subtitle}>Create, rename and reorder columns. Changes are shared with desktop immediately.</Text>
+  return <Modal animationType="slide"><SafeAreaView style={styles.page}><View style={styles.header}><Pressable style={styles.chatBackButton} onPress={onClose}><Text style={styles.managerDone}>Done</Text></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>Manage categories</Text><Text style={styles.headerMeta}>Synced with desktop in real time</Text></View></View><ScrollView contentContainerStyle={styles.manager}>
+    <View style={styles.managerIntro}><Text style={styles.overviewEyebrow}>BOARD STRUCTURE</Text><Text style={styles.managerTitle}>Make the board yours</Text><Text style={styles.managerSubtitle}>Create, rename and reorder columns. Categories are driven by your prefixes.</Text></View>
     <View style={styles.modeRow}><View style={styles.categoryCopy}><Text style={styles.cardTitle}>Approvals</Text><Text style={styles.headerMeta}>{config.approvalMode === "auto" ? "Commands and changes are approved automatically" : "Ask on desktop or mobile"}</Text></View><Pressable style={styles.denyButton} onPress={() => void api.updateBoard({ ...config, approvalMode: config.approvalMode === "auto" ? "ask" : "auto" }).then(onSaved)}><Text>{config.approvalMode === "auto" ? "Use Ask" : "Use Auto"}</Text></Pressable></View>
     <View style={styles.addRow}><TextInput style={[styles.smallInput, { flex: 1 }]} value={draft} onChangeText={setDraft} placeholder="Category name" /><Pressable disabled={busy} style={styles.allowButton} onPress={() => void add()}><Text style={styles.primaryButtonText}>Add</Text></Pressable></View>
     {categories.map((category, index) => { const count = threads.filter((thread) => categoryFromTitle(thread.name) === category).length; return <View key={category} style={styles.categoryRow}><View style={styles.categoryCopy}><Text style={styles.cardTitle}>{category}</Text><Text style={styles.headerMeta}>{count} tasks</Text></View><Pressable disabled={index === 0 || busy} onPress={() => { const next = [...categories]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; setCategories(next); void save(next); }}><Text style={styles.orderButton}>↑</Text></Pressable><Pressable disabled={index === categories.length - 1 || busy} onPress={() => { const next = [...categories]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; setCategories(next); void save(next); }}><Text style={styles.orderButton}>↓</Text></Pressable><Pressable disabled={busy} onPress={() => rename(category)}><Text style={styles.editButton}>Edit</Text></Pressable>{editing === category && <Pressable onPress={() => void applyRename(category)}><Text style={styles.editButton}>Rename</Text></Pressable>}{count === 0 && <Pressable disabled={busy} onPress={() => { const next = categories.filter((item) => item !== category); setCategories(next); void save(next); }}><Text style={styles.deleteButton}>Delete</Text></Pressable>}</View>; })}
@@ -239,6 +248,9 @@ function Board({ credential, onDisconnect }: { credential: PairingCredential; on
   const [moving, setMoving] = useState<ThreadDto | null>(null);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [eventRevision, setEventRevision] = useState(0);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refresh = useCallback(async () => {
     try {
       const [nextThreads, nextConfig, nextQueues, nextRequests] = await Promise.all([api.threads(), api.board(), api.queues(), api.requests()]);
@@ -246,14 +258,37 @@ function Board({ credential, onDisconnect }: { credential: PairingCredential; on
     } catch (error) { Alert.alert("PC unavailable", error instanceof Error ? error.message : String(error)); }
     finally { setLoading(false); }
   }, [api]);
-  useEffect(() => { void refresh(); return api.subscribe(() => void refresh(), setConnected); }, [api, refresh]);
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimer.current) return;
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      setEventRevision((value) => value + 1);
+      void refresh();
+    }, 250);
+  }, [refresh]);
+  useEffect(() => {
+    void refresh();
+    const unsubscribe = api.subscribe(scheduleRefresh, setConnected);
+    return () => {
+      unsubscribe();
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    };
+  }, [api, refresh, scheduleRefresh]);
   const discovered = [...new Set(threads.map((thread) => categoryFromTitle(thread.name)))];
   const categories = [...(config?.categories || []), ...discovered.filter((value) => !config?.categories.includes(value))];
+  useEffect(() => {
+    if (categories.length > 0 && (!activeCategory || !categories.includes(activeCategory))) setActiveCategory(categories[0]);
+  }, [activeCategory, categories.join("\u0000")]);
+  const visibleCategory = activeCategory || categories[0];
+  const visibleThreads = threads.filter((thread) => categoryFromTitle(thread.name) === visibleCategory);
+  const workingCount = threads.filter(isWorking).length;
 
   return <SafeAreaView style={styles.page}>
-    <View style={styles.header}><View style={styles.headerCopy}><Text style={styles.headerTitle}>Codex Board</Text><Text style={styles.headerMeta}><Text style={{ color: connected ? "#43b77a" : "#d99a45" }}>●</Text> {connected ? "Live through Tailscale" : "Reconnecting…"}</Text></View><Pressable onPress={() => setManaging(true)}><Text style={styles.headerAction}>Categories</Text></Pressable><Pressable onPress={() => void onDisconnect()}><Text style={styles.headerAction}>Unpair</Text></Pressable></View>
-    {loading ? <View style={styles.center}><ActivityIndicator /></View> : <ScrollView horizontal contentContainerStyle={styles.columns} showsHorizontalScrollIndicator={false}>{categories.map((category) => { const items = threads.filter((thread) => categoryFromTitle(thread.name) === category); return <View style={styles.column} key={category}><View style={styles.columnHeader}><Text style={styles.columnTitle}>{category}</Text><Text style={styles.count}>{items.length}</Text></View><ScrollView>{items.map((thread) => <View key={thread.id} style={[styles.card, isWorking(thread) && styles.workingCard]}><Pressable onPress={() => setSelected(thread)}><Text style={styles.cardTitle}>{displayTitle(thread.name, thread.preview)}</Text>{thread.preview && <Text style={styles.cardPreview} numberOfLines={3}>{thread.preview}</Text>}<Text style={[styles.cardStatus, isWorking(thread) && styles.workingText]}>{isWorking(thread) ? "● Codex is working" : "Open chat"}{queues[thread.id]?.length ? ` · ${queues[thread.id].length} queued` : ""}</Text></Pressable><Pressable style={styles.moveLink} onPress={() => setMoving(thread)}><Text style={styles.headerAction}>Move</Text></Pressable></View>)}</ScrollView></View>; })}</ScrollView>}
-    {selected && <Chat thread={selected} api={api} queue={queues[selected.id] || []} requests={requests.filter((request) => requestThreadId(request) === selected.id)} onClose={() => setSelected(null)} onChanged={refresh} />}
+    <View style={styles.mobileHeader}><View style={styles.mobileBrand}><View style={styles.mobileLogo}><View style={[styles.logoBar, { height: 9 }]} /><View style={[styles.logoBar, { height: 18 }]} /><View style={[styles.logoBar, { height: 13 }]} /></View><View><Text style={styles.mobileTitle}>Codex Board</Text><Text style={styles.connectionText}><Text style={{ color: connected ? "#2CB67D" : "#E7A33E" }}>●</Text> {connected ? "Live through Tailscale" : "Reconnecting…"}</Text></View></View><View style={styles.headerActions}><Pressable style={styles.iconAction} onPress={() => setManaging(true)}><Text style={styles.iconActionText}>☰</Text></Pressable><Pressable style={styles.avatarAction} onPress={() => void onDisconnect()}><Text style={styles.avatarText}>CB</Text></Pressable></View></View>
+    <View style={styles.mobileOverview}><View><Text style={styles.overviewEyebrow}>YOUR WORKSPACE</Text><Text style={styles.overviewTitle}>{threads.length} active threads</Text></View><View style={styles.liveMetric}><Text style={styles.liveMetricNumber}>{workingCount}</Text><Text style={styles.liveMetricLabel}>working</Text></View></View>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryTabs}>{categories.map((category) => { const count = threads.filter((thread) => categoryFromTitle(thread.name) === category).length; const active = category === visibleCategory; return <Pressable key={category} style={[styles.categoryTab, active && styles.categoryTabActive]} onPress={() => setActiveCategory(category)}><Text style={[styles.categoryTabText, active && styles.categoryTabTextActive]}>{category}</Text><Text style={[styles.categoryTabCount, active && styles.categoryTabCountActive]}>{count}</Text></Pressable>; })}</ScrollView>
+    {loading ? <View style={styles.center}><ActivityIndicator color="#6266EA" /></View> : <FlatList style={styles.taskList} contentContainerStyle={styles.taskListContent} data={visibleThreads} keyExtractor={(thread) => thread.id} ListHeaderComponent={<View style={styles.listHeading}><Text style={styles.listTitle}>{visibleCategory}</Text><Text style={styles.listCount}>{visibleThreads.length} {visibleThreads.length === 1 ? "task" : "tasks"}</Text></View>} ListEmptyComponent={<View style={styles.emptyColumn}><Text style={styles.emptyIcon}>◇</Text><Text style={styles.emptyTitle}>No threads here</Text><Text style={styles.emptyText}>Move a thread into this category from another column.</Text></View>} renderItem={({ item: thread }) => <View style={[styles.card, isWorking(thread) && styles.workingCard]}><Pressable onPress={() => setSelected(thread)}><View style={styles.cardTop}><Text style={styles.projectPill}>{projectLabel(thread.cwd)}</Text>{isWorking(thread) && <View style={styles.workingPill}><Text style={styles.workingPillText}>● Working</Text></View>}</View><Text style={styles.cardTitle}>{displayTitle(thread.name, thread.preview)}</Text>{thread.preview && <Text style={styles.cardPreview} numberOfLines={3}>{thread.preview}</Text>}<View style={styles.cardBottom}><Text style={[styles.cardStatus, isWorking(thread) && styles.workingText]}>{queues[thread.id]?.length ? `${queues[thread.id].length} queued` : isWorking(thread) ? "Codex is working" : "Open conversation"}</Text><Text style={styles.openArrow}>→</Text></View></Pressable><Pressable style={styles.moveLink} onPress={() => setMoving(thread)}><Text style={styles.moveLinkText}>Move</Text></Pressable></View>} />}
+    {selected && <Chat thread={selected} api={api} queue={queues[selected.id] || []} requests={requests.filter((request) => requestThreadId(request) === selected.id)} eventRevision={eventRevision} onClose={() => setSelected(null)} onChanged={refresh} />}
     {managing && config && <CategoryManager config={config} threads={threads} api={api} onClose={() => setManaging(false)} onSaved={refresh} />}
     {moving && <MoveDialog thread={moving} categories={categories} api={api} onClose={() => setMoving(null)} onMoved={refresh} />}
   </SafeAreaView>;
@@ -272,19 +307,42 @@ function Root() {
 export default function App() { return <SafeAreaProvider><Root /></SafeAreaProvider>; }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: "#f4f5f7" }, center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  pairPage: { flex: 1, padding: 28, justifyContent: "center", backgroundColor: "#f4f5f7" }, logo: { width: 52, height: 52, borderRadius: 14, backgroundColor: "#20242d", flexDirection: "row", alignItems: "flex-end", gap: 4, padding: 12, alignSelf: "center" }, logoBar: { flex: 1, borderRadius: 2, backgroundColor: "white" },
-  title: { marginTop: 18, textAlign: "center", fontSize: 28, fontWeight: "700", color: "#202124" }, subtitle: { marginVertical: 12, textAlign: "center", color: "#6f7480", fontSize: 14, lineHeight: 21 }, or: { margin: 16, textAlign: "center", color: "#888", fontSize: 12 },
-  primaryButton: { minHeight: 50, marginTop: 12, borderRadius: 12, backgroundColor: "#5869df", alignItems: "center", justifyContent: "center", paddingHorizontal: 18 }, compactButton: { minHeight: 40 }, primaryButtonText: { color: "white", fontWeight: "700" }, secondaryButton: { minHeight: 46, borderRadius: 12, backgroundColor: "white", alignItems: "center", justifyContent: "center", paddingHorizontal: 22 }, disabled: { opacity: 0.45 },
+  page: { flex: 1, backgroundColor: "#F4F5F9" }, center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  pairPage: { flex: 1, padding: 24, justifyContent: "center", backgroundColor: "#F4F5F9" }, pairHero: { alignItems: "center", marginBottom: 22 }, pairCard: { padding: 18, borderWidth: 1, borderColor: "#E1E3EB", borderRadius: 20, backgroundColor: "white", shadowColor: "#171923", shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.07, shadowRadius: 20, elevation: 3 }, logo: { width: 58, height: 58, borderRadius: 17, backgroundColor: "#1B1E2B", flexDirection: "row", alignItems: "flex-end", gap: 4, padding: 13, alignSelf: "center" }, logoBar: { flex: 1, borderRadius: 2, backgroundColor: "white" },
+  pairEyebrow: { marginTop: 19, color: "#6266EA", fontSize: 9, fontWeight: "800", letterSpacing: 1.4 }, pairFootnote: { marginTop: 16, textAlign: "center", color: "#8A8F9C", fontSize: 10, lineHeight: 15 }, connectButton: { marginTop: 10 },
+  title: { marginTop: 20, textAlign: "center", fontSize: 30, fontWeight: "800", letterSpacing: -1, color: "#171923" }, subtitle: { marginVertical: 12, textAlign: "center", color: "#747987", fontSize: 14, lineHeight: 21 }, or: { margin: 16, textAlign: "center", color: "#969BA7", fontSize: 11, fontWeight: "600" },
+  primaryButton: { minHeight: 52, marginTop: 12, borderRadius: 14, backgroundColor: "#6266EA", alignItems: "center", justifyContent: "center", paddingHorizontal: 18 }, compactButton: { minHeight: 42 }, primaryButtonText: { color: "white", fontWeight: "700" }, secondaryButton: { minHeight: 46, borderRadius: 12, backgroundColor: "white", alignItems: "center", justifyContent: "center", paddingHorizontal: 22 }, disabled: { opacity: 0.45 },
   input: { minHeight: 82, borderWidth: 1, borderColor: "#d7d9df", borderRadius: 12, padding: 12, backgroundColor: "white", textAlignVertical: "top" }, smallInput: { minHeight: 42, borderWidth: 1, borderColor: "#d7d9df", borderRadius: 9, padding: 10, backgroundColor: "white" },
   scanner: { flex: 1, backgroundColor: "black" }, scannerOverlay: { flex: 1, alignItems: "center", justifyContent: "space-between", padding: 28 }, scannerTitle: { color: "white", fontSize: 20, fontWeight: "700" }, scanFrame: { width: 250, height: 250, borderWidth: 3, borderColor: "white", borderRadius: 22 },
-  header: { minHeight: 64, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#d9dbe1", backgroundColor: "white" }, headerCopy: { flex: 1 }, headerTitle: { color: "#202124", fontSize: 17, fontWeight: "700" }, headerMeta: { marginTop: 3, color: "#777d88", fontSize: 11 }, headerAction: { color: "#5869df", fontSize: 12, fontWeight: "600" }, back: { color: "#5869df", fontSize: 16 }, stop: { color: "#b54a3c", fontWeight: "700" },
+  header: { minHeight: 70, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#DFE1E8", backgroundColor: "white" }, headerCopy: { flex: 1 }, headerTitle: { maxWidth: "76%", color: "#171923", fontSize: 17, fontWeight: "800", letterSpacing: -0.35 }, headerMeta: { marginTop: 3, color: "#858A96", fontSize: 10 }, headerAction: { color: "#6266EA", fontSize: 12, fontWeight: "700" }, back: { color: "#6266EA", fontSize: 25, lineHeight: 27 }, stop: { color: "#B6473A", fontSize: 11, fontWeight: "800" },
   columns: { padding: 14, gap: 12 }, column: { width: 310, borderRadius: 14, backgroundColor: "#e9ebef", padding: 10 }, columnHeader: { height: 42, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 }, columnTitle: { color: "#31343b", fontSize: 13, fontWeight: "700" }, count: { color: "#777d88", backgroundColor: "white", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, fontSize: 11 },
-  card: { marginBottom: 9, padding: 14, borderRadius: 11, borderWidth: 1, borderColor: "#dddfe5", backgroundColor: "white" }, workingCard: { borderColor: "#7d8aeb" }, cardTitle: { color: "#202124", fontSize: 14, fontWeight: "600" }, cardPreview: { marginTop: 7, color: "#747985", fontSize: 12, lineHeight: 17 }, cardStatus: { marginTop: 11, color: "#5869df", fontSize: 10, fontWeight: "600" }, workingText: { color: "#5869df" }, empty: { textAlign: "center", color: "#777", marginTop: 50 },
-  chat: { flex: 1 }, chatContent: { padding: 16, gap: 10 }, bubble: { maxWidth: "88%", borderRadius: 13, paddingHorizontal: 13, paddingVertical: 10 }, bubble_user: { alignSelf: "flex-end", backgroundColor: "#5869df", borderBottomRightRadius: 4 }, bubble_assistant: { alignSelf: "flex-start", backgroundColor: "white", borderBottomLeftRadius: 4 }, bubble_activity: { alignSelf: "stretch", maxWidth: "100%", backgroundColor: "#e7e9ee" }, bubbleText: { color: "#272a31", fontSize: 14, lineHeight: 20 }, userText: { color: "white" },
-  composer: { flexDirection: "row", gap: 9, alignItems: "flex-end", padding: 10, borderTopWidth: StyleSheet.hairlineWidth, borderColor: "#d9dbe1", backgroundColor: "white" }, composerInput: { flex: 1, maxHeight: 120, minHeight: 44, padding: 11, borderWidth: 1, borderColor: "#d9dbe1", borderRadius: 12 }, send: { minHeight: 44, minWidth: 64, paddingHorizontal: 14, borderRadius: 10, backgroundColor: "#5869df", alignItems: "center", justifyContent: "center" },
+  card: { marginBottom: 13, padding: 16, borderRadius: 16, borderWidth: 1, borderColor: "#E2E4EC", backgroundColor: "white", shadowColor: "#171923", shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.06, shadowRadius: 14, elevation: 2 }, workingCard: { borderColor: "#9295F2", borderLeftWidth: 4 }, cardTitle: { color: "#171923", fontSize: 17, lineHeight: 22, fontWeight: "700", letterSpacing: -0.3 }, cardPreview: { marginTop: 8, color: "#747987", fontSize: 13, lineHeight: 19 }, cardStatus: { color: "#6266EA", fontSize: 11, fontWeight: "700" }, workingText: { color: "#6266EA" }, empty: { textAlign: "center", color: "#777", marginTop: 50 },
+  chat: { flex: 1 }, chatContent: { padding: 16, paddingBottom: 22, gap: 11 }, bubble: { maxWidth: "90%", borderRadius: 17, paddingHorizontal: 15, paddingVertical: 12 }, bubble_user: { alignSelf: "flex-end", backgroundColor: "#6266EA", borderBottomRightRadius: 5 }, bubble_assistant: { alignSelf: "flex-start", backgroundColor: "white", borderBottomLeftRadius: 5, borderWidth: 1, borderColor: "#E4E6ED" }, bubble_activity: { alignSelf: "stretch", maxWidth: "100%", backgroundColor: "#ECEEF4", borderRadius: 12 }, bubbleLabel: { marginBottom: 7, color: "#858A96", fontSize: 8, fontWeight: "800", letterSpacing: 1 }, bubbleText: { color: "#252832", fontSize: 14, lineHeight: 21 }, userText: { color: "white" },
+  composer: { flexDirection: "row", gap: 9, alignItems: "flex-end", padding: 11, borderTopWidth: StyleSheet.hairlineWidth, borderColor: "#DFE1E8", backgroundColor: "white" }, composerInput: { flex: 1, maxHeight: 120, minHeight: 46, padding: 12, borderWidth: 1, borderColor: "#D9DCE5", borderRadius: 14, backgroundColor: "#F8F8FA" }, send: { minHeight: 46, minWidth: 68, paddingHorizontal: 14, borderRadius: 12, backgroundColor: "#6266EA", alignItems: "center", justifyContent: "center" },
   queueBox: { marginTop: 10, padding: 12, borderRadius: 10, backgroundColor: "#eef0ff" }, queueRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, borderColor: "#ccd1ee" }, queueIndex: { color: "#5869df", fontWeight: "700" }, queueText: { flex: 1, fontSize: 12, lineHeight: 17 }, remove: { fontSize: 20, color: "#777" },
   requestCard: { marginTop: 12, padding: 14, borderRadius: 11, borderWidth: 1, borderColor: "#8792e8", backgroundColor: "white" }, requestTitle: { fontSize: 13, fontWeight: "700" }, requestText: { marginTop: 6, color: "#666", fontSize: 12, lineHeight: 17 }, command: { marginTop: 8, padding: 9, borderRadius: 7, backgroundColor: "#22252b", color: "white", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 11 }, requestActions: { marginTop: 12, flexDirection: "row", flexWrap: "wrap", gap: 7 }, denyButton: { minHeight: 38, paddingHorizontal: 12, borderRadius: 8, backgroundColor: "#e7e8eb", alignItems: "center", justifyContent: "center" }, allowButton: { minHeight: 38, paddingHorizontal: 12, borderRadius: 8, backgroundColor: "#5869df", alignItems: "center", justifyContent: "center" }, question: { marginTop: 10 }, questionText: { marginBottom: 7, fontSize: 12, fontWeight: "600" }, option: { marginTop: 6, padding: 10, borderWidth: 1, borderColor: "#dddfe5", borderRadius: 8 }, optionSelected: { borderColor: "#5869df", backgroundColor: "#eef0ff" }, optionDescription: { marginTop: 3, color: "#777", fontSize: 10 },
-  manager: { padding: 16 }, addRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 16 }, categoryRow: { minHeight: 58, flexDirection: "row", alignItems: "center", gap: 9, paddingVertical: 9, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#d9dbe1" }, categoryCopy: { flex: 1 }, orderButton: { fontSize: 21, color: "#5869df" }, editButton: { color: "#5869df", fontSize: 12, fontWeight: "600" }, deleteButton: { color: "#b54a3c", fontSize: 12, fontWeight: "600" },
+  manager: { padding: 16, paddingBottom: 30 }, managerDone: { color: "#6266EA", fontSize: 11, fontWeight: "800" }, managerIntro: { padding: 6, marginBottom: 16 }, managerTitle: { marginTop: 5, color: "#171923", fontSize: 25, fontWeight: "800", letterSpacing: -0.8 }, managerSubtitle: { marginTop: 7, color: "#7B808D", fontSize: 12, lineHeight: 18 }, addRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 16 }, categoryRow: { minHeight: 66, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 13, paddingVertical: 10, borderWidth: 1, borderColor: "#E2E4EC", borderRadius: 13, backgroundColor: "white" }, categoryCopy: { flex: 1 }, orderButton: { fontSize: 21, color: "#6266EA" }, editButton: { color: "#6266EA", fontSize: 11, fontWeight: "700" }, deleteButton: { color: "#B54A3C", fontSize: 11, fontWeight: "700" },
   modeRow: { marginBottom: 16, padding: 12, flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 10, backgroundColor: "white" }, moveLink: { alignSelf: "flex-end", marginTop: 8, padding: 4 }, modalBackdrop: { flex: 1, padding: 24, justifyContent: "center", backgroundColor: "rgba(0,0,0,.4)" }, moveDialog: { padding: 18, borderRadius: 14, backgroundColor: "#f4f5f7" }, moveOption: { minHeight: 46, justifyContent: "center", paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#d9dbe1" },
+  mobileHeader: { minHeight: 72, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "white", borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#E3E5EC" },
+  mobileBrand: { flexDirection: "row", alignItems: "center", gap: 11 }, mobileLogo: { width: 38, height: 38, padding: 9, borderRadius: 11, flexDirection: "row", alignItems: "flex-end", gap: 3, backgroundColor: "#1B1E2B" }, mobileTitle: { color: "#171923", fontSize: 17, fontWeight: "800", letterSpacing: -0.4 }, connectionText: { marginTop: 2, color: "#7A7F8D", fontSize: 10, fontWeight: "600" },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 9 }, iconAction: { width: 38, height: 38, alignItems: "center", justifyContent: "center", borderRadius: 11, borderWidth: 1, borderColor: "#E2E4EB", backgroundColor: "#FAFAFC" }, iconActionText: { color: "#5F6471", fontSize: 17 }, avatarAction: { width: 38, height: 38, alignItems: "center", justifyContent: "center", borderRadius: 19, backgroundColor: "#ECEEFF" }, avatarText: { color: "#6266EA", fontSize: 10, fontWeight: "800" },
+  mobileOverview: { paddingHorizontal: 20, paddingTop: 22, paddingBottom: 15, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, overviewEyebrow: { color: "#6266EA", fontSize: 9, fontWeight: "800", letterSpacing: 1.2 }, overviewTitle: { marginTop: 5, color: "#171923", fontSize: 24, lineHeight: 29, fontWeight: "800", letterSpacing: -0.8 }, liveMetric: { minWidth: 60, paddingVertical: 8, paddingHorizontal: 11, alignItems: "center", borderRadius: 13, borderWidth: 1, borderColor: "#E2E4EC", backgroundColor: "white" }, liveMetricNumber: { color: "#171923", fontSize: 16, fontWeight: "800" }, liveMetricLabel: { color: "#7B808E", fontSize: 9, fontWeight: "600" },
+  categoryTabs: { minHeight: 52, paddingHorizontal: 16, paddingBottom: 10, alignItems: "center", gap: 8 }, categoryTab: { height: 38, paddingLeft: 14, paddingRight: 7, flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 19, borderWidth: 1, borderColor: "#E0E2E9", backgroundColor: "white" }, categoryTabActive: { borderColor: "#1B1E2B", backgroundColor: "#1B1E2B" }, categoryTabText: { color: "#686D7A", fontSize: 12, fontWeight: "700" }, categoryTabTextActive: { color: "white" }, categoryTabCount: { minWidth: 23, height: 23, paddingHorizontal: 6, textAlign: "center", textAlignVertical: "center", borderRadius: 12, overflow: "hidden", color: "#6F7481", backgroundColor: "#F0F1F5", fontSize: 10, fontWeight: "800" }, categoryTabCountActive: { color: "#1B1E2B", backgroundColor: "white" },
+  taskList: { flex: 1 }, taskListContent: { paddingHorizontal: 16, paddingBottom: 28 }, listHeading: { marginTop: 7, marginBottom: 12, paddingHorizontal: 3, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, listTitle: { color: "#242630", fontSize: 14, fontWeight: "800" }, listCount: { color: "#858A96", fontSize: 10, fontWeight: "600" },
+  cardTop: { minHeight: 24, marginBottom: 9, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, projectPill: { maxWidth: "68%", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, overflow: "hidden", color: "#747987", backgroundColor: "#F1F2F6", fontSize: 9, fontWeight: "700" }, workingPill: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: "#EEEFFF" }, workingPillText: { color: "#6266EA", fontSize: 9, fontWeight: "800" }, cardBottom: { marginTop: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, openArrow: { color: "#6266EA", fontSize: 18, fontWeight: "700" }, moveLinkText: { color: "#858A96", fontSize: 10, fontWeight: "700" },
+  emptyColumn: { minHeight: 240, marginTop: 5, alignItems: "center", justifyContent: "center", borderWidth: 1, borderStyle: "dashed", borderColor: "#D8DAE3", borderRadius: 18, backgroundColor: "rgba(255,255,255,.45)" }, emptyIcon: { color: "#A1A5B1", fontSize: 31 }, emptyTitle: { marginTop: 9, color: "#333640", fontSize: 15, fontWeight: "700" }, emptyText: { maxWidth: 230, marginTop: 5, textAlign: "center", color: "#858A96", fontSize: 11, lineHeight: 17 },
+  chatBackButton: { width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 12, borderWidth: 1, borderColor: "#E1E3EA", backgroundColor: "#FAFAFC" }, chatTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 }, chatState: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8, backgroundColor: "#F0F1F5" }, chatStateLive: { backgroundColor: "#EEEFFF" }, chatStateText: { color: "#7C818E", fontSize: 8, fontWeight: "800" }, chatStateTextLive: { color: "#6266EA" }, stopButton: { paddingHorizontal: 11, paddingVertical: 8, borderRadius: 10, backgroundColor: "#FFF0ED" },
+});
+
+const markdownStyles = StyleSheet.create({
+  body: { color: "#252832", fontSize: 14, lineHeight: 21 },
+  paragraph: { marginTop: 0, marginBottom: 9 },
+  heading1: { marginTop: 10, marginBottom: 7, color: "#171923", fontSize: 21, lineHeight: 26, fontWeight: "800" },
+  heading2: { marginTop: 10, marginBottom: 7, color: "#171923", fontSize: 18, lineHeight: 23, fontWeight: "800" },
+  heading3: { marginTop: 9, marginBottom: 6, color: "#171923", fontSize: 16, lineHeight: 21, fontWeight: "800" },
+  bullet_list: { marginVertical: 5 }, ordered_list: { marginVertical: 5 }, list_item: { marginVertical: 2 },
+  code_inline: { paddingHorizontal: 5, paddingVertical: 2, borderRadius: 5, color: "#3E4380", backgroundColor: "#F0F1F7", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
+  fence: { marginVertical: 7, padding: 11, borderRadius: 10, color: "#EEF0F5", backgroundColor: "#1D2028", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 11, lineHeight: 17 },
+  blockquote: { paddingLeft: 11, borderLeftWidth: 3, borderLeftColor: "#8A8DF3", backgroundColor: "#F5F5FB" },
+  link: { color: "#6266EA" }, table: { borderColor: "#DADDE6" }, th: { padding: 6, backgroundColor: "#F1F2F6" }, td: { padding: 6 },
 });

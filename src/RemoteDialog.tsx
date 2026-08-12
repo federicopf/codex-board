@@ -24,10 +24,10 @@ export function RemoteDialog({ onClose }: { onClose: () => void }) {
       {!gateway || !tailscale ? <div className="remote-loading"><div className="spinner" />Checking gateway and Tailscale…</div> : payload ? <>
         <div className="remote-ready"><span>✓</span><div><strong>Ready for mobile</strong><small>{tailscale.dnsName}</small></div></div>
         <div className="pairing-qr"><QRCodeSVG value={payload} size={220} level="M" marginSize={2} /></div>
-        <ol><li>Open Tailscale on your phone with the same account.</li><li>Open Codex Board Mobile and scan this QR code.</li></ol>
+        <ol><li>Keep Tailscale connected on your phone.</li><li>Open Codex Board Mobile and scan this QR code.</li></ol>
         <p className="remote-security">The QR includes a private device credential. Do not share it or publish screenshots of it.</p>
       </> : <>
-        <div className="remote-state"><strong>{!gateway.running ? "Local gateway unavailable" : !tailscale.installed ? "Tailscale is not installed" : !tailscale.online ? "Tailscale is offline" : "Tailscale Serve is not configured"}</strong><p>{gateway.error || tailscale.error || "Codex Board can configure the private HTTPS endpoint automatically."}</p></div>
+        <div className="remote-state"><strong>{!gateway.running ? "Local gateway unavailable" : !tailscale.installed ? "Tailscale is not installed" : !tailscale.online ? "Tailscale is offline" : "Tailscale Serve is not configured"}</strong><p>{gateway.error || tailscale.error || "Codex Board can configure a tailnet-only endpoint without public certificates."}</p></div>
         {tailscale.installed && tailscale.online && gateway.running && <button className="remote-configure" disabled={busy} onClick={() => void configure()}>{busy ? "Configuring…" : "Enable remote access"}</button>}
         {!tailscale.installed && <a href="https://tailscale.com/download/windows" target="_blank" rel="noreferrer">Install Tailscale for Windows ↗</a>}
       </>}

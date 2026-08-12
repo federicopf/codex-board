@@ -3,18 +3,39 @@
     "name": "Codex Board",
     "slug": "codex-board-mobile",
     "scheme": "codex-board",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "plugins": [
-      ["expo-camera", { "cameraPermission": "Allow Codex Board to scan the pairing QR code", "recordAudioAndroid": false }],
-      ["expo-secure-store", { "configureAndroidBackup": true }]
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Codex Board to scan the pairing QR code",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
     ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.federicogermani.codexboard.mobile",
-      "config": { "usesNonExemptEncryption": false }
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {

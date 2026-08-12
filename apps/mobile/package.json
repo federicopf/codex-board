@@ -1,16 +1,18 @@
 {
   "name": "@codex-board/mobile",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "main": "index.ts",
   "dependencies": {
     "@codex-board/protocol": "*",
     "expo": "~57.0.12",
+    "expo-build-properties": "~57.0.10",
     "expo-camera": "~57.0.3",
     "expo-secure-store": "~57.0.1",
     "expo-status-bar": "~57.0.1",
     "expo-system-ui": "~57.0.2",
     "react": "19.2.3",
     "react-native": "0.86.2",
+    "react-native-markdown-display": "^7.0.2",
     "react-native-safe-area-context": "~5.7.0"
   },
   "devDependencies": {

@@ -159,6 +159,7 @@ function Column({
 function App() {
   const [threads, setThreads] = useState<BoardThread[]>([]);
   const [project, setProject] = useState(ALL_PROJECTS);
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<CodexError | null>(null);
@@ -341,6 +342,12 @@ function App() {
     () => (project === ALL_PROJECTS ? threads : threads.filter((item) => item.projectKey === project)),
     [project, threads],
   );
+  const filteredThreads = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    if (!query) return visibleThreads;
+    return visibleThreads.filter((thread) => [thread.displayTitle, thread.preview, thread.projectLabel]
+      .some((value) => value?.toLocaleLowerCase().includes(query)));
+  }, [search, visibleThreads]);
   const discoveredCategories = useMemo(
     () => threadCategories(threads.map((thread) => thread.category)),
     [threads],
@@ -519,16 +526,14 @@ function App() {
             <div><h1>Codex Board</h1><p>Threads, organized.</p></div>
           </div>
           <div className="toolbar">
-            <button className="remote-button" onClick={() => setRemoteDialog(true)}>Remote</button>
-            <button className="new-category-button" onClick={() => setCategoryDialog({ mode: "create" })}>+ Category</button>
-            <label>
+            <label className="toolbar-field">
               <span>Approvals</span>
               <select className="approval-mode" value={approvalMode} onChange={(event) => setApprovalMode(event.target.value as ApprovalMode)}>
                 <option value="auto">Auto approve</option>
                 <option value="ask">Ask every time</option>
               </select>
             </label>
-            <label>
+            <label className="toolbar-field">
               <span>Project</span>
               <select value={project} onChange={(event) => setProject(event.target.value)}>
                 <option value={ALL_PROJECTS}>All projects</option>
@@ -538,6 +543,8 @@ function App() {
             <button className="refresh-button" disabled={refreshing} onClick={() => void refresh(true)}>
               <span className={refreshing ? "spin" : ""}>↻</span> Refresh
             </button>
+            <button className="new-category-button" onClick={() => setCategoryDialog({ mode: "create" })}>＋ Category</button>
+            <button className="remote-button" onClick={() => setRemoteDialog(true)}><i />Remote</button>
           </div>
         </header>
 
@@ -548,6 +555,18 @@ function App() {
           </div>
         )}
 
+        <section className="board-heading">
+          <div>
+            <span className="eyebrow">Workspace</span>
+            <h2>{project === ALL_PROJECTS ? "All projects" : projects.find((item) => item.key === project)?.label || "Project"}</h2>
+            <p>Move work between stages and open any thread to continue with Codex.</p>
+          </div>
+          <div className="board-tools">
+            <div className="board-metrics"><span><strong>{visibleThreads.length}</strong> threads</span><span className={workingIds.size ? "metric-live" : ""}><strong>{workingIds.size}</strong> working</span></div>
+            <label className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search threads" /></label>
+          </div>
+        </section>
+
         {categories.length === 0 ? (
           <div className="empty-board">
             <h2>No threads here yet</h2>
@@ -555,15 +574,12 @@ function App() {
           </div>
         ) : (
           <SortableContext items={categories.map(categoryDragId)} strategy={horizontalListSortingStrategy}>
-            <div
-              className="board"
-              style={{ gridTemplateColumns: `repeat(${categories.length}, minmax(250px, 1fr))` }}
-            >
+            <div className="board">
               {categories.map((category) => (
                 <Column
                   key={category}
                   category={category}
-                  threads={visibleThreads.filter((thread) => thread.category === category)}
+                  threads={filteredThreads.filter((thread) => thread.category === category)}
                   pendingIds={pendingIds}
                   workingIds={workingIds}
                   queues={queues}

@@ -137,7 +137,7 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
   }
 
   return <div className="chat-overlay"><section className="chat-panel" aria-label={`Chat: ${title}`}>
-    <header className="chat-header"><button className="icon-button" onClick={onClose} aria-label="Back to board">←</button><div className="chat-heading"><h2>{title}</h2><p>{thread.cwd || "Local Codex thread"}</p></div><button className="external-button" onClick={() => void openThread(thread.id)}>Open in Codex ↗</button></header>
+    <header className="chat-header"><button className="icon-button" onClick={onClose} aria-label="Back to board">←</button><div className="chat-heading"><div className="chat-title-row"><h2>{title}</h2><span className={working ? "chat-state live" : "chat-state"}><i />{working ? "Working" : "Ready"}</span></div><p>{thread.cwd || "Local Codex thread"}</p></div><button className="external-button" onClick={() => void openThread(thread.id)}>Open in Codex ↗</button></header>
     <div className="chat-body">
       {loading && <div className="chat-loading"><div className="spinner" /><span>Loading conversation…</span></div>}
       {!loading && error && <div className="chat-error" role="alert">{error}<button onClick={() => setError(null)}>×</button></div>}

@@ -25,6 +25,7 @@ use tokio::sync::{Mutex, broadcast};
 use crate::codex::{CodexClient, CodexErrorDto, TurnCoordinator};
 
 pub const GATEWAY_PORT: u16 = 47_821;
+pub const TAILSCALE_SERVE_PORT: u16 = 47_822;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -292,7 +293,26 @@ pub async fn tailscale_status() -> TailscaleInfo {
         .pointer("/Self/Online")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let base_url = dns_name.as_ref().map(|name| format!("https://{name}"));
+    let serve_output = tokio::process::Command::new(&executable)
+        .args(["serve", "status", "--json"])
+        .output()
+        .await
+        .ok();
+    let serve_status: Value = serve_output
+        .filter(|result| result.status.success())
+        .and_then(|result| serde_json::from_slice(&result.stdout).ok())
+        .unwrap_or(Value::Null);
+    let http_enabled = serve_status
+        .pointer(&format!("/TCP/{TAILSCALE_SERVE_PORT}/HTTP"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let base_url = if online && http_enabled {
+        dns_name
+            .as_ref()
+            .map(|name| format!("http://{name}:{TAILSCALE_SERVE_PORT}"))
+    } else {
+        None
+    };
     TailscaleInfo {
         installed: true,
         online,
@@ -303,9 +323,10 @@ pub async fn tailscale_status() -> TailscaleInfo {
 }
 
 pub async fn configure_tailscale_serve() -> Result<TailscaleInfo, String> {
-    let target = format!("localhost:{GATEWAY_PORT}");
+    let target = GATEWAY_PORT.to_string();
+    let http_port = format!("--http={TAILSCALE_SERVE_PORT}");
     let output = tokio::process::Command::new(tailscale_executable())
-        .args(["serve", "--bg", target.as_str()])
+        .args(["serve", "--bg", "--yes", http_port.as_str(), target.as_str()])
         .output()
         .await
         .map_err(|error| error.to_string())?;

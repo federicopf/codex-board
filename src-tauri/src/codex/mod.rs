@@ -126,12 +126,15 @@ impl CodexClient {
     pub async fn load_thread(&self, thread_id: String) -> Result<Value, CodexErrorDto> {
         let client = self.ensure_running().await?;
         let result = client
-            .request("thread/resume", json!({ "threadId": thread_id }))
+            .request(
+                "thread/read",
+                json!({ "threadId": thread_id, "includeTurns": true }),
+            )
             .await?;
         result.get("thread").cloned().ok_or_else(|| {
             CodexErrorDto::new(
                 CodexErrorCode::ProtocolError,
-                "Unexpected thread/resume response",
+                "Unexpected thread/read response",
             )
             .with_details(result.to_string())
         })
@@ -149,9 +152,20 @@ impl CodexClient {
             ));
         }
         let client = self.ensure_running().await?;
-        client
+        if let Err(error) = client
             .request("thread/resume", json!({ "threadId": thread_id }))
-            .await?;
+            .await
+        {
+            let technical = format!("{} {}", error.message, error.details.as_deref().unwrap_or_default());
+            if technical.to_ascii_lowercase().contains("active writer") {
+                return Err(CodexErrorDto::new(
+                    CodexErrorCode::RequestFailed,
+                    "This thread is currently open in Codex Desktop. Close Codex Desktop, then send again from Codex Board.",
+                )
+                .with_details(technical));
+            }
+            return Err(error);
+        }
         client
             .request(
                 "turn/start",
