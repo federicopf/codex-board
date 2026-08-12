@@ -10,12 +10,12 @@ Codex Board is an unofficial, open-source board and chat client for local Codex 
 - Custom empty categories, renaming and drag-to-reorder with no fixed category list.
 - Dragging cards between columns renames the real Codex task and verifies that Codex persisted the title.
 - Internal chat with persisted history, streamed responses, Markdown, collapsible technical activity and turn interruption.
-- FIFO follow-up message queue while Codex is working.
+- Backend-owned FIFO follow-up queue shared by desktop and mobile and persisted across restarts.
 - Automatic or manual command, file-change and permission approvals.
 - Working indicators on cards and completion notifications.
 - Shared backend persistence for categories, order and approval mode.
 - Authenticated HTTPS/WebSocket access over a private Tailscale network.
-- Expo mobile client with QR pairing, encrypted credential storage, live board status and chat.
+- Expo mobile client with QR pairing, encrypted credential storage, live board/chat, approvals, questions, card moves and category management.
 
 ## How categories work
 
@@ -30,18 +30,30 @@ Task without a separator       → Uncategorized
 
 Categories and their order belong to Codex Board and are persisted by the Rust backend. They remain visible when empty and are shared with connected mobile clients. Renaming a populated category updates all affected Codex task titles as a verified transaction; completed renames are rolled back if a later rename fails.
 
-## Remote mobile access
+## Set up remote mobile access
 
-The Rust gateway listens only on `127.0.0.1:47821`; it is never exposed directly to the public Internet. From the desktop app:
+The Rust gateway listens only on `127.0.0.1:47821`; it is never exposed directly to the public Internet. Tailscale is installed separately on the PC and phone.
 
-1. Install and sign in to [Tailscale](https://tailscale.com/download/windows) on the PC and phone.
-2. Select **Remote** in Codex Board.
+### One-time setup
+
+1. Open Tailscale on Windows and sign in.
+2. Install Tailscale from the Play Store or App Store on the phone and sign in with the same account.
+3. Download the APK from the latest [GitHub release](https://github.com/federicopf/codex-board/releases/latest), open it on Android and install it. Android may ask once for permission to install apps from the browser.
+4. Start the newly installed **Codex Board** app on the phone.
+
+The release APK is built automatically by GitHub Actions. You do not need an Expo account, Expo Go, Metro or a USB connection.
+
+### Pair the phone
+
+1. Keep Tailscale connected on both devices.
+2. Open Codex Board on Windows and select **Remote**.
 3. Select **Enable remote access**. Codex Board runs `tailscale serve --bg localhost:47821`.
-4. Scan the displayed QR code from Codex Board Mobile.
+4. A private pairing QR appears. In the mobile app select **Scan pairing QR** and scan it.
+5. After the first pairing, the credential remains encrypted on the phone; normal use only requires Tailscale and Codex Board to be running.
 
 Tailscale Serve provides the private HTTPS address and TLS certificate. The QR contains that address and a random 256-bit device credential. The Expo client stores the credential with `expo-secure-store` in the iOS Keychain or Android Keystore-backed encrypted storage.
 
-The PC must be powered on, connected to Tailscale and running Codex Board. No router port forwarding, public tunnel or ngrok session is required.
+The PC may be on any network and the phone may use another Wi-Fi or mobile data. The PC must be powered on, connected to Tailscale and running Codex Board. No router port forwarding, public tunnel or ngrok session is required.
 
 ## Requirements
 
@@ -58,7 +70,7 @@ Codex Board automatically discovers the local runtime installed by Codex for Win
 
 ### Mobile
 
-- Expo Go for development, or a development/release build
+- The Codex Board APK from GitHub Releases, or Expo Go for development
 - Android 7+ or iOS 16.4+
 - Tailscale signed into the same tailnet as the PC
 
@@ -126,7 +138,16 @@ cd .\apps\mobile
 npx expo export --platform android
 ```
 
-Use EAS Build or local native toolchains for installable Android/iOS binaries.
+Build an installable Android APK with EAS as an optional alternative:
+
+```powershell
+npx eas-cli login
+npm run mobile:apk
+```
+
+The `preview` profile in `apps/mobile/eas.json` creates an APK for direct installation. A distributable iOS build additionally requires an Apple developer account and iOS signing through EAS.
+
+Pushing a version tag such as `v0.2.0` runs `.github/workflows/android-apk.yml`, builds a standalone signed APK and attaches it to the corresponding GitHub release.
 
 ## Security notes
 

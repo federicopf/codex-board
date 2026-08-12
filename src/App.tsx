@@ -13,13 +13,13 @@ import {
 import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { asCodexError, drainCodexEvents, getBoardConfig, listThreads, renameThread, respondToCodexRequest, sendMessage, setBoardConfig } from "./api";
+import { asCodexError, drainCodexEvents, getBoardConfig, getMessageQueues, listThreads, removeQueuedMessage as removeQueuedMessageApi, renameThread, sendMessage, setBoardConfig } from "./api";
 import "./App.css";
 import { CategoryDialog } from "./CategoryDialog";
 import { ChatPanel } from "./ChatPanel";
 import { RemoteDialog } from "./RemoteDialog";
 import { moveThread, toBoardThreads } from "./lib/board";
-import { approvalResult, loadApprovalMode, saveApprovalMode, type ApprovalMode } from "./lib/approvals";
+import { loadApprovalMode, saveApprovalMode, type ApprovalMode } from "./lib/approvals";
 import {
   createCategory,
   loadCategoryOrder,
@@ -29,7 +29,6 @@ import {
   saveCategoryOrder,
 } from "./lib/categoryOrder";
 import { ALL_PROJECTS, projectOptions, buildProjectMap } from "./lib/projects";
-import { enqueueMessage, removeQueuedMessage as removeMessageFromQueue, takeNextMessage } from "./lib/messageQueue";
 import { buildThreadTitle, threadCategories, UNCATEGORIZED } from "./lib/threadStatus";
 import type { BoardThread, CodexError, CodexEvent, JsonValue, QueuedMessage, SequencedCodexEvent } from "./types";
 
@@ -192,8 +191,10 @@ function App() {
   const refresh = useCallback(async (background = false) => {
     background ? setRefreshing(true) : setLoading(true);
     try {
-      const result = await listThreads();
+      const [result, serverQueues] = await Promise.all([listThreads(), getMessageQueues()]);
       setThreads(toBoardThreads(result));
+      queuesRef.current = serverQueues;
+      setQueues(serverQueues);
       const active = new Set(result.filter((thread) => text(record(thread.status).type) === "active").map((thread) => thread.id));
       workingIdsRef.current = active;
       setWorkingIds(active);
@@ -268,25 +269,8 @@ function App() {
     let stopped = false;
     let polling = false;
 
-    const startQueuedOrFinish = async (threadId: string, completedEvent: CodexEvent) => {
-      const taken = takeNextMessage(queuesRef.current, threadId);
-      const nextMessage = taken.message;
-      if (nextMessage) {
-        queuesRef.current = taken.queues;
-        setQueues(taken.queues);
-        try {
-          const response = record(await sendMessage(threadId, nextMessage.text));
-          const turnId = text(record(response.turn).id);
-          if (turnId) setActiveTurns((current) => ({ ...current, [threadId]: turnId }));
-          setThreadWorking(threadId, true);
-        } catch (cause) {
-          setThreadWorking(threadId, false);
-          setError(asCodexError(cause));
-          showToast(threadId, "Non sono riuscito ad avviare il prossimo messaggio in coda.", "error");
-        }
-        return;
-      }
-
+    const finishTurn = (threadId: string, completedEvent: CodexEvent) => {
+      if ((queuesRef.current[threadId]?.length || 0) > 0) return;
       setThreadWorking(threadId, false);
       setActiveTurns((current) => {
         const next = { ...current };
@@ -305,27 +289,23 @@ function App() {
       try {
         const drained = await drainCodexEvents();
         if (stopped || drained.length === 0) return;
-        const visibleEvents: CodexEvent[] = [];
-        for (const event of drained) {
-          const automatic = event.requestId === undefined ? null : approvalResult({ method: event.method, params: record(event.params) }, true);
-          if (approvalModeRef.current === "auto" && automatic && event.requestId !== undefined) {
-            try { await respondToCodexRequest(event.requestId, automatic); }
-            catch (cause) { setError(asCodexError(cause)); visibleEvents.push(event); }
-          } else {
-            visibleEvents.push(event);
-          }
-        }
-        const sequenced = visibleEvents.map((event) => ({ sequence: ++eventSequence.current, event }));
+        const sequenced = drained.map((event) => ({ sequence: ++eventSequence.current, event }));
         setEvents((current) => [...current, ...sequenced].slice(-2000));
         for (const event of drained) {
           const threadId = eventThreadId(event);
           if (!threadId) continue;
-          if (event.method === "turn/started") {
+          if (event.method === "board/queue/updated") {
+            const messages = record(event.params).messages;
+            const next = { ...queuesRef.current, [threadId]: Array.isArray(messages) ? messages as unknown as QueuedMessage[] : [] };
+            if (next[threadId].length === 0) delete next[threadId];
+            queuesRef.current = next;
+            setQueues(next);
+          } else if (event.method === "turn/started") {
             setThreadWorking(threadId, true);
             const turnId = text(record(record(event.params).turn).id);
             if (turnId) setActiveTurns((current) => ({ ...current, [threadId]: turnId }));
           } else if (event.method === "turn/completed") {
-            await startQueuedOrFinish(threadId, event);
+            finishTurn(threadId, event);
           }
         }
       } catch (cause) {
@@ -429,28 +409,20 @@ function App() {
   }
 
   async function sendOrQueue(threadId: string, message: string) {
-    if (workingIdsRef.current.has(threadId)) {
-      const queued: QueuedMessage = { id: crypto.randomUUID(), text: message };
-      const next = enqueueMessage(queuesRef.current, threadId, queued);
-      queuesRef.current = next;
-      setQueues(next);
-      return;
-    }
-    setThreadWorking(threadId, true);
+    const wasWorking = workingIdsRef.current.has(threadId);
+    if (!wasWorking) setThreadWorking(threadId, true);
     try {
-      const response = record(await sendMessage(threadId, message));
+      const response = await sendMessage(threadId, message);
       const turnId = text(record(response.turn).id);
       if (turnId) setActiveTurns((current) => ({ ...current, [threadId]: turnId }));
     } catch (cause) {
-      setThreadWorking(threadId, false);
+      if (!wasWorking) setThreadWorking(threadId, false);
       throw cause;
     }
   }
 
   function removeQueuedMessage(threadId: string, messageId: string) {
-    const next = removeMessageFromQueue(queuesRef.current, threadId, messageId);
-    queuesRef.current = next;
-    setQueues(next);
+    void removeQueuedMessageApi(threadId, messageId).catch((cause) => setError(asCodexError(cause)));
   }
 
   function updateSessionState(threadId: string, running: boolean, turnId: string | null) {

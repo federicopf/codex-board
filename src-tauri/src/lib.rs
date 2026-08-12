@@ -1,7 +1,10 @@
 mod codex;
 mod remote;
 
-use codex::{CodexClient, CodexErrorDto, CodexEventDto, ThreadDto};
+use codex::{
+    CodexClient, CodexErrorDto, CodexEventDto, QueuedMessage, SendOutcome, ThreadDto,
+    TurnCoordinator,
+};
 use remote::{BoardConfig, GatewayInfo, RemoteGateway, TailscaleInfo};
 use serde_json::Value;
 use std::sync::Arc;
@@ -33,11 +36,27 @@ async fn load_thread(
 
 #[tauri::command]
 async fn send_message(
-    client: tauri::State<'_, Arc<CodexClient>>,
+    coordinator: tauri::State<'_, Arc<TurnCoordinator>>,
     thread_id: String,
     text: String,
-) -> Result<Value, CodexErrorDto> {
-    client.send_message(thread_id, text).await
+) -> Result<SendOutcome, CodexErrorDto> {
+    coordinator.send(thread_id, text).await
+}
+
+#[tauri::command]
+async fn message_queues(
+    coordinator: tauri::State<'_, Arc<TurnCoordinator>>,
+) -> Result<std::collections::HashMap<String, Vec<QueuedMessage>>, String> {
+    Ok(coordinator.queues().await)
+}
+
+#[tauri::command]
+async fn remove_queued_message(
+    coordinator: tauri::State<'_, Arc<TurnCoordinator>>,
+    thread_id: String,
+    message_id: String,
+) -> Result<bool, String> {
+    Ok(coordinator.remove(&thread_id, &message_id).await)
 }
 
 #[tauri::command]
@@ -109,10 +128,15 @@ pub fn run() {
         .manage(client.clone())
         .setup(move |app| {
             let directory = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&directory)?;
+            let coordinator =
+                TurnCoordinator::new(client.clone(), directory.join("message-queues.json"));
+            coordinator.start();
             let gateway = RemoteGateway::prepare(&directory).map_err(|error| {
                 std::io::Error::other(format!("Could not prepare remote gateway: {error}"))
             })?;
-            gateway.start(client.clone());
+            gateway.start(client.clone(), coordinator.clone());
+            app.manage(coordinator);
             app.manage(gateway);
             Ok(())
         })
@@ -121,6 +145,8 @@ pub fn run() {
             rename_thread,
             load_thread,
             send_message,
+            message_queues,
+            remove_queued_message,
             interrupt_turn,
             drain_codex_events,
             respond_to_codex_request,

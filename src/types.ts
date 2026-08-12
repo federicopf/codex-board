@@ -60,6 +60,12 @@ export interface QueuedMessage {
   text: string;
 }
 
+export interface SendOutcome {
+  queued: boolean;
+  messageId?: string | null;
+  turn?: JsonValue;
+}
+
 export type ChatItemKind = "user" | "assistant" | "reasoning" | "plan" | "activity" | "notice";
 
 export interface ChatItem {

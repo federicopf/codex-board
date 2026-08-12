@@ -31,6 +31,10 @@ export interface RemoteHealth {
   version: string;
 }
 
+export interface QueuedMessage { id: string; text: string; }
+export interface SendOutcome { queued: boolean; messageId?: string | null; turn?: JsonValue; }
+export interface PendingRemoteRequest { requestId: JsonValue; method: string; params: JsonValue; }
+
 export function categoryFromTitle(name: string | null): string {
   if (!name) return "Uncategorized";
   const separator = name.indexOf(" - ");

@@ -1,3 +1,4 @@
+mod coordinator;
 mod process;
 mod protocol;
 mod types;
@@ -7,6 +8,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast};
 
+pub use coordinator::{QueuedMessage, SendOutcome, TurnCoordinator};
 use process::RunningClient;
 use protocol::EventQueue;
 use types::{CodexErrorCode, ThreadListResponse, ThreadReadResponse};

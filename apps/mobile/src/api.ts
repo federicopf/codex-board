@@ -1,4 +1,4 @@
-import type { BoardConfig, CodexEvent, JsonValue, PairingCredential, RemoteHealth, ThreadDto } from "@codex-board/protocol";
+import type { BoardConfig, CodexEvent, JsonValue, PairingCredential, PendingRemoteRequest, QueuedMessage, RemoteHealth, SendOutcome, ThreadDto } from "@codex-board/protocol";
 
 type WebSocketWithHeaders = new (url: string, protocols?: string | string[] | null, options?: { headers?: Record<string, string> }) => WebSocket;
 
@@ -24,9 +24,15 @@ export class BoardApi {
   health() { return this.request<RemoteHealth>("/v1/health"); }
   threads() { return this.request<ThreadDto[]>("/v1/threads"); }
   board() { return this.request<BoardConfig>("/v1/board"); }
+  updateBoard(config: BoardConfig) { return this.request<BoardConfig>("/v1/board", { method: "PUT", body: JSON.stringify(config) }); }
   thread(id: string) { return this.request<Record<string, JsonValue>>(`/v1/threads/${encodeURIComponent(id)}`); }
-  send(id: string, text: string) { return this.request<JsonValue>(`/v1/threads/${encodeURIComponent(id)}/messages`, { method: "POST", body: JSON.stringify({ text }) }); }
+  rename(id: string, newName: string) { return this.request<ThreadDto>(`/v1/threads/${encodeURIComponent(id)}/name`, { method: "PUT", body: JSON.stringify({ newName }) }); }
+  send(id: string, text: string) { return this.request<SendOutcome>(`/v1/threads/${encodeURIComponent(id)}/messages`, { method: "POST", body: JSON.stringify({ text }) }); }
   interrupt(id: string, turnId: string) { return this.request<void>(`/v1/threads/${encodeURIComponent(id)}/interrupt`, { method: "POST", body: JSON.stringify({ turnId }) }); }
+  queues() { return this.request<Record<string, QueuedMessage[]>>("/v1/queues"); }
+  removeQueued(id: string, messageId: string) { return this.request<void>(`/v1/threads/${encodeURIComponent(id)}/queue/${encodeURIComponent(messageId)}`, { method: "DELETE" }); }
+  requests() { return this.request<PendingRemoteRequest[]>("/v1/requests"); }
+  respond(requestId: JsonValue, result: JsonValue) { return this.request<void>("/v1/requests/respond", { method: "POST", body: JSON.stringify({ requestId, result }) }); }
 
   subscribe(onEvent: (event: CodexEvent) => void, onConnection: (connected: boolean) => void): () => void {
     const wsUrl = this.credential.baseUrl.replace(/^http/, "ws") + "/v1/events";

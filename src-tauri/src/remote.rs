@@ -20,13 +20,13 @@ use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast};
 
-use crate::codex::{CodexClient, CodexErrorDto};
+use crate::codex::{CodexClient, CodexErrorDto, TurnCoordinator};
 
 pub const GATEWAY_PORT: u16 = 47_821;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BoardConfig {
     #[serde(default)]
@@ -39,6 +39,16 @@ pub struct BoardConfig {
 
 fn default_approval_mode() -> String {
     "auto".into()
+}
+
+impl Default for BoardConfig {
+    fn default() -> Self {
+        Self {
+            categories: Vec::new(),
+            approval_mode: default_approval_mode(),
+            revision: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,14 +74,25 @@ pub struct RemoteGateway {
     info: Arc<RwLock<GatewayInfo>>,
     config: Arc<RwLock<BoardConfig>>,
     config_path: PathBuf,
+    pending_requests: Arc<Mutex<Vec<PendingRequest>>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingRequest {
+    pub request_id: Value,
+    pub method: String,
+    pub params: Value,
 }
 
 #[derive(Clone)]
 struct ApiState {
     client: Arc<CodexClient>,
+    coordinator: Arc<TurnCoordinator>,
     token: String,
     config: Arc<RwLock<BoardConfig>>,
     config_path: PathBuf,
+    pending_requests: Arc<Mutex<Vec<PendingRequest>>>,
 }
 
 #[derive(Debug)]
@@ -128,10 +149,13 @@ impl RemoteGateway {
             }
         };
         let config_path = data_dir.join("board-config.json");
-        let config = fs::read(&config_path)
+        let mut config: BoardConfig = fs::read(&config_path)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
+        if !matches!(config.approval_mode.as_str(), "auto" | "ask") {
+            config.approval_mode = default_approval_mode();
+        }
         Ok(Self {
             info: Arc::new(RwLock::new(GatewayInfo {
                 running: false,
@@ -141,6 +165,7 @@ impl RemoteGateway {
             })),
             config: Arc::new(RwLock::new(config)),
             config_path,
+            pending_requests: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -167,13 +192,16 @@ impl RemoteGateway {
         Ok(config)
     }
 
-    pub fn start(&self, client: Arc<CodexClient>) {
+    pub fn start(&self, client: Arc<CodexClient>, coordinator: Arc<TurnCoordinator>) {
         let state = ApiState {
             client,
+            coordinator,
             token: self.info().token,
             config: self.config.clone(),
             config_path: self.config_path.clone(),
+            pending_requests: self.pending_requests.clone(),
         };
+        start_request_worker(state.clone());
         let info = self.info.clone();
         tauri::async_runtime::spawn(async move {
             let address = SocketAddr::from(([127, 0, 0, 1], GATEWAY_PORT));
@@ -196,8 +224,14 @@ impl RemoteGateway {
                 .route("/v1/threads/{id}", get(load_thread))
                 .route("/v1/threads/{id}/name", put(rename_thread))
                 .route("/v1/threads/{id}/messages", post(send_message))
+                .route("/v1/queues", get(message_queues))
+                .route(
+                    "/v1/threads/{id}/queue/{message_id}",
+                    axum::routing::delete(remove_queued_message),
+                )
                 .route("/v1/threads/{id}/interrupt", post(interrupt_turn))
                 .route("/v1/requests/respond", post(respond_to_request))
+                .route("/v1/requests", get(pending_requests))
                 .route("/v1/board", get(get_board).put(put_board))
                 .route("/v1/events", get(events_socket))
                 .with_state(state);
@@ -334,6 +368,79 @@ fn authorized(headers: &HeaderMap, state: &ApiState) -> Result<(), ApiError> {
     }
 }
 
+fn start_request_worker(state: ApiState) {
+    let mut events = state.client.subscribe_events();
+    tauri::async_runtime::spawn(async move {
+        while let Ok(event) = events.recv().await {
+            if event.method == "serverRequest/resolved" {
+                if let Some(request_id) = event.params.get("requestId") {
+                    state
+                        .pending_requests
+                        .lock()
+                        .await
+                        .retain(|request| request.request_id != *request_id);
+                }
+                continue;
+            }
+            let Some(request_id) = event.request_id.clone() else {
+                continue;
+            };
+            let request = PendingRequest {
+                request_id: request_id.clone(),
+                method: event.method.clone(),
+                params: event.params.clone(),
+            };
+            let automatic = state
+                .config
+                .read()
+                .ok()
+                .map(|config| config.approval_mode == "auto")
+                .unwrap_or(false)
+                .then(|| automatic_approval(&event.method, &event.params))
+                .flatten();
+            if let Some(result) = automatic {
+                if state
+                    .client
+                    .respond_to_request(request_id.clone(), result)
+                    .await
+                    .is_ok()
+                {
+                    state
+                        .client
+                        .emit_local_event(
+                            "serverRequest/resolved",
+                            json!({ "requestId": request_id }),
+                        )
+                        .await;
+                    continue;
+                }
+            }
+            let mut pending = state.pending_requests.lock().await;
+            if !pending
+                .iter()
+                .any(|item| item.request_id == request.request_id)
+            {
+                pending.push(request);
+            }
+        }
+    });
+}
+
+fn automatic_approval(method: &str, params: &Value) -> Option<Value> {
+    match method {
+        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+            Some(json!({ "decision": "acceptForSession" }))
+        }
+        "item/permissions/requestApproval" => Some(
+            json!({ "permissions": params.get("permissions").cloned().unwrap_or_else(|| json!({})), "scope": "session" }),
+        ),
+        "applyPatchApproval" | "execCommandApproval" => {
+            Some(json!({ "decision": "approved_for_session" }))
+        }
+        _ => None,
+    }
+}
+
 async fn health(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -384,7 +491,37 @@ async fn send_message(
     Json(body): Json<MessageBody>,
 ) -> Result<Json<Value>, ApiError> {
     authorized(&headers, &state)?;
-    Ok(Json(state.client.send_message(id, body.text).await?))
+    Ok(Json(
+        serde_json::to_value(state.coordinator.send(id, body.text).await?)
+            .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
+    ))
+}
+
+async fn message_queues(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    authorized(&headers, &state)?;
+    Ok(Json(
+        serde_json::to_value(state.coordinator.queues().await)
+            .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
+    ))
+}
+
+async fn remove_queued_message(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath((id, message_id)): AxumPath<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    authorized(&headers, &state)?;
+    if state.coordinator.remove(&id, &message_id).await {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "Queued message not found".into(),
+        ))
+    }
 }
 
 async fn interrupt_turn(
@@ -406,9 +543,29 @@ async fn respond_to_request(
     authorized(&headers, &state)?;
     state
         .client
-        .respond_to_request(body.request_id, body.result)
+        .respond_to_request(body.request_id.clone(), body.result)
         .await?;
+    state
+        .pending_requests
+        .lock()
+        .await
+        .retain(|request| request.request_id != body.request_id);
+    state
+        .client
+        .emit_local_event(
+            "serverRequest/resolved",
+            json!({ "requestId": body.request_id }),
+        )
+        .await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn pending_requests(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<PendingRequest>>, ApiError> {
+    authorized(&headers, &state)?;
+    Ok(Json(state.pending_requests.lock().await.clone()))
 }
 
 async fn get_board(
@@ -513,5 +670,19 @@ mod tests {
     #[test]
     fn category_separator_is_rejected() {
         assert!(unique_categories(vec!["Bad - Name".into()]).is_err());
+    }
+
+    #[test]
+    fn new_board_defaults_to_auto_approval() {
+        assert_eq!(BoardConfig::default().approval_mode, "auto");
+    }
+
+    #[test]
+    fn automatic_approval_never_answers_user_questions() {
+        assert!(automatic_approval("item/tool/requestUserInput", &json!({})).is_none());
+        assert_eq!(
+            automatic_approval("item/commandExecution/requestApproval", &json!({})).unwrap()["decision"],
+            "acceptForSession"
+        );
     }
 }
