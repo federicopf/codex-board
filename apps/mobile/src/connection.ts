@@ -2,6 +2,7 @@ import * as SecureStore from "expo-secure-store";
 import type { PairingCredential } from "@codex-board/protocol";
 
 const CREDENTIAL_KEY = "codex-board.remote.v1";
+const TOUR_KEY = "codex-board.tour.v1";
 
 export async function loadCredential(): Promise<PairingCredential | null> {
   const value = await SecureStore.getItemAsync(CREDENTIAL_KEY);
@@ -19,3 +20,5 @@ export async function saveCredential(value: PairingCredential): Promise<void> {
 export async function clearCredential(): Promise<void> {
   await SecureStore.deleteItemAsync(CREDENTIAL_KEY);
 }
+export async function hasSeenTour(): Promise<boolean> { return (await SecureStore.getItemAsync(TOUR_KEY)) === "done"; }
+export async function markTourSeen(): Promise<void> { await SecureStore.setItemAsync(TOUR_KEY, "done"); }

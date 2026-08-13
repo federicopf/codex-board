@@ -34,14 +34,20 @@ export interface RemoteHealth {
 export interface QueuedMessage { id: string; text: string; }
 export interface SendOutcome { queued: boolean; messageId?: string | null; turn?: JsonValue; }
 export interface PendingRemoteRequest { requestId: JsonValue; method: string; params: JsonValue; }
+export interface CreateThreadInput { cwd: string; category: string; title: string; prompt: string; }
+export interface BoardNotification { id: string; kind: "done" | "attention" | "error"; title: string; message: string; threadId: string | null; createdAt: number; read: boolean; }
 
 export type AutomationAction =
-  | { kind: "recurringMessage"; threadId: string; prompt: string; everyMinutes: number; nextRunAt: number }
-  | { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number };
+    | { kind: "recurringMessage"; threadId: string; prompt: string; everyMinutes: number; nextRunAt: number }
+    | { kind: "scheduledMessage"; threadId: string; prompt: string; runAt: number }
+    | { kind: "calendarMessage"; threadId: string; prompt: string; weekdays: number[]; minuteOfDay: number; timezoneOffsetMinutes: number; nextRunAt: number }
+    | { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number };
 export interface Automation { id: string; name: string; enabled: boolean; action: AutomationAction; lastRunAt: number | null; lastError: string | null; }
 export type CreateAutomationInput =
-  | { name: string; action: { kind: "recurringMessage"; threadId: string; prompt: string; everyMinutes: number; startInMinutes: number } }
-  | { name: string; action: { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number } };
+    | { name: string; action: { kind: "recurringMessage"; threadId: string; prompt: string; everyMinutes: number; startInMinutes: number } }
+    | { name: string; action: { kind: "scheduledMessage"; threadId: string; prompt: string; runAt: number } }
+    | { name: string; action: { kind: "calendarMessage"; threadId: string; prompt: string; weekdays: number[]; minuteOfDay: number; timezoneOffsetMinutes: number } }
+    | { name: string; action: { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number } };
 
 export function categoryFromTitle(name: string | null): string {
   if (!name) return "Uncategorized";

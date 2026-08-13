@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, VecDeque},
-    fs,
     path::PathBuf,
     sync::Arc,
 };
@@ -10,6 +9,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use super::{CodexClient, CodexErrorCode, CodexErrorDto};
+use crate::persistence;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,10 +40,8 @@ pub struct TurnCoordinator {
 
 impl TurnCoordinator {
     pub fn new(client: Arc<CodexClient>, queue_path: PathBuf) -> Arc<Self> {
-        let saved: HashMap<String, VecDeque<QueuedMessage>> = fs::read(&queue_path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
+        let saved: HashMap<String, VecDeque<QueuedMessage>> =
+            persistence::load_json_or_default(&queue_path);
         Arc::new(Self {
             client,
             threads: Mutex::new(
@@ -239,12 +237,7 @@ impl TurnCoordinator {
     }
 
     fn persist(&self, queues: HashMap<String, VecDeque<QueuedMessage>>) {
-        let temporary = self.queue_path.with_extension("json.tmp");
-        if let Ok(bytes) = serde_json::to_vec_pretty(&queues)
-            && fs::write(&temporary, bytes).is_ok()
-        {
-            let _ = fs::rename(temporary, &self.queue_path);
-        }
+        let _ = persistence::write_json(&self.queue_path, &queues);
     }
 }
 

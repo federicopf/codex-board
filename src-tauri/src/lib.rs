@@ -1,5 +1,7 @@
 mod automations;
 mod codex;
+mod notifications;
+mod persistence;
 mod remote;
 
 use automations::{Automation, AutomationEnabledInput, AutomationStore, CreateAutomationInput};
@@ -7,6 +9,7 @@ use codex::{
     CodexClient, CodexErrorDto, CodexEventDto, QueuedMessage, SendOutcome, ThreadDto,
     TurnCoordinator,
 };
+use notifications::{BoardNotification, NotificationStore};
 use remote::{BoardConfig, GatewayInfo, RemoteGateway, TailscaleInfo};
 use serde_json::Value;
 use std::sync::Arc;
@@ -26,6 +29,22 @@ async fn rename_thread(
     new_name: String,
 ) -> Result<ThreadDto, CodexErrorDto> {
     client.rename_thread(thread_id, new_name).await
+}
+
+#[tauri::command]
+async fn create_thread(
+    client: tauri::State<'_, Arc<CodexClient>>,
+    cwd: String,
+    category: String,
+    title: String,
+    prompt: String,
+) -> Result<ThreadDto, CodexErrorDto> {
+    let name = if category.trim().is_empty() || category == "Uncategorized" {
+        title.trim().to_owned()
+    } else {
+        format!("{} - {}", category.trim(), title.trim())
+    };
+    client.create_thread(cwd, name, prompt).await
 }
 
 #[tauri::command]
@@ -154,6 +173,26 @@ async fn delete_automation(
     store.delete(&id).await
 }
 
+#[tauri::command]
+async fn list_notifications(
+    store: tauri::State<'_, Arc<NotificationStore>>,
+) -> Result<Vec<BoardNotification>, String> {
+    Ok(store.list().await)
+}
+#[tauri::command]
+async fn mark_notifications_read(
+    store: tauri::State<'_, Arc<NotificationStore>>,
+    id: Option<String>,
+) -> Result<(), String> {
+    store.mark_read(id.as_deref()).await
+}
+#[tauri::command]
+async fn clear_notifications(
+    store: tauri::State<'_, Arc<NotificationStore>>,
+) -> Result<(), String> {
+    store.clear().await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let client = Arc::new(CodexClient::new());
@@ -172,18 +211,27 @@ pub fn run() {
                 coordinator.clone(),
             );
             automations.start();
+            let notifications =
+                NotificationStore::new(directory.join("notifications.json"), client.clone());
             let gateway = RemoteGateway::prepare(&directory).map_err(|error| {
                 std::io::Error::other(format!("Could not prepare remote gateway: {error}"))
             })?;
-            gateway.start(client.clone(), coordinator.clone(), automations.clone());
+            gateway.start(
+                client.clone(),
+                coordinator.clone(),
+                automations.clone(),
+                notifications.clone(),
+            );
             app.manage(coordinator);
             app.manage(automations);
+            app.manage(notifications);
             app.manage(gateway);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             list_threads,
             rename_thread,
+            create_thread,
             load_thread,
             send_message,
             message_queues,
@@ -199,7 +247,10 @@ pub fn run() {
             list_automations,
             create_automation,
             set_automation_enabled,
-            delete_automation
+            delete_automation,
+            list_notifications,
+            mark_notifications_read,
+            clear_notifications
         ])
         .build(tauri::generate_context!())
         .expect("error while building Codex Board");

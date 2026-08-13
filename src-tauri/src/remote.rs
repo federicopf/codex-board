@@ -25,6 +25,7 @@ use tokio::sync::{Mutex, broadcast};
 use crate::{
     automations::{AutomationEnabledInput, AutomationStore, CreateAutomationInput},
     codex::{CodexClient, CodexErrorDto, TurnCoordinator},
+    notifications::NotificationStore,
 };
 
 pub const GATEWAY_PORT: u16 = 47_821;
@@ -98,6 +99,7 @@ struct ApiState {
     config_path: PathBuf,
     pending_requests: Arc<Mutex<Vec<PendingRequest>>>,
     automations: Arc<AutomationStore>,
+    notifications: Arc<NotificationStore>,
 }
 
 #[derive(Debug)]
@@ -119,6 +121,15 @@ impl From<CodexErrorDto> for ApiError {
 #[serde(rename_all = "camelCase")]
 struct RenameBody {
     new_name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateThreadBody {
+    cwd: String,
+    category: String,
+    title: String,
+    prompt: String,
 }
 
 #[derive(Deserialize)]
@@ -154,10 +165,7 @@ impl RemoteGateway {
             }
         };
         let config_path = data_dir.join("board-config.json");
-        let mut config: BoardConfig = fs::read(&config_path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
+        let mut config: BoardConfig = crate::persistence::load_json_or_default(&config_path);
         if !matches!(config.approval_mode.as_str(), "auto" | "ask") {
             config.approval_mode = default_approval_mode();
         }
@@ -202,6 +210,7 @@ impl RemoteGateway {
         client: Arc<CodexClient>,
         coordinator: Arc<TurnCoordinator>,
         automations: Arc<AutomationStore>,
+        notifications: Arc<NotificationStore>,
     ) {
         let state = ApiState {
             client,
@@ -211,6 +220,7 @@ impl RemoteGateway {
             config_path: self.config_path.clone(),
             pending_requests: self.pending_requests.clone(),
             automations,
+            notifications,
         };
         start_request_worker(state.clone());
         let info = self.info.clone();
@@ -232,6 +242,7 @@ impl RemoteGateway {
             let app = Router::new()
                 .route("/v1/health", get(health))
                 .route("/v1/threads", get(list_threads))
+                .route("/v1/threads/new", post(create_thread))
                 .route("/v1/threads/{id}", get(load_thread))
                 .route("/v1/threads/{id}/name", put(rename_thread))
                 .route("/v1/threads/{id}/messages", post(send_message))
@@ -252,6 +263,11 @@ impl RemoteGateway {
                     "/v1/automations/{id}",
                     put(set_automation_enabled).delete(delete_automation),
                 )
+                .route(
+                    "/v1/notifications",
+                    get(list_notifications).delete(clear_notifications),
+                )
+                .route("/v1/notifications/read", post(mark_notifications_read))
                 .route("/v1/events", get(events_socket))
                 .with_state(state);
             if let Err(error) = axum::serve(listener, app).await {
@@ -389,13 +405,7 @@ fn unique_categories(categories: Vec<String>) -> Result<Vec<String>, String> {
 }
 
 fn persist_config(path: &Path, config: &BoardConfig) -> Result<(), String> {
-    let temporary = path.with_extension("json.tmp");
-    fs::write(
-        &temporary,
-        serde_json::to_vec_pretty(config).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    fs::rename(temporary, path).map_err(|error| error.to_string())
+    crate::persistence::write_json(path, config)
 }
 
 fn authorized(headers: &HeaderMap, state: &ApiState) -> Result<(), ApiError> {
@@ -514,6 +524,26 @@ async fn load_thread(
 ) -> Result<Json<Value>, ApiError> {
     authorized(&headers, &state)?;
     Ok(Json(state.client.load_thread(id).await?))
+}
+
+async fn create_thread(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateThreadBody>,
+) -> Result<Json<Value>, ApiError> {
+    authorized(&headers, &state)?;
+    let name = if body.category.trim().is_empty() || body.category == "Uncategorized" {
+        body.title.trim().to_owned()
+    } else {
+        format!("{} - {}", body.category.trim(), body.title.trim())
+    };
+    let thread = state
+        .client
+        .create_thread(body.cwd, name, body.prompt)
+        .await?;
+    serde_json::to_value(thread)
+        .map(Json)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
 }
 
 async fn rename_thread(
@@ -727,6 +757,48 @@ async fn delete_automation(
             "Automation not found".into(),
         ))
     }
+}
+
+#[derive(Deserialize)]
+struct ReadNotificationBody {
+    id: Option<String>,
+}
+
+async fn list_notifications(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    authorized(&headers, &state)?;
+    serde_json::to_value(state.notifications.list().await)
+        .map(Json)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+}
+
+async fn mark_notifications_read(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<ReadNotificationBody>,
+) -> Result<StatusCode, ApiError> {
+    authorized(&headers, &state)?;
+    state
+        .notifications
+        .mark_read(body.id.as_deref())
+        .await
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn clear_notifications(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authorized(&headers, &state)?;
+    state
+        .notifications
+        .clear()
+        .await
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn events_socket(

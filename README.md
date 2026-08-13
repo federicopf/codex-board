@@ -10,13 +10,16 @@ Codex Board is an unofficial, open-source board and chat client for local Codex 
 - Custom empty categories, renaming and drag-to-reorder with no fixed category list.
 - Dragging cards between columns renames the real Codex task and verifies that Codex persisted the title.
 - Internal chat with persisted history, streamed responses, Markdown, collapsible technical activity and turn interruption.
+- New Codex tasks can be created from desktop or mobile, with project, category, title and first message.
 - Backend-owned FIFO follow-up queue shared by desktop and mobile and persisted across restarts.
 - Automatic or manual command, file-change and permission approvals.
-- Working indicators on cards and completion notifications.
+- Working indicators on cards and a persistent in-app Inbox for completions, errors and approval requests.
 - Shared backend persistence for categories, order and approval mode.
 - Authenticated HTTP/WebSocket access inside the encrypted private Tailscale network.
 - Expo mobile client with QR pairing, encrypted credential storage, live board/chat, approvals, questions, card moves and category management.
-- Persistent automations for recurring Codex prompts and timed category pipelines, manageable from desktop or mobile.
+- Persistent automations for intervals, one-time runs, weekly calendars and timed category pipelines, manageable from desktop or mobile.
+- An illustrated first-run product tour, always available again from Help.
+- Crash-safe JSON persistence with last-known-good backups and automatic recovery for board state, queues, automations and Inbox.
 
 ## How categories work
 
@@ -58,7 +61,11 @@ The PC may be on any network and the phone may use another Wi-Fi or mobile data.
 
 ## Automations
 
-Open **Automations** on desktop or the lightning button on mobile. A recurring task sends its prompt to the selected Codex thread at the chosen interval and uses the normal message queue if that thread is already working. A pipeline rule watches every thread in its source category and moves it to the destination after it has remained there for the configured number of minutes. Rules and category entry times are stored on the PC, survive restarts, and run while Codex Board is open.
+Open **Automations** on desktop or the lightning button on mobile. A task can run once at a precise date and time, repeat every N minutes, or follow a weekly calendar with selected days and a local time. It uses the normal message queue if the task is already working. A pipeline rule watches every task in its source category and moves it to the destination after it has remained there for the configured number of minutes. Rules and category entry times are stored on the PC, survive restarts, and run while Codex Board is open.
+
+## Product guide
+
+The illustrated guide opens automatically the first time Codex Board runs. It explains the board, the integrated chat, remote access and automations without requiring prior Codex knowledge. Reopen it at any time with **?** on desktop or **Categories → Product tour** on mobile.
 
 ## Requirements
 
@@ -89,7 +96,7 @@ packages/protocol/         Shared remote protocol types and pairing parser
 scripts/                   Codex app-server verification tools
 ```
 
-The desktop frontend still invokes local Tauri commands. The Rust core owns the single `codex app-server` child process, shared board configuration and authenticated remote API. Mobile uses HTTPS for commands and WebSocket for live Codex and board events. The official Codex protocol is never exposed directly.
+The desktop frontend still invokes local Tauri commands. The Rust core owns the single `codex app-server` child process, shared board configuration and authenticated remote API. Mobile uses authenticated tailnet HTTP for commands and WebSocket for live Codex and board events. The official Codex protocol is never exposed directly.
 
 ## Development
 

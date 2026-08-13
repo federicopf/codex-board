@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    fs,
     path::PathBuf,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -11,15 +10,35 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Mutex;
 
-use crate::codex::{CodexClient, TurnCoordinator};
+use crate::{
+    codex::{CodexClient, TurnCoordinator},
+    persistence,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum AutomationAction {
     RecurringMessage {
         thread_id: String,
         prompt: String,
         every_minutes: u64,
+        next_run_at: i64,
+    },
+    ScheduledMessage {
+        thread_id: String,
+        prompt: String,
+        run_at: i64,
+    },
+    CalendarMessage {
+        thread_id: String,
+        prompt: String,
+        weekdays: Vec<u8>,
+        minute_of_day: u16,
+        timezone_offset_minutes: i32,
         next_run_at: i64,
     },
     CategoryPipeline {
@@ -41,7 +60,11 @@ pub struct Automation {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum CreateAutomationAction {
     RecurringMessage {
         thread_id: String,
@@ -49,6 +72,18 @@ pub enum CreateAutomationAction {
         every_minutes: u64,
         #[serde(default)]
         start_in_minutes: u64,
+    },
+    ScheduledMessage {
+        thread_id: String,
+        prompt: String,
+        run_at: i64,
+    },
+    CalendarMessage {
+        thread_id: String,
+        prompt: String,
+        weekdays: Vec<u8>,
+        minute_of_day: u16,
+        timezone_offset_minutes: i32,
     },
     CategoryPipeline {
         from_category: String,
@@ -90,10 +125,7 @@ impl AutomationStore {
         client: Arc<CodexClient>,
         coordinator: Arc<TurnCoordinator>,
     ) -> Arc<Self> {
-        let state = fs::read(&path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
+        let state = persistence::load_json_or_default(&path);
         Arc::new(Self {
             state: Mutex::new(state),
             path,
@@ -153,6 +185,48 @@ impl AutomationStore {
                     from_category,
                     to_category,
                     after_minutes,
+                }
+            }
+            CreateAutomationAction::ScheduledMessage {
+                thread_id,
+                prompt,
+                run_at,
+            } => {
+                if run_at <= now_ms() {
+                    return Err("Scheduled time must be in the future".into());
+                }
+                AutomationAction::ScheduledMessage {
+                    thread_id: required(thread_id, "Thread")?,
+                    prompt: required(prompt, "Prompt")?,
+                    run_at,
+                }
+            }
+            CreateAutomationAction::CalendarMessage {
+                thread_id,
+                prompt,
+                weekdays,
+                minute_of_day,
+                timezone_offset_minutes,
+            } => {
+                let weekdays = valid_weekdays(weekdays)?;
+                if minute_of_day >= 24 * 60 {
+                    return Err("Calendar time is invalid".into());
+                }
+                if !(-14 * 60..=14 * 60).contains(&timezone_offset_minutes) {
+                    return Err("Timezone offset is invalid".into());
+                }
+                AutomationAction::CalendarMessage {
+                    thread_id: required(thread_id, "Thread")?,
+                    prompt: required(prompt, "Prompt")?,
+                    next_run_at: next_calendar_run(
+                        now_ms(),
+                        &weekdays,
+                        minute_of_day,
+                        timezone_offset_minutes,
+                    ),
+                    weekdays,
+                    minute_of_day,
+                    timezone_offset_minutes,
                 }
             }
         };
@@ -251,6 +325,56 @@ impl AutomationStore {
                     let _ = self.persist(&state);
                     changed = true;
                 }
+                AutomationAction::ScheduledMessage {
+                    thread_id,
+                    prompt,
+                    run_at,
+                } if now >= run_at => {
+                    let result = self.coordinator.send(thread_id, prompt).await.map(|_| ());
+                    let mut state = self.state.lock().await;
+                    if let Some(current) = state
+                        .automations
+                        .iter_mut()
+                        .find(|item| item.id == automation.id)
+                    {
+                        current.last_run_at = Some(now);
+                        current.last_error = result.err().map(|error| error.message);
+                        current.enabled = false;
+                    }
+                    let _ = self.persist(&state);
+                    changed = true;
+                }
+                AutomationAction::CalendarMessage {
+                    thread_id,
+                    prompt,
+                    weekdays,
+                    minute_of_day,
+                    timezone_offset_minutes,
+                    next_run_at,
+                } if now >= next_run_at => {
+                    let result = self.coordinator.send(thread_id, prompt).await.map(|_| ());
+                    let mut state = self.state.lock().await;
+                    if let Some(current) = state
+                        .automations
+                        .iter_mut()
+                        .find(|item| item.id == automation.id)
+                    {
+                        current.last_run_at = Some(now);
+                        current.last_error = result.err().map(|error| error.message);
+                        if let AutomationAction::CalendarMessage { next_run_at, .. } =
+                            &mut current.action
+                        {
+                            *next_run_at = next_calendar_run(
+                                now.saturating_add(60_000),
+                                &weekdays,
+                                minute_of_day,
+                                timezone_offset_minutes,
+                            );
+                        }
+                    }
+                    let _ = self.persist(&state);
+                    changed = true;
+                }
                 AutomationAction::CategoryPipeline {
                     from_category,
                     to_category,
@@ -310,13 +434,7 @@ impl AutomationStore {
     }
 
     fn persist(&self, state: &PersistedState) -> Result<(), String> {
-        let temporary = self.path.with_extension("json.tmp");
-        fs::write(
-            &temporary,
-            serde_json::to_vec_pretty(state).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?;
-        fs::rename(temporary, &self.path).map_err(|error| error.to_string())
+        persistence::write_json(&self.path, state)
     }
 
     async fn emit_updated(&self) {
@@ -349,6 +467,40 @@ fn category(value: String) -> Result<String, String> {
     } else {
         Ok(value)
     }
+}
+
+fn valid_weekdays(mut weekdays: Vec<u8>) -> Result<Vec<u8>, String> {
+    weekdays.sort_unstable();
+    weekdays.dedup();
+    if weekdays.is_empty() || weekdays.iter().any(|day| *day > 6) {
+        Err("Select at least one valid weekday".into())
+    } else {
+        Ok(weekdays)
+    }
+}
+
+fn next_calendar_run(
+    now: i64,
+    weekdays: &[u8],
+    minute_of_day: u16,
+    timezone_offset_minutes: i32,
+) -> i64 {
+    const DAY_MS: i64 = 86_400_000;
+    let offset_ms = timezone_offset_minutes as i64 * 60_000;
+    let local_now = now.saturating_sub(offset_ms);
+    let local_day = local_now.div_euclid(DAY_MS);
+    for days_ahead in 0..=7_i64 {
+        let candidate_day = local_day + days_ahead;
+        let weekday = (candidate_day + 4).rem_euclid(7) as u8;
+        if !weekdays.contains(&weekday) {
+            continue;
+        }
+        let candidate = candidate_day * DAY_MS + minute_of_day as i64 * 60_000 + offset_ms;
+        if candidate > now {
+            return candidate;
+        }
+    }
+    now.saturating_add(7 * DAY_MS)
 }
 
 fn title_category(name: Option<&str>) -> String {
@@ -402,11 +554,33 @@ mod tests {
             }
         }))
         .unwrap();
-        assert!(matches!(input.action, CreateAutomationAction::CategoryPipeline { after_minutes: 60, .. }));
+        assert!(matches!(
+            input.action,
+            CreateAutomationAction::CategoryPipeline {
+                after_minutes: 60,
+                ..
+            }
+        ));
         let encoded = serde_json::to_value(AutomationAction::RecurringMessage {
-            thread_id: "thread-1".into(), prompt: "Continue".into(), every_minutes: 30, next_run_at: 42,
-        }).unwrap();
+            thread_id: "thread-1".into(),
+            prompt: "Continue".into(),
+            every_minutes: 30,
+            next_run_at: 42,
+        })
+        .unwrap();
         assert_eq!(encoded["threadId"], "thread-1");
         assert_eq!(encoded["everyMinutes"], 30);
+    }
+
+    #[test]
+    fn calendar_schedule_uses_local_weekdays_and_time() {
+        // 1970-01-01 was Thursday (weekday 4), at midnight UTC.
+        assert_eq!(next_calendar_run(0, &[4], 60, 0), 3_600_000);
+        assert_eq!(
+            next_calendar_run(3_600_000, &[4], 60, 0),
+            7 * 86_400_000 + 3_600_000
+        );
+        // UTC+1 is represented by JavaScript's getTimezoneOffset as -60.
+        assert_eq!(next_calendar_run(0, &[4], 120, -60), 3_600_000);
     }
 }

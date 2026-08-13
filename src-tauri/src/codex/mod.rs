@@ -123,6 +123,64 @@ impl CodexClient {
         Ok(ThreadDto::from(read.thread))
     }
 
+    pub async fn create_thread(
+        &self,
+        cwd: String,
+        name: String,
+        prompt: String,
+    ) -> Result<ThreadDto, CodexErrorDto> {
+        if cwd.trim().is_empty() || name.trim().is_empty() || prompt.trim().is_empty() {
+            return Err(CodexErrorDto::new(
+                CodexErrorCode::RequestFailed,
+                "Project, title and first message are required",
+            ));
+        }
+        let client = self.ensure_running().await?;
+        let result = client
+            .request("thread/start", json!({ "cwd": cwd }))
+            .await?;
+        let thread_id = result
+            .pointer("/thread/id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                CodexErrorDto::new(
+                    CodexErrorCode::ProtocolError,
+                    "Unexpected thread/start response",
+                )
+                .with_details(result.to_string())
+            })?;
+        client
+            .request(
+                "thread/name/set",
+                json!({ "threadId": thread_id, "name": name }),
+            )
+            .await?;
+        client
+            .request(
+                "turn/start",
+                json!({
+                    "threadId": thread_id,
+                    "input": [{ "type": "text", "text": prompt }]
+                }),
+            )
+            .await?;
+        let read = client
+            .request(
+                "thread/read",
+                json!({ "threadId": thread_id, "includeTurns": false }),
+            )
+            .await?;
+        let parsed: ThreadReadResponse = serde_json::from_value(read.clone()).map_err(|error| {
+            CodexErrorDto::new(
+                CodexErrorCode::ProtocolError,
+                "Unexpected new thread response",
+            )
+            .with_details(format!("{error}: {read}"))
+        })?;
+        Ok(ThreadDto::from(parsed.thread))
+    }
+
     pub async fn load_thread(&self, thread_id: String) -> Result<Value, CodexErrorDto> {
         let client = self.ensure_running().await?;
         let result = client
@@ -156,7 +214,11 @@ impl CodexClient {
             .request("thread/resume", json!({ "threadId": thread_id }))
             .await
         {
-            let technical = format!("{} {}", error.message, error.details.as_deref().unwrap_or_default());
+            let technical = format!(
+                "{} {}",
+                error.message,
+                error.details.as_deref().unwrap_or_default()
+            );
             if technical.to_ascii_lowercase().contains("active writer") {
                 return Err(CodexErrorDto::new(
                     CodexErrorCode::RequestFailed,

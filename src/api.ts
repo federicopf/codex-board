@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { CodexError, CodexEvent, CodexThread, JsonValue, QueuedMessage, SendOutcome, ThreadDto } from "./types";
 import type { Automation, CreateAutomationInput } from "@codex-board/protocol";
+import type { BoardNotification } from "@codex-board/protocol";
 
 export interface GatewayInfo { running: boolean; port: number; token: string; error?: string | null; }
 export interface TailscaleInfo { installed: boolean; online: boolean; dnsName?: string | null; baseUrl?: string | null; error?: string | null; }
@@ -13,6 +14,9 @@ export async function listThreads(): Promise<ThreadDto[]> {
 
 export async function renameThread(threadId: string, newName: string): Promise<ThreadDto> {
   return invoke<ThreadDto>("rename_thread", { threadId, newName });
+}
+export async function createThread(cwd: string, category: string, title: string, prompt: string): Promise<ThreadDto> {
+  return invoke<ThreadDto>("create_thread", { cwd, category, title, prompt });
 }
 
 export async function openThread(threadId: string): Promise<void> {
@@ -51,6 +55,9 @@ export async function listAutomations(): Promise<Automation[]> { return invoke<A
 export async function createAutomation(input: CreateAutomationInput): Promise<Automation> { return invoke<Automation>("create_automation", { input }); }
 export async function setAutomationEnabled(id: string, enabled: boolean): Promise<Automation> { return invoke<Automation>("set_automation_enabled", { id, input: { enabled } }); }
 export async function deleteAutomation(id: string): Promise<boolean> { return invoke<boolean>("delete_automation", { id }); }
+export async function listNotifications(): Promise<BoardNotification[]> { return invoke("list_notifications"); }
+export async function markNotificationsRead(id?: string): Promise<void> { return invoke("mark_notifications_read", { id }); }
+export async function clearNotifications(): Promise<void> { return invoke("clear_notifications"); }
 
 export function asCodexError(error: unknown): CodexError {
   if (

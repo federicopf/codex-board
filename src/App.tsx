@@ -13,12 +13,16 @@ import {
 import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { asCodexError, drainCodexEvents, getBoardConfig, getMessageQueues, listThreads, removeQueuedMessage as removeQueuedMessageApi, renameThread, sendMessage, setBoardConfig } from "./api";
+import { asCodexError, clearNotifications, createThread, drainCodexEvents, getBoardConfig, getMessageQueues, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameThread, sendMessage, setBoardConfig } from "./api";
+import type { BoardNotification } from "@codex-board/protocol";
 import "./App.css";
 import { CategoryDialog } from "./CategoryDialog";
 import { ChatPanel } from "./ChatPanel";
 import { RemoteDialog } from "./RemoteDialog";
 import { AutomationsDialog } from "./AutomationsDialog";
+import { NewTaskDialog } from "./NewTaskDialog";
+import { ProductTour } from "./ProductTour";
+import { InboxDialog } from "./InboxDialog";
 import { moveThread, toBoardThreads } from "./lib/board";
 import { loadApprovalMode, saveApprovalMode, type ApprovalMode } from "./lib/approvals";
 import {
@@ -172,6 +176,10 @@ function App() {
   const [categoryDialog, setCategoryDialog] = useState<CategoryDialogState | null>(null);
   const [remoteDialog, setRemoteDialog] = useState(false);
   const [automationsDialog, setAutomationsDialog] = useState(false);
+  const [newTaskDialog, setNewTaskDialog] = useState(false);
+  const [productTour, setProductTour] = useState(() => localStorage.getItem("codex-board.tour.v1") !== "done");
+  const [notifications, setNotifications] = useState<BoardNotification[]>([]);
+  const [inboxOpen, setInboxOpen] = useState(false);
   const [categoryBusy, setCategoryBusy] = useState(false);
   const [events, setEvents] = useState<SequencedCodexEvent[]>([]);
   const [workingIds, setWorkingIds] = useState<Set<string>>(new Set());
@@ -235,6 +243,7 @@ function App() {
   useEffect(() => { threadsRef.current = threads; }, [threads]);
   useEffect(() => { workingIdsRef.current = workingIds; }, [workingIds]);
   useEffect(() => { queuesRef.current = queues; }, [queues]);
+  useEffect(() => { const load=()=>void listNotifications().then(setNotifications); load(); const timer=window.setInterval(load,2000); return()=>window.clearInterval(timer); }, []);
   const persistBoardConfig = useCallback((categories: string[], mode: ApprovalMode) => {
     saveCategoryOrder(categories);
     saveApprovalMode(mode);
@@ -545,8 +554,11 @@ function App() {
             <button className="refresh-button" disabled={refreshing} onClick={() => void refresh(true)}>
               <span className={refreshing ? "spin" : ""}>↻</span> Refresh
             </button>
+            <button className="new-task-button" onClick={() => setNewTaskDialog(true)}>＋ New task</button>
             <button className="new-category-button" onClick={() => setCategoryDialog({ mode: "create" })}>＋ Category</button>
             <button className="automation-button" onClick={() => setAutomationsDialog(true)}>⚡ Automations</button>
+            <button className="help-button" onClick={() => setProductTour(true)} aria-label="Open product guide">?</button>
+            <button className="inbox-button" onClick={() => setInboxOpen(true)} aria-label="Open inbox">♢{notifications.some(item=>!item.read)&&<b>{notifications.filter(item=>!item.read).length}</b>}</button>
             <button className="remote-button" onClick={() => setRemoteDialog(true)}><i />Remote</button>
           </div>
         </header>
@@ -624,6 +636,9 @@ function App() {
       )}
       {remoteDialog && <RemoteDialog onClose={() => setRemoteDialog(false)} />}
       {automationsDialog && <AutomationsDialog threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}
+      {newTaskDialog && <NewTaskDialog threads={threads} categories={categories} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt) => { const created = await createThread(cwd, category, title, prompt); await refresh(true); setChatThreadId(created.id); }} />}
+      {productTour && <ProductTour onClose={() => { localStorage.setItem("codex-board.tour.v1", "done"); setProductTour(false); }} />}
+      {inboxOpen && <InboxDialog items={notifications} onClose={()=>setInboxOpen(false)} onReadAll={()=>void markNotificationsRead().then(()=>listNotifications().then(setNotifications))} onClear={()=>void clearNotifications().then(()=>setNotifications([]))} onOpen={(threadId)=>{setInboxOpen(false);setChatThreadId(threadId);const item=notifications.find(entry=>entry.threadId===threadId&&!entry.read);if(item)void markNotificationsRead(item.id);}} />}
       <aside className="toast-stack" aria-live="polite">
         {toasts.map((toast) => (
           <button className={`completion-toast ${toast.kind}`} key={toast.id} onClick={() => {
