@@ -22,7 +22,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast};
 
-use crate::codex::{CodexClient, CodexErrorDto, TurnCoordinator};
+use crate::{
+    automations::{AutomationEnabledInput, AutomationStore, CreateAutomationInput},
+    codex::{CodexClient, CodexErrorDto, TurnCoordinator},
+};
 
 pub const GATEWAY_PORT: u16 = 47_821;
 pub const TAILSCALE_SERVE_PORT: u16 = 47_822;
@@ -94,6 +97,7 @@ struct ApiState {
     config: Arc<RwLock<BoardConfig>>,
     config_path: PathBuf,
     pending_requests: Arc<Mutex<Vec<PendingRequest>>>,
+    automations: Arc<AutomationStore>,
 }
 
 #[derive(Debug)]
@@ -193,7 +197,12 @@ impl RemoteGateway {
         Ok(config)
     }
 
-    pub fn start(&self, client: Arc<CodexClient>, coordinator: Arc<TurnCoordinator>) {
+    pub fn start(
+        &self,
+        client: Arc<CodexClient>,
+        coordinator: Arc<TurnCoordinator>,
+        automations: Arc<AutomationStore>,
+    ) {
         let state = ApiState {
             client,
             coordinator,
@@ -201,6 +210,7 @@ impl RemoteGateway {
             config: self.config.clone(),
             config_path: self.config_path.clone(),
             pending_requests: self.pending_requests.clone(),
+            automations,
         };
         start_request_worker(state.clone());
         let info = self.info.clone();
@@ -234,6 +244,14 @@ impl RemoteGateway {
                 .route("/v1/requests/respond", post(respond_to_request))
                 .route("/v1/requests", get(pending_requests))
                 .route("/v1/board", get(get_board).put(put_board))
+                .route(
+                    "/v1/automations",
+                    get(list_automations).post(create_automation),
+                )
+                .route(
+                    "/v1/automations/{id}",
+                    put(set_automation_enabled).delete(delete_automation),
+                )
                 .route("/v1/events", get(events_socket))
                 .with_state(state);
             if let Err(error) = axum::serve(listener, app).await {
@@ -326,7 +344,13 @@ pub async fn configure_tailscale_serve() -> Result<TailscaleInfo, String> {
     let target = GATEWAY_PORT.to_string();
     let http_port = format!("--http={TAILSCALE_SERVE_PORT}");
     let output = tokio::process::Command::new(tailscale_executable())
-        .args(["serve", "--bg", "--yes", http_port.as_str(), target.as_str()])
+        .args([
+            "serve",
+            "--bg",
+            "--yes",
+            http_port.as_str(),
+            target.as_str(),
+        ])
         .output()
         .await
         .map_err(|error| error.to_string())?;
@@ -639,6 +663,70 @@ async fn put_board(
         )
         .await;
     Ok(Json(config))
+}
+
+async fn list_automations(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    authorized(&headers, &state)?;
+    serde_json::to_value(state.automations.list().await)
+        .map(Json)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+}
+
+async fn create_automation(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(input): Json<CreateAutomationInput>,
+) -> Result<Json<Value>, ApiError> {
+    authorized(&headers, &state)?;
+    let automation = state
+        .automations
+        .create(input)
+        .await
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error))?;
+    serde_json::to_value(automation)
+        .map(Json)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+}
+
+async fn set_automation_enabled(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(input): Json<AutomationEnabledInput>,
+) -> Result<Json<Value>, ApiError> {
+    authorized(&headers, &state)?;
+    let automation = state
+        .automations
+        .set_enabled(&id, input.enabled)
+        .await
+        .map_err(|error| ApiError(StatusCode::NOT_FOUND, error))?;
+    serde_json::to_value(automation)
+        .map(Json)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+}
+
+async fn delete_automation(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, ApiError> {
+    authorized(&headers, &state)?;
+    if state
+        .automations
+        .delete(&id)
+        .await
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "Automation not found".into(),
+        ))
+    }
 }
 
 async fn events_socket(

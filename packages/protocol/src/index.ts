@@ -35,6 +35,14 @@ export interface QueuedMessage { id: string; text: string; }
 export interface SendOutcome { queued: boolean; messageId?: string | null; turn?: JsonValue; }
 export interface PendingRemoteRequest { requestId: JsonValue; method: string; params: JsonValue; }
 
+export type AutomationAction =
+  | { kind: "recurringMessage"; threadId: string; prompt: string; everyMinutes: number; nextRunAt: number }
+  | { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number };
+export interface Automation { id: string; name: string; enabled: boolean; action: AutomationAction; lastRunAt: number | null; lastError: string | null; }
+export type CreateAutomationInput =
+  | { name: string; action: { kind: "recurringMessage"; threadId: string; prompt: string; everyMinutes: number; startInMinutes: number } }
+  | { name: string; action: { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number } };
+
 export function categoryFromTitle(name: string | null): string {
   if (!name) return "Uncategorized";
   const separator = name.indexOf(" - ");

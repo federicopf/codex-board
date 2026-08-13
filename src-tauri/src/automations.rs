@@ -1,0 +1,412 @@
+use std::{
+    collections::HashMap,
+    fs,
+    path::PathBuf,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use rand::RngCore;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tokio::sync::Mutex;
+
+use crate::codex::{CodexClient, TurnCoordinator};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
+pub enum AutomationAction {
+    RecurringMessage {
+        thread_id: String,
+        prompt: String,
+        every_minutes: u64,
+        next_run_at: i64,
+    },
+    CategoryPipeline {
+        from_category: String,
+        to_category: String,
+        after_minutes: u64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Automation {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub action: AutomationAction,
+    pub last_run_at: Option<i64>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
+pub enum CreateAutomationAction {
+    RecurringMessage {
+        thread_id: String,
+        prompt: String,
+        every_minutes: u64,
+        #[serde(default)]
+        start_in_minutes: u64,
+    },
+    CategoryPipeline {
+        from_category: String,
+        to_category: String,
+        after_minutes: u64,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAutomationInput {
+    pub name: String,
+    pub action: CreateAutomationAction,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AutomationEnabledInput {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedState {
+    automations: Vec<Automation>,
+    #[serde(default)]
+    entered_at: HashMap<String, i64>,
+}
+
+pub struct AutomationStore {
+    state: Mutex<PersistedState>,
+    path: PathBuf,
+    client: Arc<CodexClient>,
+    coordinator: Arc<TurnCoordinator>,
+}
+
+impl AutomationStore {
+    pub fn new(
+        path: PathBuf,
+        client: Arc<CodexClient>,
+        coordinator: Arc<TurnCoordinator>,
+    ) -> Arc<Self> {
+        let state = fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        Arc::new(Self {
+            state: Mutex::new(state),
+            path,
+            client,
+            coordinator,
+        })
+    }
+
+    pub fn start(self: &Arc<Self>) {
+        let store = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+            loop {
+                interval.tick().await;
+                store.tick().await;
+            }
+        });
+    }
+
+    pub async fn list(&self) -> Vec<Automation> {
+        self.state.lock().await.automations.clone()
+    }
+
+    pub async fn create(&self, input: CreateAutomationInput) -> Result<Automation, String> {
+        let name = required(input.name, "Automation name")?;
+        let action = match input.action {
+            CreateAutomationAction::RecurringMessage {
+                thread_id,
+                prompt,
+                every_minutes,
+                start_in_minutes,
+            } => {
+                if every_minutes == 0 {
+                    return Err("Recurring interval must be at least one minute".into());
+                }
+                AutomationAction::RecurringMessage {
+                    thread_id: required(thread_id, "Thread")?,
+                    prompt: required(prompt, "Prompt")?,
+                    every_minutes,
+                    next_run_at: now_ms().saturating_add((start_in_minutes.max(1) * 60_000) as i64),
+                }
+            }
+            CreateAutomationAction::CategoryPipeline {
+                from_category,
+                to_category,
+                after_minutes,
+            } => {
+                let from_category = category(from_category)?;
+                let to_category = category(to_category)?;
+                if from_category == to_category {
+                    return Err("Pipeline categories must be different".into());
+                }
+                if after_minutes == 0 {
+                    return Err("Pipeline delay must be at least one minute".into());
+                }
+                AutomationAction::CategoryPipeline {
+                    from_category,
+                    to_category,
+                    after_minutes,
+                }
+            }
+        };
+        let automation = Automation {
+            id: random_id(),
+            name,
+            enabled: true,
+            action,
+            last_run_at: None,
+            last_error: None,
+        };
+        let mut state = self.state.lock().await;
+        state.automations.push(automation.clone());
+        self.persist(&state)?;
+        drop(state);
+        self.emit_updated().await;
+        Ok(automation)
+    }
+
+    pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<Automation, String> {
+        let mut state = self.state.lock().await;
+        let automation = state
+            .automations
+            .iter_mut()
+            .find(|item| item.id == id)
+            .ok_or_else(|| "Automation not found".to_string())?;
+        automation.enabled = enabled;
+        automation.last_error = None;
+        let result = automation.clone();
+        if !enabled {
+            state
+                .entered_at
+                .retain(|key, _| !key.starts_with(&format!("{id}:")));
+        }
+        self.persist(&state)?;
+        drop(state);
+        self.emit_updated().await;
+        Ok(result)
+    }
+
+    pub async fn delete(&self, id: &str) -> Result<bool, String> {
+        let mut state = self.state.lock().await;
+        let before = state.automations.len();
+        state.automations.retain(|item| item.id != id);
+        state
+            .entered_at
+            .retain(|key, _| !key.starts_with(&format!("{id}:")));
+        let deleted = before != state.automations.len();
+        if deleted {
+            self.persist(&state)?;
+        }
+        drop(state);
+        if deleted {
+            self.emit_updated().await;
+        }
+        Ok(deleted)
+    }
+
+    async fn tick(&self) {
+        let now = now_ms();
+        let mut changed = false;
+        let automations = self.list().await;
+        let needs_threads = automations.iter().any(|automation| {
+            automation.enabled
+                && matches!(automation.action, AutomationAction::CategoryPipeline { .. })
+        });
+        let threads = if needs_threads {
+            self.client.list_threads().await.ok()
+        } else {
+            None
+        };
+
+        for automation in automations.into_iter().filter(|item| item.enabled) {
+            match automation.action.clone() {
+                AutomationAction::RecurringMessage {
+                    thread_id,
+                    prompt,
+                    every_minutes,
+                    next_run_at,
+                } if now >= next_run_at => {
+                    let result = self.coordinator.send(thread_id, prompt).await.map(|_| ());
+                    let mut state = self.state.lock().await;
+                    if let Some(current) = state
+                        .automations
+                        .iter_mut()
+                        .find(|item| item.id == automation.id)
+                    {
+                        current.last_run_at = Some(now);
+                        current.last_error = result.err().map(|error| error.message);
+                        if let AutomationAction::RecurringMessage { next_run_at, .. } =
+                            &mut current.action
+                        {
+                            *next_run_at = now.saturating_add((every_minutes * 60_000) as i64);
+                        }
+                    }
+                    let _ = self.persist(&state);
+                    changed = true;
+                }
+                AutomationAction::CategoryPipeline {
+                    from_category,
+                    to_category,
+                    after_minutes,
+                } => {
+                    let Some(threads) = threads.as_ref() else {
+                        continue;
+                    };
+                    let mut active_ids = Vec::new();
+                    for thread in threads {
+                        if title_category(thread.name.as_deref()) != from_category {
+                            continue;
+                        }
+                        active_ids.push(thread.id.clone());
+                        let key = format!("{}:{}", automation.id, thread.id);
+                        let entered = {
+                            let mut state = self.state.lock().await;
+                            *state.entered_at.entry(key.clone()).or_insert(now)
+                        };
+                        if now.saturating_sub(entered) < (after_minutes * 60_000) as i64 {
+                            continue;
+                        }
+                        let title =
+                            display_title(thread.name.as_deref(), thread.preview.as_deref());
+                        let result = self
+                            .client
+                            .rename_thread(thread.id.clone(), format!("{to_category} - {title}"))
+                            .await
+                            .map(|_| ());
+                        let mut state = self.state.lock().await;
+                        state.entered_at.remove(&key);
+                        if let Some(current) = state
+                            .automations
+                            .iter_mut()
+                            .find(|item| item.id == automation.id)
+                        {
+                            current.last_run_at = Some(now);
+                            current.last_error = result.err().map(|error| error.message);
+                        }
+                        let _ = self.persist(&state);
+                        changed = true;
+                    }
+                    let prefix = format!("{}:", automation.id);
+                    let mut state = self.state.lock().await;
+                    state.entered_at.retain(|key, _| {
+                        !key.starts_with(&prefix)
+                            || active_ids.iter().any(|id| key == &format!("{prefix}{id}"))
+                    });
+                    let _ = self.persist(&state);
+                }
+                _ => {}
+            }
+        }
+        if changed {
+            self.emit_updated().await;
+        }
+    }
+
+    fn persist(&self, state: &PersistedState) -> Result<(), String> {
+        let temporary = self.path.with_extension("json.tmp");
+        fs::write(
+            &temporary,
+            serde_json::to_vec_pretty(state).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        fs::rename(temporary, &self.path).map_err(|error| error.to_string())
+    }
+
+    async fn emit_updated(&self) {
+        self.client
+            .emit_local_event("board/automations/updated", json!({}))
+            .await;
+    }
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+fn required(value: String, label: &str) -> Result<String, String> {
+    let value = value.trim().to_owned();
+    if value.is_empty() {
+        Err(format!("{label} is required"))
+    } else {
+        Ok(value)
+    }
+}
+
+fn category(value: String) -> Result<String, String> {
+    let value = required(value, "Category")?;
+    if value.contains(" - ") {
+        Err("Invalid category name".into())
+    } else {
+        Ok(value)
+    }
+}
+
+fn title_category(name: Option<&str>) -> String {
+    name.and_then(|value| {
+        value
+            .split_once(" - ")
+            .map(|(category, _)| category.trim().to_owned())
+    })
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| "Uncategorized".into())
+}
+
+fn display_title(name: Option<&str>, preview: Option<&str>) -> String {
+    name.and_then(|value| {
+        value
+            .split_once(" - ")
+            .map(|(_, title)| title.trim().to_owned())
+    })
+    .filter(|value| !value.is_empty())
+    .or_else(|| name.map(str::to_owned))
+    .or_else(|| preview.map(str::to_owned))
+    .unwrap_or_else(|| "Untitled task".into())
+}
+
+fn random_id() -> String {
+    let mut bytes = [0_u8; 12];
+    rand::rng().fill_bytes(&mut bytes);
+    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn title_helpers_preserve_category_and_title() {
+        assert_eq!(title_category(Some("WIP - Ship it")), "WIP");
+        assert_eq!(title_category(Some("No prefix")), "Uncategorized");
+        assert_eq!(display_title(Some("WIP - Ship it"), None), "Ship it");
+    }
+
+    #[test]
+    fn automation_actions_use_the_mobile_camel_case_contract() {
+        let input: CreateAutomationInput = serde_json::from_value(json!({
+            "name": "Move stale work",
+            "action": {
+                "kind": "categoryPipeline",
+                "fromCategory": "WIP",
+                "toCategory": "Review",
+                "afterMinutes": 60
+            }
+        }))
+        .unwrap();
+        assert!(matches!(input.action, CreateAutomationAction::CategoryPipeline { after_minutes: 60, .. }));
+        let encoded = serde_json::to_value(AutomationAction::RecurringMessage {
+            thread_id: "thread-1".into(), prompt: "Continue".into(), every_minutes: 30, next_run_at: 42,
+        }).unwrap();
+        assert_eq!(encoded["threadId"], "thread-1");
+        assert_eq!(encoded["everyMinutes"], 30);
+    }
+}

@@ -1,6 +1,8 @@
+mod automations;
 mod codex;
 mod remote;
 
+use automations::{Automation, AutomationEnabledInput, AutomationStore, CreateAutomationInput};
 use codex::{
     CodexClient, CodexErrorDto, CodexEventDto, QueuedMessage, SendOutcome, ThreadDto,
     TurnCoordinator,
@@ -120,6 +122,38 @@ async fn configure_tailscale_serve() -> Result<TailscaleInfo, String> {
     remote::configure_tailscale_serve().await
 }
 
+#[tauri::command]
+async fn list_automations(
+    store: tauri::State<'_, Arc<AutomationStore>>,
+) -> Result<Vec<Automation>, String> {
+    Ok(store.list().await)
+}
+
+#[tauri::command]
+async fn create_automation(
+    store: tauri::State<'_, Arc<AutomationStore>>,
+    input: CreateAutomationInput,
+) -> Result<Automation, String> {
+    store.create(input).await
+}
+
+#[tauri::command]
+async fn set_automation_enabled(
+    store: tauri::State<'_, Arc<AutomationStore>>,
+    id: String,
+    input: AutomationEnabledInput,
+) -> Result<Automation, String> {
+    store.set_enabled(&id, input.enabled).await
+}
+
+#[tauri::command]
+async fn delete_automation(
+    store: tauri::State<'_, Arc<AutomationStore>>,
+    id: String,
+) -> Result<bool, String> {
+    store.delete(&id).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let client = Arc::new(CodexClient::new());
@@ -132,11 +166,18 @@ pub fn run() {
             let coordinator =
                 TurnCoordinator::new(client.clone(), directory.join("message-queues.json"));
             coordinator.start();
+            let automations = AutomationStore::new(
+                directory.join("automations.json"),
+                client.clone(),
+                coordinator.clone(),
+            );
+            automations.start();
             let gateway = RemoteGateway::prepare(&directory).map_err(|error| {
                 std::io::Error::other(format!("Could not prepare remote gateway: {error}"))
             })?;
-            gateway.start(client.clone(), coordinator.clone());
+            gateway.start(client.clone(), coordinator.clone(), automations.clone());
             app.manage(coordinator);
+            app.manage(automations);
             app.manage(gateway);
             Ok(())
         })
@@ -154,7 +195,11 @@ pub fn run() {
             get_board_config,
             set_board_config,
             tailscale_status,
-            configure_tailscale_serve
+            configure_tailscale_serve,
+            list_automations,
+            create_automation,
+            set_automation_enabled,
+            delete_automation
         ])
         .build(tauri::generate_context!())
         .expect("error while building Codex Board");

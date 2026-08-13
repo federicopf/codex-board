@@ -18,6 +18,7 @@ import "./App.css";
 import { CategoryDialog } from "./CategoryDialog";
 import { ChatPanel } from "./ChatPanel";
 import { RemoteDialog } from "./RemoteDialog";
+import { AutomationsDialog } from "./AutomationsDialog";
 import { moveThread, toBoardThreads } from "./lib/board";
 import { loadApprovalMode, saveApprovalMode, type ApprovalMode } from "./lib/approvals";
 import {
@@ -170,6 +171,7 @@ function App() {
   const [chatThreadId, setChatThreadId] = useState<string | null>(null);
   const [categoryDialog, setCategoryDialog] = useState<CategoryDialogState | null>(null);
   const [remoteDialog, setRemoteDialog] = useState(false);
+  const [automationsDialog, setAutomationsDialog] = useState(false);
   const [categoryBusy, setCategoryBusy] = useState(false);
   const [events, setEvents] = useState<SequencedCodexEvent[]>([]);
   const [workingIds, setWorkingIds] = useState<Set<string>>(new Set());
@@ -544,6 +546,7 @@ function App() {
               <span className={refreshing ? "spin" : ""}>↻</span> Refresh
             </button>
             <button className="new-category-button" onClick={() => setCategoryDialog({ mode: "create" })}>＋ Category</button>
+            <button className="automation-button" onClick={() => setAutomationsDialog(true)}>⚡ Automations</button>
             <button className="remote-button" onClick={() => setRemoteDialog(true)}><i />Remote</button>
           </div>
         </header>
@@ -620,6 +623,7 @@ function App() {
         />
       )}
       {remoteDialog && <RemoteDialog onClose={() => setRemoteDialog(false)} />}
+      {automationsDialog && <AutomationsDialog threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}
       <aside className="toast-stack" aria-live="polite">
         {toasts.map((toast) => (
           <button className={`completion-toast ${toast.kind}`} key={toast.id} onClick={() => {

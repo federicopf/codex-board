@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { CodexError, CodexEvent, CodexThread, JsonValue, QueuedMessage, SendOutcome, ThreadDto } from "./types";
+import type { Automation, CreateAutomationInput } from "@codex-board/protocol";
 
 export interface GatewayInfo { running: boolean; port: number; token: string; error?: string | null; }
 export interface TailscaleInfo { installed: boolean; online: boolean; dnsName?: string | null; baseUrl?: string | null; error?: string | null; }
@@ -46,6 +47,10 @@ export async function getTailscaleStatus(): Promise<TailscaleInfo> { return invo
 export async function configureTailscaleServe(): Promise<TailscaleInfo> { return invoke<TailscaleInfo>("configure_tailscale_serve"); }
 export async function getBoardConfig(): Promise<BoardConfig> { return invoke<BoardConfig>("get_board_config"); }
 export async function setBoardConfig(config: BoardConfig): Promise<BoardConfig> { return invoke<BoardConfig>("set_board_config", { config }); }
+export async function listAutomations(): Promise<Automation[]> { return invoke<Automation[]>("list_automations"); }
+export async function createAutomation(input: CreateAutomationInput): Promise<Automation> { return invoke<Automation>("create_automation", { input }); }
+export async function setAutomationEnabled(id: string, enabled: boolean): Promise<Automation> { return invoke<Automation>("set_automation_enabled", { id, input: { enabled } }); }
+export async function deleteAutomation(id: string): Promise<boolean> { return invoke<boolean>("delete_automation", { id }); }
 
 export function asCodexError(error: unknown): CodexError {
   if (

@@ -16,6 +16,7 @@ Codex Board is an unofficial, open-source board and chat client for local Codex 
 - Shared backend persistence for categories, order and approval mode.
 - Authenticated HTTP/WebSocket access inside the encrypted private Tailscale network.
 - Expo mobile client with QR pairing, encrypted credential storage, live board/chat, approvals, questions, card moves and category management.
+- Persistent automations for recurring Codex prompts and timed category pipelines, manageable from desktop or mobile.
 
 ## How categories work
 
@@ -54,6 +55,10 @@ The release APK is built automatically by GitHub Actions. You do not need an Exp
 Tailscale encrypts traffic end-to-end between the devices. The internal HTTP endpoint is reachable only inside the tailnet, does not require public TLS certificates, and every request additionally requires the random 256-bit credential contained in the QR. The Expo client stores that credential with `expo-secure-store` in the iOS Keychain or Android Keystore-backed encrypted storage.
 
 The PC may be on any network and the phone may use another Wi-Fi or mobile data. The PC must be powered on, connected to Tailscale and running Codex Board. No router port forwarding, public tunnel or ngrok session is required.
+
+## Automations
+
+Open **Automations** on desktop or the lightning button on mobile. A recurring task sends its prompt to the selected Codex thread at the chosen interval and uses the normal message queue if that thread is already working. A pipeline rule watches every thread in its source category and moves it to the destination after it has remained there for the configured number of minutes. Rules and category entry times are stored on the PC, survive restarts, and run while Codex Board is open.
 
 ## Requirements
 

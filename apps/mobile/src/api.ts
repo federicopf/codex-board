@@ -1,4 +1,4 @@
-import type { BoardConfig, CodexEvent, JsonValue, PairingCredential, PendingRemoteRequest, QueuedMessage, RemoteHealth, SendOutcome, ThreadDto } from "@codex-board/protocol";
+import type { Automation, BoardConfig, CodexEvent, CreateAutomationInput, JsonValue, PairingCredential, PendingRemoteRequest, QueuedMessage, RemoteHealth, SendOutcome, ThreadDto } from "@codex-board/protocol";
 
 type WebSocketWithHeaders = new (url: string, protocols?: string | string[] | null, options?: { headers?: Record<string, string> }) => WebSocket;
 
@@ -33,6 +33,10 @@ export class BoardApi {
   removeQueued(id: string, messageId: string) { return this.request<void>(`/v1/threads/${encodeURIComponent(id)}/queue/${encodeURIComponent(messageId)}`, { method: "DELETE" }); }
   requests() { return this.request<PendingRemoteRequest[]>("/v1/requests"); }
   respond(requestId: JsonValue, result: JsonValue) { return this.request<void>("/v1/requests/respond", { method: "POST", body: JSON.stringify({ requestId, result }) }); }
+  automations() { return this.request<Automation[]>("/v1/automations"); }
+  createAutomation(input: CreateAutomationInput) { return this.request<Automation>("/v1/automations", { method: "POST", body: JSON.stringify(input) }); }
+  setAutomationEnabled(id: string, enabled: boolean) { return this.request<Automation>(`/v1/automations/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ enabled }) }); }
+  deleteAutomation(id: string) { return this.request<void>(`/v1/automations/${encodeURIComponent(id)}`, { method: "DELETE" }); }
 
   subscribe(onEvent: (event: CodexEvent) => void, onConnection: (connected: boolean) => void): () => void {
     const wsUrl = this.credential.baseUrl.replace(/^http/, "ws") + "/v1/events";
