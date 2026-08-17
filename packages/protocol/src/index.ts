@@ -41,13 +41,15 @@ export type AutomationAction =
     | { kind: "recurringMessage"; threadId: string; prompt: string; everyMinutes: number; nextRunAt: number }
     | { kind: "scheduledMessage"; threadId: string; prompt: string; runAt: number }
     | { kind: "calendarMessage"; threadId: string; prompt: string; weekdays: number[]; minuteOfDay: number; timezoneOffsetMinutes: number; nextRunAt: number }
-    | { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number };
+    | { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number }
+    | { kind: "scheduledCategoryPipeline"; fromCategory: string; toCategory: string; runAt: number };
 export interface Automation { id: string; name: string; enabled: boolean; action: AutomationAction; lastRunAt: number | null; lastError: string | null; }
 export type CreateAutomationInput =
     | { name: string; action: { kind: "recurringMessage"; threadId: string; prompt: string; everyMinutes: number; startInMinutes: number } }
     | { name: string; action: { kind: "scheduledMessage"; threadId: string; prompt: string; runAt: number } }
     | { name: string; action: { kind: "calendarMessage"; threadId: string; prompt: string; weekdays: number[]; minuteOfDay: number; timezoneOffsetMinutes: number } }
-    | { name: string; action: { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number } };
+    | { name: string; action: { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number } }
+    | { name: string; action: { kind: "scheduledCategoryPipeline"; fromCategory: string; toCategory: string; runAt: number } };
 
 export function categoryFromTitle(name: string | null): string {
   if (!name) return "Uncategorized";

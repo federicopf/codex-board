@@ -190,19 +190,11 @@ impl RemoteGateway {
     }
 
     pub fn set_board_config(&self, mut config: BoardConfig) -> Result<BoardConfig, String> {
-        let current_revision = self
-            .config
-            .read()
-            .map_err(|error| error.to_string())?
-            .revision;
         config.categories = unique_categories(config.categories)?;
         if !matches!(config.approval_mode.as_str(), "auto" | "ask") {
             return Err("approvalMode must be auto or ask".into());
         }
-        config.revision = current_revision.saturating_add(1);
-        persist_config(&self.config_path, &config)?;
-        *self.config.write().map_err(|error| error.to_string())? = config.clone();
-        Ok(config)
+        save_board_config(&self.config, &self.config_path, config)
     }
 
     pub fn start(
@@ -406,6 +398,18 @@ fn unique_categories(categories: Vec<String>) -> Result<Vec<String>, String> {
 
 fn persist_config(path: &Path, config: &BoardConfig) -> Result<(), String> {
     crate::persistence::write_json(path, config)
+}
+
+fn save_board_config(
+    state: &Arc<RwLock<BoardConfig>>,
+    path: &Path,
+    mut config: BoardConfig,
+) -> Result<BoardConfig, String> {
+    let mut current = state.write().map_err(|error| error.to_string())?;
+    config.revision = current.revision.saturating_add(1);
+    persist_config(path, &config)?;
+    *current = config.clone();
+    Ok(config)
 }
 
 fn authorized(headers: &HeaderMap, state: &ApiState) -> Result<(), ApiError> {
@@ -671,19 +675,8 @@ async fn put_board(
             "approvalMode must be auto or ask".into(),
         ));
     }
-    let revision = state
-        .config
-        .read()
-        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
-        .revision;
-    config.revision = revision.saturating_add(1);
-    persist_config(&state.config_path, &config)
+    config = save_board_config(&state.config, &state.config_path, config)
         .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?;
-    *state
-        .config
-        .write()
-        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))? =
-        config.clone();
     state
         .client
         .emit_local_event(
@@ -839,6 +832,10 @@ async fn stream_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        sync::Barrier,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     #[test]
     fn categories_are_trimmed_and_deduplicated() {
@@ -865,5 +862,43 @@ mod tests {
             automatic_approval("item/commandExecution/requestApproval", &json!({})).unwrap()["decision"],
             "acceptForSession"
         );
+    }
+
+    #[test]
+    fn concurrent_board_updates_share_one_persistence_lock() {
+        let directory = std::env::temp_dir().join(format!(
+            "codex-board-config-race-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let gateway = Arc::new(RemoteGateway::prepare(&directory).unwrap());
+        let barrier = Arc::new(Barrier::new(3));
+        let workers = ["WIP", "Done"].map(|category| {
+            let gateway = gateway.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                gateway.set_board_config(BoardConfig {
+                    categories: vec![category.into()],
+                    approval_mode: "auto".into(),
+                    revision: 0,
+                })
+            })
+        });
+        barrier.wait();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        assert_eq!(gateway.board_config().revision, 2);
+        assert_eq!(
+            crate::persistence::load_json_or_default::<BoardConfig>(
+                &directory.join("board-config.json")
+            )
+            .revision,
+            2
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

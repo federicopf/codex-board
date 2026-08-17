@@ -46,6 +46,11 @@ pub enum AutomationAction {
         to_category: String,
         after_minutes: u64,
     },
+    ScheduledCategoryPipeline {
+        from_category: String,
+        to_category: String,
+        run_at: i64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +94,11 @@ pub enum CreateAutomationAction {
         from_category: String,
         to_category: String,
         after_minutes: u64,
+    },
+    ScheduledCategoryPipeline {
+        from_category: String,
+        to_category: String,
+        run_at: i64,
     },
 }
 
@@ -185,6 +195,25 @@ impl AutomationStore {
                     from_category,
                     to_category,
                     after_minutes,
+                }
+            }
+            CreateAutomationAction::ScheduledCategoryPipeline {
+                from_category,
+                to_category,
+                run_at,
+            } => {
+                let from_category = category(from_category)?;
+                let to_category = category(to_category)?;
+                if from_category == to_category {
+                    return Err("Pipeline categories must be different".into());
+                }
+                if run_at <= now_ms() {
+                    return Err("Pipeline time must be in the future".into());
+                }
+                AutomationAction::ScheduledCategoryPipeline {
+                    from_category,
+                    to_category,
+                    run_at,
                 }
             }
             CreateAutomationAction::ScheduledMessage {
@@ -291,7 +320,11 @@ impl AutomationStore {
         let automations = self.list().await;
         let needs_threads = automations.iter().any(|automation| {
             automation.enabled
-                && matches!(automation.action, AutomationAction::CategoryPipeline { .. })
+                && matches!(
+                    automation.action,
+                    AutomationAction::CategoryPipeline { .. }
+                        | AutomationAction::ScheduledCategoryPipeline { .. }
+                )
         });
         let threads = if needs_threads {
             self.client.list_threads().await.ok()
@@ -424,6 +457,46 @@ impl AutomationStore {
                             || active_ids.iter().any(|id| key == &format!("{prefix}{id}"))
                     });
                     let _ = self.persist(&state);
+                }
+                AutomationAction::ScheduledCategoryPipeline {
+                    from_category,
+                    to_category,
+                    run_at,
+                } if now >= run_at => {
+                    let Some(threads) = threads.as_ref() else {
+                        continue;
+                    };
+                    let mut errors = Vec::new();
+                    for thread in threads {
+                        if title_category(thread.name.as_deref()) != from_category {
+                            continue;
+                        }
+                        let title =
+                            display_title(thread.name.as_deref(), thread.preview.as_deref());
+                        if let Err(error) = self
+                            .client
+                            .rename_thread(thread.id.clone(), format!("{to_category} - {title}"))
+                            .await
+                        {
+                            errors.push(error);
+                        }
+                    }
+                    let mut state = self.state.lock().await;
+                    if let Some(current) = state
+                        .automations
+                        .iter_mut()
+                        .find(|item| item.id == automation.id)
+                    {
+                        current.last_run_at = Some(now);
+                        current.last_error = if errors.is_empty() {
+                            None
+                        } else {
+                            Some(format!("{} task(s) could not be moved", errors.len()))
+                        };
+                        current.enabled = false;
+                    }
+                    let _ = self.persist(&state);
+                    changed = true;
                 }
                 _ => {}
             }
@@ -570,6 +643,21 @@ mod tests {
         .unwrap();
         assert_eq!(encoded["threadId"], "thread-1");
         assert_eq!(encoded["everyMinutes"], 30);
+
+        let scheduled_pipeline: CreateAutomationInput = serde_json::from_value(json!({
+            "name": "Ship Friday",
+            "action": {
+                "kind": "scheduledCategoryPipeline",
+                "fromCategory": "Review",
+                "toCategory": "Done",
+                "runAt": 1_800_000_000_000_i64
+            }
+        }))
+        .unwrap();
+        assert!(matches!(
+            scheduled_pipeline.action,
+            CreateAutomationAction::ScheduledCategoryPipeline { .. }
+        ));
     }
 
     #[test]

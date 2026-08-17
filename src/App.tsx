@@ -23,12 +23,16 @@ import { AutomationsDialog } from "./AutomationsDialog";
 import { NewTaskDialog } from "./NewTaskDialog";
 import { ProductTour } from "./ProductTour";
 import { InboxDialog } from "./InboxDialog";
+import { MoveThreadDialog } from "./MoveThreadDialog";
+import { CategoryManagerDialog } from "./CategoryManagerDialog";
+import { BoardSettingsDialog } from "./BoardSettingsDialog";
 import { moveThread, toBoardThreads } from "./lib/board";
 import { loadApprovalMode, saveApprovalMode, type ApprovalMode } from "./lib/approvals";
 import {
   createCategory,
   loadCategoryOrder,
   moveCategory,
+  moveCategoryToPosition,
   reconcileCategoryOrder,
   renameCategory,
   saveCategoryOrder,
@@ -39,6 +43,7 @@ import type { BoardThread, CodexError, CodexEvent, JsonValue, QueuedMessage, Seq
 
 const THREAD_DRAG_PREFIX = "thread:";
 const CATEGORY_DRAG_PREFIX = "category:";
+const ALL_STATUSES = "__all_statuses__";
 const threadDragId = (threadId: string) => `${THREAD_DRAG_PREFIX}${threadId}`;
 const categoryDragId = (category: string) => `${CATEGORY_DRAG_PREFIX}${encodeURIComponent(category)}`;
 const categoryFromDragId = (id: string) => decodeURIComponent(id.slice(CATEGORY_DRAG_PREFIX.length));
@@ -56,6 +61,7 @@ function ThreadCard({
   queuedCount,
   showProject,
   onOpen,
+  onMove,
   overlay = false,
 }: {
   thread: BoardThread;
@@ -64,6 +70,7 @@ function ThreadCard({
   queuedCount: number;
   showProject: boolean;
   onOpen?: (threadId: string) => void;
+  onMove?: (threadId: string) => void;
   overlay?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
@@ -93,6 +100,9 @@ function ThreadCard({
         {working && <span className="card-working"><i />Codex is working</span>}
         {queuedCount > 0 && <span className="queue-count">+{queuedCount} queued</span>}
         {!overlay && (
+          <button className="move-thread" type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onMove?.(thread.id); }}>Move</button>
+        )}
+        {!overlay && (
           <button
             className="open-thread"
             type="button"
@@ -118,6 +128,7 @@ function Column({
   queues,
   showProject,
   onOpen,
+  onMove,
   onRename,
 }: {
   category: string;
@@ -127,6 +138,7 @@ function Column({
   queues: Record<string, QueuedMessage[]>;
   showProject: boolean;
   onOpen: (threadId: string) => void;
+  onMove: (threadId: string) => void;
   onRename: (category: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } = useSortable({
@@ -153,6 +165,7 @@ function Column({
             queuedCount={queues[thread.id]?.length || 0}
             showProject={showProject}
             onOpen={onOpen}
+            onMove={onMove}
           />
         ))}
         {threads.length === 0 && <div className="column-empty">Drop a thread here</div>}
@@ -164,6 +177,7 @@ function Column({
 function App() {
   const [threads, setThreads] = useState<BoardThread[]>([]);
   const [project, setProject] = useState(ALL_PROJECTS);
+  const [statusFilter, setStatusFilter] = useState(ALL_STATUSES);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -174,6 +188,9 @@ function App() {
   const [categoryOrder, setCategoryOrder] = useState<string[]>(loadCategoryOrder);
   const [chatThreadId, setChatThreadId] = useState<string | null>(null);
   const [categoryDialog, setCategoryDialog] = useState<CategoryDialogState | null>(null);
+  const [categoryManager, setCategoryManager] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [movingThreadId, setMovingThreadId] = useState<string | null>(null);
   const [remoteDialog, setRemoteDialog] = useState(false);
   const [automationsDialog, setAutomationsDialog] = useState(false);
   const [newTaskDialog, setNewTaskDialog] = useState(false);
@@ -371,8 +388,19 @@ function App() {
     });
   }, [discoveredCategories, persistBoardConfig]);
   const categories = categoryOrder;
+  const populatedCategories = useMemo(() => categories.filter((category) => threads.some((thread) => thread.category === category)), [categories, threads]);
+  const dashboardCategories = useMemo(
+    () => categories.filter((category) => filteredThreads.some((thread) => thread.category === category)),
+    [categories, filteredThreads],
+  );
+  const displayedCategories = statusFilter === ALL_STATUSES ? dashboardCategories : dashboardCategories.filter((category) => category === statusFilter);
   const activeThread = threads.find((thread) => thread.id === activeId) ?? null;
   const chatThread = threads.find((thread) => thread.id === chatThreadId) ?? null;
+  const movingThread = threads.find((thread) => thread.id === movingThreadId) ?? null;
+
+  useEffect(() => {
+    if (statusFilter !== ALL_STATUSES && !populatedCategories.includes(statusFilter)) setStatusFilter(ALL_STATUSES);
+  }, [populatedCategories, statusFilter]);
 
   function createLocalCategory(name: string) {
     setCategoryOrder((current) => {
@@ -381,6 +409,50 @@ function App() {
       return next;
     });
     setCategoryDialog(null);
+  }
+
+  function deleteEmptyCategory(category: string) {
+    if (threads.some((thread) => thread.category === category)) return;
+    setCategoryOrder((current) => {
+      const next = current.filter((item) => item !== category);
+      persistBoardConfig(next, approvalModeRef.current);
+      return next;
+    });
+  }
+
+  function setCategoryPosition(category: string, position: number) {
+    setCategoryOrder((current) => {
+      const next = moveCategoryToPosition(current, category, position);
+      persistBoardConfig(next, approvalModeRef.current);
+      return next;
+    });
+  }
+
+  async function moveBoardThread(threadId: string, targetCategory: string, createNew = false) {
+    if (pendingIds.has(threadId)) return;
+    const result = moveThread(threads, threadId, targetCategory);
+    if (!result) { setMovingThreadId(null); return; }
+    if (createNew) {
+      setCategoryOrder((current) => {
+        const next = createCategory(current, targetCategory);
+        persistBoardConfig(next, approvalModeRef.current);
+        return next;
+      });
+    }
+    setThreads(result.threads);
+    setPendingIds((current) => new Set(current).add(threadId));
+    try {
+      const confirmed = await renameThread(threadId, result.newName);
+      setThreads((current) => current.map((thread) => thread.id === threadId ? { ...thread, name: confirmed.name, preview: confirmed.preview, cwd: confirmed.cwd, updatedAt: confirmed.updatedAt } : thread));
+      setMovingThreadId(null);
+    } catch (cause) {
+      setThreads((current) => current.map((thread) => thread.id === threadId ? result.previous : thread));
+      if (createNew) deleteEmptyCategory(targetCategory);
+      setError(asCodexError(cause));
+      void refresh(true);
+    } finally {
+      setPendingIds((current) => { const next = new Set(current); next.delete(threadId); return next; });
+    }
   }
 
   async function renameBoardCategory(currentCategory: string, nextCategory: string) {
@@ -482,35 +554,8 @@ function App() {
     }
     if (!activeDragId.startsWith(THREAD_DRAG_PREFIX) || !overId.startsWith(CATEGORY_DRAG_PREFIX)) return;
     const threadId = activeDragId.slice(THREAD_DRAG_PREFIX.length);
-    if (pendingIds.has(threadId)) return;
     const targetCategory = categoryFromDragId(overId);
-    const result = moveThread(threads, threadId, targetCategory);
-    if (!result) return;
-
-    setThreads(result.threads);
-    setPendingIds((current) => new Set(current).add(threadId));
-    try {
-      const confirmed = await renameThread(threadId, result.newName);
-      setThreads((current) => current.map((thread) => thread.id === threadId ? {
-        ...thread,
-        name: confirmed.name,
-        preview: confirmed.preview,
-        cwd: confirmed.cwd,
-        updatedAt: confirmed.updatedAt,
-      } : thread));
-    } catch (cause) {
-      setThreads((current) =>
-        current.map((thread) => (thread.id === threadId ? result.previous : thread)),
-      );
-      setError(asCodexError(cause));
-      void refresh(true);
-    } finally {
-      setPendingIds((current) => {
-        const next = new Set(current);
-        next.delete(threadId);
-        return next;
-      });
-    }
+    await moveBoardThread(threadId, targetCategory);
   }
 
   if (loading) {
@@ -536,31 +581,12 @@ function App() {
             <div className="brand-mark"><span /><span /><span /></div>
             <div><h1>Codex Board</h1><p>Threads, organized.</p></div>
           </div>
-          <div className="toolbar">
-            <label className="toolbar-field">
-              <span>Approvals</span>
-              <select className="approval-mode" value={approvalMode} onChange={(event) => setApprovalMode(event.target.value as ApprovalMode)}>
-                <option value="auto">Auto approve</option>
-                <option value="ask">Ask every time</option>
-              </select>
-            </label>
-            <label className="toolbar-field">
-              <span>Project</span>
-              <select value={project} onChange={(event) => setProject(event.target.value)}>
-                <option value={ALL_PROJECTS}>All projects</option>
-                {projects.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-              </select>
-            </label>
-            <button className="refresh-button" disabled={refreshing} onClick={() => void refresh(true)}>
-              <span className={refreshing ? "spin" : ""}>↻</span> Refresh
-            </button>
-            <button className="new-task-button" onClick={() => setNewTaskDialog(true)}>＋ New task</button>
-            <button className="new-category-button" onClick={() => setCategoryDialog({ mode: "create" })}>＋ Category</button>
-            <button className="automation-button" onClick={() => setAutomationsDialog(true)}>⚡ Automations</button>
-            <button className="help-button" onClick={() => setProductTour(true)} aria-label="Open product guide">?</button>
-            <button className="inbox-button" onClick={() => setInboxOpen(true)} aria-label="Open inbox">♢{notifications.some(item=>!item.read)&&<b>{notifications.filter(item=>!item.read).length}</b>}</button>
+          <nav className="utility-toolbar" aria-label="App tools">
+            <button className="utility-button" onClick={() => setSettingsOpen(true)}><span>⚙</span> Settings</button>
+            <button className="utility-button" onClick={() => setProductTour(true)}><span>?</span> Guide</button>
+            <button className="utility-button inbox-button" onClick={() => setInboxOpen(true)}><span>◇</span> Inbox{notifications.some(item=>!item.read)&&<b>{notifications.filter(item=>!item.read).length}</b>}</button>
             <button className="remote-button" onClick={() => setRemoteDialog(true)}><i />Remote</button>
-          </div>
+          </nav>
         </header>
 
         {error && (
@@ -570,15 +596,26 @@ function App() {
           </div>
         )}
 
-        <section className="board-heading">
-          <div>
-            <span className="eyebrow">Workspace</span>
-            <h2>{project === ALL_PROJECTS ? "All projects" : projects.find((item) => item.key === project)?.label || "Project"}</h2>
-            <p>Move work between stages and open any thread to continue with Codex.</p>
+        <section className="workspace-header">
+          <div className="board-heading">
+            <div>
+              <span className="eyebrow">Workspace</span>
+              <h2>{project === ALL_PROJECTS ? "All projects" : projects.find((item) => item.key === project)?.label || "Project"}</h2>
+              <p>Move work between stages and open any thread to continue with Codex.</p>
+            </div>
+            <div className="board-actions" aria-label="Board actions">
+              <button className="refresh-button" disabled={refreshing} onClick={() => void refresh(true)}><span className={refreshing ? "spin" : ""}>↻</span> Refresh</button>
+              <button className="new-category-button" onClick={() => setCategoryManager(true)}>Categories</button>
+              <button className="automation-button" onClick={() => setAutomationsDialog(true)}>⚡ Automations</button>
+              <button className="new-task-button" onClick={() => setNewTaskDialog(true)}>＋ New task</button>
+            </div>
           </div>
-          <div className="board-tools">
-            <div className="board-metrics"><span><strong>{visibleThreads.length}</strong> threads</span><span className={workingIds.size ? "metric-live" : ""}><strong>{workingIds.size}</strong> working</span></div>
-            <label className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search threads" /></label>
+          <div className="board-controlbar">
+            <div className="board-filters">
+              <label className="filter-field"><span>Project</span><select value={project} onChange={(event) => setProject(event.target.value)}><option value={ALL_PROJECTS}>All projects</option>{projects.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label>
+              <label className="filter-field"><span>Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value={ALL_STATUSES}>All statuses</option>{populatedCategories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label>
+            </div>
+            <div className="board-tools"><div className="board-metrics"><span><strong>{visibleThreads.length}</strong> threads</span><span className={workingIds.size ? "metric-live" : ""}><strong>{workingIds.size}</strong> working</span></div><label className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search threads" /></label></div>
           </div>
         </section>
 
@@ -588,9 +625,9 @@ function App() {
             <p>{project === ALL_PROJECTS ? "Your Codex threads will appear automatically." : "This project has no visible threads."}</p>
           </div>
         ) : (
-          <SortableContext items={categories.map(categoryDragId)} strategy={horizontalListSortingStrategy}>
+          <SortableContext items={displayedCategories.map(categoryDragId)} strategy={horizontalListSortingStrategy}>
             <div className="board">
-              {categories.map((category) => (
+              {displayedCategories.map((category) => (
                 <Column
                   key={category}
                   category={category}
@@ -600,6 +637,7 @@ function App() {
                   queues={queues}
                   showProject={project === ALL_PROJECTS}
                   onOpen={setChatThreadId}
+                  onMove={setMovingThreadId}
                   onRename={(category) => setCategoryDialog({ mode: "rename", category })}
                 />
               ))}
@@ -634,6 +672,9 @@ function App() {
             : void renameBoardCategory(categoryDialog.category, name)}
         />
       )}
+      {categoryManager && <CategoryManagerDialog categories={categories} threads={threads} onClose={() => setCategoryManager(false)} onCreate={() => { setCategoryManager(false); setCategoryDialog({ mode: "create" }); }} onRename={(category) => { setCategoryManager(false); setCategoryDialog({ mode: "rename", category }); }} onDelete={deleteEmptyCategory} onPosition={setCategoryPosition} />}
+      {movingThread && <MoveThreadDialog thread={movingThread} categories={categories} busy={pendingIds.has(movingThread.id)} onClose={() => setMovingThreadId(null)} onMove={(category, create) => void moveBoardThread(movingThread.id, category, create)} />}
+      {settingsOpen && <BoardSettingsDialog approvalMode={approvalMode} onApprovalMode={setApprovalMode} onClose={() => setSettingsOpen(false)} />}
       {remoteDialog && <RemoteDialog onClose={() => setRemoteDialog(false)} />}
       {automationsDialog && <AutomationsDialog threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}
       {newTaskDialog && <NewTaskDialog threads={threads} categories={categories} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt) => { const created = await createThread(cwd, category, title, prompt); await refresh(true); setChatThreadId(created.id); }} />}

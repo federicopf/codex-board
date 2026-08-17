@@ -40,6 +40,17 @@ export function moveCategory(order: string[], active: string, over: string): str
   return next;
 }
 
+export function moveCategoryToPosition(order: string[], category: string, position: number): string[] {
+  const from = order.indexOf(category);
+  if (from < 0 || order.length < 2) return order;
+  const to = Math.max(0, Math.min(order.length - 1, position));
+  if (from === to) return order;
+  const next = [...order];
+  next.splice(from, 1);
+  next.splice(to, 0, category);
+  return next;
+}
+
 export function loadCategoryOrder(): string[] {
   try {
     const value = JSON.parse(localStorage.getItem(CATEGORY_ORDER_STORAGE_KEY) || "[]");

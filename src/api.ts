@@ -59,6 +59,18 @@ export async function listNotifications(): Promise<BoardNotification[]> { return
 export async function markNotificationsRead(id?: string): Promise<void> { return invoke("mark_notifications_read", { id }); }
 export async function clearNotifications(): Promise<void> { return invoke("clear_notifications"); }
 
+export function userFacingErrorMessage(message: string): string {
+  const normalized = message.toLocaleLowerCase();
+  if (
+    normalized.includes("os error 2") ||
+    normalized.includes("impossibile trovare il file specificato") ||
+    normalized.includes("the system cannot find the file specified")
+  ) {
+    return "A local file linked to this task is no longer available. Refresh the board; if the problem continues, this task may no longer have a readable Codex history.";
+  }
+  return message;
+}
+
 export function asCodexError(error: unknown): CodexError {
   if (
     typeof error === "object" &&
@@ -66,10 +78,11 @@ export function asCodexError(error: unknown): CodexError {
     "code" in error &&
     "message" in error
   ) {
-    return error as CodexError;
+    const codexError = error as CodexError;
+    return { ...codexError, message: userFacingErrorMessage(codexError.message) };
   }
   return {
     code: "REQUEST_FAILED",
-    message: error instanceof Error ? error.message : String(error),
+    message: userFacingErrorMessage(error instanceof Error ? error.message : String(error)),
   };
 }
