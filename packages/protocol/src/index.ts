@@ -35,7 +35,23 @@ export interface QueuedMessage { id: string; text: string; }
 export interface SendOutcome { queued: boolean; messageId?: string | null; turn?: JsonValue; }
 export interface PendingRemoteRequest { requestId: JsonValue; method: string; params: JsonValue; }
 export interface CreateThreadInput { cwd: string; category: string; title: string; prompt: string; }
-export interface BoardNotification { id: string; kind: "done" | "attention" | "error"; title: string; message: string; threadId: string | null; createdAt: number; read: boolean; }
+export interface AutomationResultDetails {
+  id: string;
+  name: string;
+  result: string;
+  status: "completed" | "failed" | "interrupted" | string;
+  durationMs: number | null;
+}
+export interface BoardNotification {
+  id: string;
+  kind: "done" | "attention" | "error" | "automation";
+  title: string;
+  message: string;
+  threadId: string | null;
+  createdAt: number;
+  read: boolean;
+  automation?: AutomationResultDetails | null;
+}
 
 export type AutomationAction =
     | { kind: "recurringMessage"; threadId: string; prompt: string; everyMinutes: number; nextRunAt: number }

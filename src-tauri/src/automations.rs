@@ -340,7 +340,17 @@ impl AutomationStore {
                     every_minutes,
                     next_run_at,
                 } if now >= next_run_at => {
-                    let result = self.coordinator.send(thread_id, prompt).await.map(|_| ());
+                    let result = self
+                        .coordinator
+                        .send_automation(
+                            thread_id.clone(),
+                            prompt,
+                            automation.id.clone(),
+                            automation.name.clone(),
+                        )
+                        .await
+                        .map(|_| ());
+                    let error_message = result.err().map(|error| error.message);
                     let mut state = self.state.lock().await;
                     if let Some(current) = state
                         .automations
@@ -348,7 +358,7 @@ impl AutomationStore {
                         .find(|item| item.id == automation.id)
                     {
                         current.last_run_at = Some(now);
-                        current.last_error = result.err().map(|error| error.message);
+                        current.last_error = error_message.clone();
                         if let AutomationAction::RecurringMessage { next_run_at, .. } =
                             &mut current.action
                         {
@@ -356,6 +366,11 @@ impl AutomationStore {
                         }
                     }
                     let _ = self.persist(&state);
+                    drop(state);
+                    if let Some(message) = error_message {
+                        self.emit_failed(&automation, Some(&thread_id), message)
+                            .await;
+                    }
                     changed = true;
                 }
                 AutomationAction::ScheduledMessage {
@@ -363,7 +378,17 @@ impl AutomationStore {
                     prompt,
                     run_at,
                 } if now >= run_at => {
-                    let result = self.coordinator.send(thread_id, prompt).await.map(|_| ());
+                    let result = self
+                        .coordinator
+                        .send_automation(
+                            thread_id.clone(),
+                            prompt,
+                            automation.id.clone(),
+                            automation.name.clone(),
+                        )
+                        .await
+                        .map(|_| ());
+                    let error_message = result.err().map(|error| error.message);
                     let mut state = self.state.lock().await;
                     if let Some(current) = state
                         .automations
@@ -371,10 +396,15 @@ impl AutomationStore {
                         .find(|item| item.id == automation.id)
                     {
                         current.last_run_at = Some(now);
-                        current.last_error = result.err().map(|error| error.message);
+                        current.last_error = error_message.clone();
                         current.enabled = false;
                     }
                     let _ = self.persist(&state);
+                    drop(state);
+                    if let Some(message) = error_message {
+                        self.emit_failed(&automation, Some(&thread_id), message)
+                            .await;
+                    }
                     changed = true;
                 }
                 AutomationAction::CalendarMessage {
@@ -385,7 +415,17 @@ impl AutomationStore {
                     timezone_offset_minutes,
                     next_run_at,
                 } if now >= next_run_at => {
-                    let result = self.coordinator.send(thread_id, prompt).await.map(|_| ());
+                    let result = self
+                        .coordinator
+                        .send_automation(
+                            thread_id.clone(),
+                            prompt,
+                            automation.id.clone(),
+                            automation.name.clone(),
+                        )
+                        .await
+                        .map(|_| ());
+                    let error_message = result.err().map(|error| error.message);
                     let mut state = self.state.lock().await;
                     if let Some(current) = state
                         .automations
@@ -393,7 +433,7 @@ impl AutomationStore {
                         .find(|item| item.id == automation.id)
                     {
                         current.last_run_at = Some(now);
-                        current.last_error = result.err().map(|error| error.message);
+                        current.last_error = error_message.clone();
                         if let AutomationAction::CalendarMessage { next_run_at, .. } =
                             &mut current.action
                         {
@@ -406,6 +446,11 @@ impl AutomationStore {
                         }
                     }
                     let _ = self.persist(&state);
+                    drop(state);
+                    if let Some(message) = error_message {
+                        self.emit_failed(&automation, Some(&thread_id), message)
+                            .await;
+                    }
                     changed = true;
                 }
                 AutomationAction::CategoryPipeline {
@@ -437,6 +482,8 @@ impl AutomationStore {
                             .rename_thread(thread.id.clone(), format!("{to_category} - {title}"))
                             .await
                             .map(|_| ());
+                        let error = result.err();
+                        let error_message = error.as_ref().map(|value| value.message.clone());
                         let mut state = self.state.lock().await;
                         state.entered_at.remove(&key);
                         if let Some(current) = state
@@ -445,9 +492,22 @@ impl AutomationStore {
                             .find(|item| item.id == automation.id)
                         {
                             current.last_run_at = Some(now);
-                            current.last_error = result.err().map(|error| error.message);
+                            current.last_error = error_message.clone();
                         }
                         let _ = self.persist(&state);
+                        drop(state);
+                        self.client
+                            .emit_local_event(
+                                "board/automation/completed",
+                                json!({
+                                    "threadId": thread.id,
+                                    "automationId": automation.id.clone(),
+                                    "automationName": automation.name.clone(),
+                                    "status": if error_message.is_some() { "failed" } else { "completed" },
+                                    "result": error_message.unwrap_or_else(|| format!("Moved “{title}” from {from_category} to {to_category}.")),
+                                }),
+                            )
+                            .await;
                         changed = true;
                     }
                     let prefix = format!("{}:", automation.id);
@@ -467,6 +527,7 @@ impl AutomationStore {
                         continue;
                     };
                     let mut errors = Vec::new();
+                    let mut moved = 0_u64;
                     for thread in threads {
                         if title_category(thread.name.as_deref()) != from_category {
                             continue;
@@ -479,8 +540,11 @@ impl AutomationStore {
                             .await
                         {
                             errors.push(error);
+                        } else {
+                            moved += 1;
                         }
                     }
+                    let error_count = errors.len();
                     let mut state = self.state.lock().await;
                     if let Some(current) = state
                         .automations
@@ -496,6 +560,22 @@ impl AutomationStore {
                         current.enabled = false;
                     }
                     let _ = self.persist(&state);
+                    drop(state);
+                    self.client
+                        .emit_local_event(
+                            "board/automation/completed",
+                            json!({
+                                "automationId": automation.id.clone(),
+                                "automationName": automation.name.clone(),
+                                "status": if error_count > 0 { "failed" } else { "completed" },
+                                "result": if error_count > 0 {
+                                    format!("Moved {moved} task(s) from {from_category} to {to_category}; {error_count} failed.")
+                                } else {
+                                    format!("Moved {moved} task(s) from {from_category} to {to_category}.")
+                                },
+                            }),
+                        )
+                        .await;
                     changed = true;
                 }
                 _ => {}
@@ -513,6 +593,21 @@ impl AutomationStore {
     async fn emit_updated(&self) {
         self.client
             .emit_local_event("board/automations/updated", json!({}))
+            .await;
+    }
+
+    async fn emit_failed(&self, automation: &Automation, thread_id: Option<&str>, result: String) {
+        self.client
+            .emit_local_event(
+                "board/automation/completed",
+                json!({
+                    "threadId": thread_id,
+                    "automationId": automation.id,
+                    "automationName": automation.name,
+                    "status": "failed",
+                    "result": result,
+                }),
+            )
             .await;
     }
 }

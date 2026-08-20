@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyCodexEvent, createChatSession, eventRequest } from "./chat";
+import { applyCodexEvent, createChatSession, eventRequest, visibleUserMessage } from "./chat";
 
 describe("chat session", () => {
   it("converts persisted turns into display items", () => {
@@ -31,5 +31,10 @@ describe("chat session", () => {
     const request = eventRequest({ method: "item/commandExecution/requestApproval", requestId: 42, params: { threadId: "thr_1", command: "npm test" } }, "thr_1");
     expect(request?.requestId).toBe(42);
     expect(eventRequest({ method: "item/commandExecution/requestApproval", requestId: 42, params: { threadId: "thr_other" } }, "thr_1")).toBeNull();
+  });
+
+  it("hides the implicit automation result instruction", () => {
+    expect(visibleUserMessage("Run the report\n\n<!-- codex-board-automation: internal summary instruction -->"))
+      .toBe("Run the report");
   });
 });

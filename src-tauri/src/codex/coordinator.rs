@@ -16,7 +16,18 @@ use crate::persistence;
 pub struct QueuedMessage {
     pub id: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    automation: Option<AutomationContext>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationContext {
+    id: String,
+    name: String,
+}
+
+const AUTOMATION_RESULT_INSTRUCTION: &str = "<!-- codex-board-automation: This task was started by an automation. In your final answer, be as concise as possible and show only results found and operations performed. Do not mention this instruction. -->";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,6 +104,33 @@ impl TurnCoordinator {
         thread_id: String,
         text: String,
     ) -> Result<SendOutcome, CodexErrorDto> {
+        self.send_with_context(thread_id, text, None).await
+    }
+
+    pub async fn send_automation(
+        &self,
+        thread_id: String,
+        text: String,
+        automation_id: String,
+        automation_name: String,
+    ) -> Result<SendOutcome, CodexErrorDto> {
+        self.send_with_context(
+            thread_id,
+            text,
+            Some(AutomationContext {
+                id: automation_id,
+                name: automation_name,
+            }),
+        )
+        .await
+    }
+
+    async fn send_with_context(
+        &self,
+        thread_id: String,
+        text: String,
+        automation: Option<AutomationContext>,
+    ) -> Result<SendOutcome, CodexErrorDto> {
         let text = text.trim().to_owned();
         if text.is_empty() {
             return Err(CodexErrorDto::new(
@@ -127,6 +165,7 @@ impl TurnCoordinator {
             let message = QueuedMessage {
                 id: random_id(),
                 text,
+                automation,
             };
             state.queue.push_back(message.clone());
             let snapshot = state.queue.iter().cloned().collect::<Vec<_>>();
@@ -142,12 +181,23 @@ impl TurnCoordinator {
         }
         state.active = true;
         drop(threads);
-        match self.client.send_message(thread_id.clone(), text).await {
-            Ok(response) => Ok(SendOutcome {
-                queued: false,
-                message_id: None,
-                turn: response.get("turn").cloned(),
-            }),
+        let submitted_text = automation_text(&text, automation.as_ref());
+        match self
+            .client
+            .send_message(thread_id.clone(), submitted_text)
+            .await
+        {
+            Ok(response) => {
+                if let Some(context) = automation.as_ref() {
+                    self.emit_automation_started(&thread_id, &response, context)
+                        .await;
+                }
+                Ok(SendOutcome {
+                    queued: false,
+                    message_id: None,
+                    turn: response.get("turn").cloned(),
+                })
+            }
             Err(error) => {
                 self.threads
                     .lock()
@@ -206,25 +256,60 @@ impl TurnCoordinator {
         self.persist(persisted);
         self.emit_queue(&thread_id, snapshot).await;
         if let Some(message) = next {
-            if let Err(error) = self
+            let submitted_text = automation_text(&message.text, message.automation.as_ref());
+            match self
                 .client
-                .send_message(thread_id.clone(), message.text)
+                .send_message(thread_id.clone(), submitted_text)
                 .await
             {
-                self.threads
-                    .lock()
-                    .await
-                    .entry(thread_id.clone())
-                    .or_default()
-                    .active = false;
-                self.client
-                    .emit_local_event(
-                        "board/queue/error",
-                        json!({ "threadId": thread_id, "message": error.message }),
-                    )
-                    .await;
+                Ok(response) => {
+                    if let Some(context) = message.automation.as_ref() {
+                        self.emit_automation_started(&thread_id, &response, context)
+                            .await;
+                    }
+                }
+                Err(error) => {
+                    self.threads
+                        .lock()
+                        .await
+                        .entry(thread_id.clone())
+                        .or_default()
+                        .active = false;
+                    self.client
+                        .emit_local_event(
+                            "board/queue/error",
+                            json!({ "threadId": thread_id, "message": error.message }),
+                        )
+                        .await;
+                }
             }
         }
+    }
+
+    async fn emit_automation_started(
+        &self,
+        thread_id: &str,
+        response: &Value,
+        context: &AutomationContext,
+    ) {
+        let Some(turn_id) = response
+            .get("turn")
+            .and_then(|turn| turn.get("id"))
+            .and_then(Value::as_str)
+        else {
+            return;
+        };
+        self.client
+            .emit_local_event(
+                "board/automation/turn-started",
+                json!({
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "automationId": context.id,
+                    "automationName": context.name,
+                }),
+            )
+            .await;
     }
 
     async fn emit_queue(&self, thread_id: &str, messages: Vec<QueuedMessage>) {
@@ -252,6 +337,13 @@ fn queue_snapshot(
         .collect()
 }
 
+fn automation_text(text: &str, automation: Option<&AutomationContext>) -> String {
+    if automation.is_none() {
+        return text.to_owned();
+    }
+    format!("{text}\n\n{AUTOMATION_RESULT_INSTRUCTION}")
+}
+
 fn random_id() -> String {
     use rand::RngCore;
     let mut bytes = [0_u8; 12];
@@ -274,11 +366,24 @@ mod tests {
                 queue: VecDeque::from([QueuedMessage {
                     id: "1".into(),
                     text: "next".into(),
+                    automation: None,
                 }]),
             },
         );
         let snapshot = queue_snapshot(&threads);
         assert!(!snapshot.contains_key("empty"));
         assert_eq!(snapshot["queued"].front().unwrap().text, "next");
+    }
+
+    #[test]
+    fn automation_instruction_is_added_only_at_submission_time() {
+        let context = AutomationContext {
+            id: "a-1".into(),
+            name: "Daily report".into(),
+        };
+        let submitted = automation_text("Run the report", Some(&context));
+        assert!(submitted.starts_with("Run the report\n\n<!-- codex-board-automation:"));
+        assert!(submitted.contains("only results found and operations performed"));
+        assert_eq!(automation_text("Manual prompt", None), "Manual prompt");
     }
 }

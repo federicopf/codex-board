@@ -17,6 +17,10 @@ function textFrom(value: JsonValue | undefined): string {
   return string(item.text) || string(item.content) || string(item.value);
 }
 
+export function visibleUserMessage(value: string): string {
+  return value.replace(/\n*<!-- codex-board-automation:[\s\S]*?-->/g, "").trimEnd();
+}
+
 function pretty(value: JsonValue | undefined): string {
   if (value == null) return "";
   if (typeof value === "string") return value;
@@ -52,7 +56,7 @@ export function threadItemToChatItem(value: JsonValue): ChatItem | null {
   if (!id || !type) return null;
 
   if (type === "userMessage") {
-    return { id, kind: "user", text: textFrom(item.content) };
+    return { id, kind: "user", text: visibleUserMessage(textFrom(item.content)) };
   }
   if (type === "agentMessage") {
     return { id, kind: "assistant", text: string(item.text) };

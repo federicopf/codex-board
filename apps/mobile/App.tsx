@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform,
-  Pressable, ScrollView, StyleSheet, Text, TextInput, useColorScheme, View,
+  Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { StatusBar } from "expo-status-bar";
@@ -14,11 +14,14 @@ import {
 } from "@codex-board/protocol";
 import { BoardApi } from "./src/api";
 import { clearCredential, hasSeenTour, loadCredential, markTourSeen, saveCredential } from "./src/connection";
+import { MobileBoardHome } from "./src/MobileBoardHome";
+import { AutomationResultModal } from "./src/AutomationResultModal";
 
 type JsonObject = Record<string, JsonValue>;
 const object = (value: JsonValue | undefined): JsonObject => value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
 const string = (value: JsonValue | undefined): string => typeof value === "string" ? value : "";
 const requestThreadId = (request: PendingRemoteRequest) => string(object(request.params).threadId);
+const visibleUserMessage = (value: string) => value.replace(/\n*<!-- codex-board-automation:[\s\S]*?-->/g, "").trimEnd();
 
 interface ChatLine { id: string; role: "user" | "assistant" | "activity"; text: string; title?: string; status?: string; }
 
@@ -38,7 +41,7 @@ function conversation(thread: JsonObject | null): ChatLine[] {
         const content = Array.isArray(item.content)
           ? item.content.map((part) => string(object(part).text)).filter(Boolean).join("\n")
           : string(item.content);
-        lines.push({ id, role: "user", text: content });
+        lines.push({ id, role: "user", text: visibleUserMessage(content) });
       } else if (type === "agentMessage") {
         lines.push({ id, role: "assistant", text: string(item.text) });
       } else if (type === "plan" || type === "reasoning") {
@@ -287,7 +290,7 @@ function NewTaskModal({ api, threads, categories, onClose, onCreated }: { api: B
   return <Modal animationType="slide"><SafeAreaView style={styles.page}><View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Cancel new task" style={styles.chatBackButton} onPress={onClose}><Text style={styles.closeIcon}>×</Text></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>New Codex task</Text><Text style={styles.headerMeta}>Create and start directly from mobile</Text></View></View><ScrollView contentContainerStyle={styles.newTaskMobile}><Text style={styles.fieldLabel}>PROJECT</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.miniChoices}>{projects.map((project) => <Pressable key={project.cwd} style={[styles.miniChoice, project.cwd === cwd && styles.miniChoiceActive]} onPress={() => setCwd(project.cwd)}><Text style={[styles.miniChoiceText, project.cwd === cwd && styles.miniChoiceTextActive]}>{project.label}</Text></Pressable>)}</ScrollView><Text style={styles.fieldLabel}>CATEGORY</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.miniChoices}>{categories.map((item) => <Pressable key={item} style={[styles.miniChoice, item === category && styles.miniChoiceActive]} onPress={() => setCategory(item)}><Text style={[styles.miniChoiceText, item === category && styles.miniChoiceTextActive]}>{item}</Text></Pressable>)}</ScrollView><Text style={styles.fieldLabel}>TITLE</Text><TextInput style={styles.smallInput} value={title} onChangeText={setTitle} placeholder="What are we building?" /><Text style={styles.fieldLabel}>FIRST MESSAGE</Text><TextInput style={[styles.smallInput, styles.newTaskPrompt]} value={prompt} onChangeText={setPrompt} multiline placeholder="Describe what Codex should do…" /><Pressable disabled={busy || !cwd || !title.trim() || !prompt.trim()} style={[styles.primaryButton, (busy || !cwd || !title.trim() || !prompt.trim()) && styles.disabled]} onPress={() => void create()}>{busy ? <ActivityIndicator color="white" /> : <Text style={styles.primaryButtonText}>Create and start</Text>}</Pressable></ScrollView></SafeAreaView></Modal>;
 }
 
-function InboxModal({ api, items, onClose, onOpen, onChanged }: { api: BoardApi; items: BoardNotification[]; onClose: () => void; onOpen: (id: string) => void; onChanged: () => void }) { return <Modal animationType="slide"><SafeAreaView style={styles.page}><View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Close inbox" style={styles.chatBackButton} onPress={onClose}><Text style={styles.closeIcon}>×</Text></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>Inbox</Text><Text style={styles.headerMeta}>Everything that needs your attention</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Mark all notifications as read" style={styles.topbarIconButton} onPress={()=>void api.markNotificationsRead().then(onChanged)}><Text style={styles.readAllIcon}>✓✓</Text></Pressable></View><FlatList contentContainerStyle={styles.mobileInbox} data={items} keyExtractor={item=>item.id} ListEmptyComponent={<View style={styles.emptyColumn}><Text style={styles.emptyTitle}>You're all caught up</Text></View>} renderItem={({item})=><Pressable style={[styles.mobileInboxItem,item.read&&styles.mobileInboxRead]} onPress={()=>{if(item.threadId){void api.markNotificationsRead(item.id);onOpen(item.threadId)}}}><View style={[styles.mobileInboxDot,item.kind==="error"&&styles.mobileInboxDotError,item.kind==="attention"&&styles.mobileInboxDotAttention]}/><View style={styles.categoryCopy}><Text style={styles.automationName}>{item.title}</Text><Text style={styles.automationDescription}>{item.message}</Text></View><Text style={styles.openArrow}>→</Text></Pressable>} ListFooterComponent={items.length?<Pressable style={styles.moveCancel} onPress={()=>void api.clearNotifications().then(onChanged)}><Text style={styles.deleteAutomation}>Clear notifications</Text></Pressable>:null}/></SafeAreaView></Modal> }
+function InboxModal({ api, items, onClose, onOpen, onOpenResult, onChanged }: { api: BoardApi; items: BoardNotification[]; onClose: () => void; onOpen: (id: string) => void; onOpenResult: (item: BoardNotification) => void; onChanged: () => void }) { return <Modal animationType="slide"><SafeAreaView style={styles.page}><View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Close inbox" style={styles.chatBackButton} onPress={onClose}><Text style={styles.closeIcon}>×</Text></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>Inbox</Text><Text style={styles.headerMeta}>Everything that needs your attention</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Mark all notifications as read" style={styles.topbarIconButton} onPress={()=>void api.markNotificationsRead().then(onChanged)}><Text style={styles.readAllIcon}>✓✓</Text></Pressable></View><FlatList contentContainerStyle={styles.mobileInbox} data={items} keyExtractor={item=>item.id} ListEmptyComponent={<View style={styles.emptyColumn}><Text style={styles.emptyTitle}>You're all caught up</Text></View>} renderItem={({item})=><Pressable style={[styles.mobileInboxItem,item.read&&styles.mobileInboxRead]} onPress={()=>{void api.markNotificationsRead(item.id);if(item.automation)onOpenResult(item);else if(item.threadId)onOpen(item.threadId)}}><View style={[styles.mobileInboxDot,item.kind==="error"&&styles.mobileInboxDotError,item.kind==="attention"&&styles.mobileInboxDotAttention]}/><View style={styles.categoryCopy}><Text style={styles.automationName}>{item.title}</Text><Text style={styles.automationDescription}>{item.automation?.name||item.message}</Text>{item.automation&&<Text style={styles.resultLink}>View quick result</Text>}</View><Text style={styles.openArrow}>→</Text></Pressable>} ListFooterComponent={items.length?<Pressable style={styles.moveCancel} onPress={()=>void api.clearNotifications().then(onChanged)}><Text style={styles.deleteAutomation}>Clear notifications</Text></Pressable>:null}/></SafeAreaView></Modal> }
 
 const mobileTourSteps = [["YOUR BOARD","Work, organized","Every Codex thread is a card. Categories follow your prefixes and projects remain filterable."],["REAL CHAT","Continue anywhere","Read history, send instructions, approve commands and answer Codex directly from mobile."],["AUTOMATIONS","Build your routine","Schedule recurring prompts and timed moves that run persistently on your PC."]];
 function MobileTour({onDone}:{onDone:()=>void}){const[index,setIndex]=useState(0);const step=mobileTourSteps[index];return <Modal animationType="fade"><SafeAreaView style={styles.tourMobile}><View style={styles.tourMobileArt}><View style={styles.mobileLogo}><View style={[styles.logoBar,{height:9}]}/><View style={[styles.logoBar,{height:18}]}/><View style={[styles.logoBar,{height:13}]}/></View><View style={styles.tourMiniBoard}><View style={styles.tourMiniColumn}/><View style={styles.tourMiniColumn}/><View style={styles.tourMiniColumn}/></View></View><View style={styles.tourMobileCopy}><Text style={styles.overviewEyebrow}>{step[0]}</Text><Text style={styles.tourMobileTitle}>{step[1]}</Text><Text style={styles.tourMobileText}>{step[2]}</Text><View style={styles.tourMobileDots}>{mobileTourSteps.map((_,dot)=><View key={dot} style={[styles.tourMobileDot,dot===index&&styles.tourMobileDotActive]}/>)}</View><Pressable style={styles.primaryButton} onPress={()=>index===mobileTourSteps.length-1?onDone():setIndex(index+1)}><Text style={styles.primaryButtonText}>{index===mobileTourSteps.length-1?"Start using Board":"Next"}</Text></Pressable><Pressable style={styles.moveCancel} onPress={onDone}><Text style={styles.moveCancelText}>Skip guide</Text></Pressable></View></SafeAreaView></Modal>}
@@ -357,6 +360,8 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   const [requests, setRequests] = useState<PendingRemoteRequest[]>([]);
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [notifications, setNotifications] = useState<BoardNotification[]>([]);
+  const [automationAlert, setAutomationAlert] = useState<BoardNotification | null>(null);
+  const [resultNotification, setResultNotification] = useState<BoardNotification | null>(null);
   const [selected, setSelected] = useState<ThreadDto | null>(null);
   const [managing, setManaging] = useState(false);
   const [moving, setMoving] = useState<ThreadDto | null>(null);
@@ -365,15 +370,26 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   const [creatingTask, setCreatingTask] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState(ALL_PROJECTS);
+  const [search, setSearch] = useState("");
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [eventRevision, setEventRevision] = useState(0);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notificationIds = useRef<Set<string> | null>(null);
   const refresh = useCallback(async () => {
     try {
       const [nextThreads, nextConfig, nextQueues, nextRequests, nextAutomations, nextNotifications] = await Promise.all([api.threads(), api.board(), api.queues(), api.requests(), api.automations().catch(() => []), api.notifications().catch(() => [])]);
       setThreads(nextThreads); setConfig(nextConfig); setQueues(nextQueues); setRequests(nextRequests); setAutomations(nextAutomations); setNotifications(nextNotifications);
+      const known = notificationIds.current;
+      if (known) {
+        const fresh = nextNotifications.find((item) => item.automation && !known.has(item.id));
+        if (fresh) {
+          setAutomationAlert(fresh);
+          setTimeout(() => setAutomationAlert((current) => current?.id === fresh.id ? null : current), 10_000);
+        }
+      }
+      notificationIds.current = new Set(nextNotifications.map((item) => item.id));
     } catch (error) { Alert.alert("PC unavailable", error instanceof Error ? error.message : String(error)); }
     finally { setLoading(false); }
   }, [api]);
@@ -404,34 +420,59 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   }, [activeCategory, dashboardCategories.join("\u0000")]);
   const visibleCategory = activeCategory && dashboardCategories.includes(activeCategory) ? activeCategory : dashboardCategories[0];
   const visibleThreads = projectThreads.filter((thread) => categoryFromTitle(thread.name) === visibleCategory);
+  const searchedThreads = visibleThreads.filter((thread) => {
+    const query = search.trim().toLocaleLowerCase();
+    return !query || [displayTitle(thread.name, thread.preview), thread.preview || "", projectLabel(thread.cwd)].some((value) => value.toLocaleLowerCase().includes(query));
+  });
   const workingCount = projectThreads.filter(isWorking).length;
   const selectedProjectLabel = selectedProject === ALL_PROJECTS ? "All projects" : projects.find((project) => project.key === selectedProject)?.label || "Project";
 
   return <SafeAreaView style={styles.page}>
-    <View style={styles.mobileHeader}><View style={styles.mobileBrand}><View style={styles.mobileLogo}><View style={[styles.logoBar, { height: 9 }]} /><View style={[styles.logoBar, { height: 18 }]} /><View style={[styles.logoBar, { height: 13 }]} /></View><View><Text style={styles.mobileTitle}>Codex Board</Text><Text style={styles.connectionText}><Text style={{ color: connected ? "#2CB67D" : "#E7A33E" }}>●</Text> {connected ? "Live through Tailscale" : "Reconnecting…"}</Text></View></View><View style={styles.headerActions}><Pressable style={styles.iconAction} onPress={() => setInboxOpen(true)}><Text style={styles.automationActionText}>◇</Text>{notifications.some(item=>!item.read)&&<View style={styles.notificationBadge}><Text style={styles.notificationBadgeText}>{notifications.filter(item=>!item.read).length}</Text></View>}</Pressable><Pressable style={styles.iconAction} onPress={() => setAutomating(true)}><Text style={styles.automationActionText}>⚡</Text></Pressable><Pressable style={styles.iconAction} onPress={() => setManaging(true)}><Text style={styles.iconActionText}>☰</Text></Pressable></View></View>
-    <View style={styles.mobileOverview}><View><Text style={styles.overviewEyebrow}>YOUR WORKSPACE</Text><Text style={styles.overviewTitle}>{projectThreads.length} active threads</Text></View><View style={styles.overviewActions}><Pressable style={styles.mobileNewTask} onPress={() => setCreatingTask(true)}><Text style={styles.mobileNewTaskText}>＋</Text></Pressable><View style={styles.liveMetric}><Text style={styles.liveMetricNumber}>{workingCount}</Text><Text style={styles.liveMetricLabel}>working</Text></View></View></View>
-    <Pressable style={styles.projectFilter} onPress={() => setChoosingProject(true)}><View><Text style={styles.projectFilterLabel}>PROJECT</Text><Text style={styles.projectFilterValue}>{selectedProjectLabel}</Text></View><Text style={styles.projectFilterChevron}>⌄</Text></Pressable>
-    <ScrollView horizontal style={styles.categoryTabsScroll} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryTabs}>{dashboardCategories.map((category) => { const count = projectThreads.filter((thread) => categoryFromTitle(thread.name) === category).length; const active = category === visibleCategory; return <Pressable key={category} style={[styles.categoryTab, active && styles.categoryTabActive]} onPress={() => setActiveCategory(category)}><Text style={[styles.categoryTabText, active && styles.categoryTabTextActive]}>{category}</Text><Text style={[styles.categoryTabCount, active && styles.categoryTabCountActive]}>{count}</Text></Pressable>; })}</ScrollView>
-    {loading ? <View style={styles.center}><ActivityIndicator color="#6266EA" /></View> : <FlatList style={styles.taskList} contentContainerStyle={styles.taskListContent} data={visibleThreads} keyExtractor={(thread) => thread.id} ListHeaderComponent={<View style={styles.listHeading}><Text style={styles.listTitle}>{visibleCategory}</Text><Text style={styles.listCount}>{visibleThreads.length} {visibleThreads.length === 1 ? "task" : "tasks"}</Text></View>} ListEmptyComponent={<View style={styles.emptyColumn}><Text style={styles.emptyIcon}>◇</Text><Text style={styles.emptyTitle}>No threads here</Text><Text style={styles.emptyText}>Move a thread into this category from another column.</Text></View>} renderItem={({ item: thread }) => <View style={[styles.card, isWorking(thread) && styles.workingCard]}><Pressable onPress={() => setSelected(thread)}><View style={styles.cardTop}><Text style={styles.projectPill}>{projectLabel(thread.cwd)}</Text>{isWorking(thread) && <View style={styles.workingPill}><Text style={styles.workingPillText}>● Working</Text></View>}</View><Text style={styles.cardTitle}>{displayTitle(thread.name, thread.preview)}</Text>{thread.preview && <Text style={styles.cardPreview} numberOfLines={3}>{thread.preview}</Text>}<View style={styles.cardBottom}><Text style={[styles.cardStatus, isWorking(thread) && styles.workingText]}>{queues[thread.id]?.length ? `${queues[thread.id].length} queued` : isWorking(thread) ? "Codex is working" : "Open conversation"}</Text><Text style={styles.openArrow}>→</Text></View></Pressable><Pressable style={styles.moveLink} onPress={() => setMoving(thread)}><Text style={styles.moveLinkText}>Move</Text></Pressable></View>} />}
+    <MobileBoardHome
+      connected={connected}
+      loading={loading}
+      projectLabel={selectedProjectLabel}
+      totalCount={projectThreads.length}
+      workingCount={workingCount}
+      unreadCount={notifications.filter(item=>!item.read).length}
+      categories={dashboardCategories.map(category=>({name:category,count:projectThreads.filter(thread=>categoryFromTitle(thread.name)===category).length}))}
+      activeCategory={visibleCategory||""}
+      threads={searchedThreads}
+      queues={queues}
+      search={search}
+      isWorking={isWorking}
+      titleFor={(thread)=>displayTitle(thread.name,thread.preview)}
+      projectFor={(thread)=>projectLabel(thread.cwd)}
+      onSearch={setSearch}
+      onProject={()=>setChoosingProject(true)}
+      onCategory={setActiveCategory}
+      onOpen={setSelected}
+      onMove={setMoving}
+      onNewTask={()=>setCreatingTask(true)}
+      onInbox={()=>setInboxOpen(true)}
+      onAutomations={()=>setAutomating(true)}
+      onSettings={()=>setManaging(true)}
+    />
+    {automationAlert&&<Pressable style={styles.mobileAutomationAlert} onPress={()=>{setAutomationAlert(null);setResultNotification(automationAlert);void api.markNotificationsRead(automationAlert.id)}}><View style={styles.mobileAutomationAlertIcon}><Text>⚡</Text></View><View style={styles.categoryCopy}><Text style={styles.automationName}>Automation completed</Text><Text style={styles.automationDescription}>{automationAlert.automation?.name}</Text></View><Text style={styles.openArrow}>→</Text></Pressable>}
     {selected && <Chat thread={selected} api={api} queue={queues[selected.id] || []} requests={requests.filter((request) => requestThreadId(request) === selected.id)} eventRevision={eventRevision} onClose={() => setSelected(null)} onChanged={refresh} />}
     {managing && config && <CategoryManager config={config} threads={threads} api={api} onClose={() => setManaging(false)} onSaved={refresh} onOpenTour={onOpenTour} onDisconnect={() => void onDisconnect()} />}
     {automating && <AutomationManager api={api} automations={automations} threads={threads} categories={categories} onClose={() => setAutomating(false)} onChanged={refresh} />}
     {choosingProject && <ChoiceModal title="Filter by project" options={[{ key: ALL_PROJECTS, label: "All projects", meta: `${threads.length} tasks` }, ...projects.map((project) => ({ key: project.key, label: project.label, meta: project.cwd }))]} selected={selectedProject} onSelect={setSelectedProject} onClose={() => setChoosingProject(false)} />}
     {creatingTask && <NewTaskModal api={api} threads={threads} categories={categories} onClose={() => setCreatingTask(false)} onCreated={(thread) => { setCreatingTask(false); setSelected(thread); void refresh(); }} />}
-    {inboxOpen && <InboxModal api={api} items={notifications} onClose={()=>setInboxOpen(false)} onChanged={refresh} onOpen={(id)=>{const thread=threads.find(item=>item.id===id);if(thread){setInboxOpen(false);setSelected(thread)}}}/>}
+    {inboxOpen && <InboxModal api={api} items={notifications} onClose={()=>setInboxOpen(false)} onChanged={refresh} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item)}} onOpen={(id)=>{const thread=threads.find(item=>item.id===id);if(thread){setInboxOpen(false);setSelected(thread)}}}/>}
     {moving && <MoveDialog thread={moving} categories={categories} api={api} onClose={() => setMoving(null)} onMoved={refresh} />}
+    {resultNotification&&<AutomationResultModal notification={resultNotification} onClose={()=>setResultNotification(null)} onOpenThread={(id)=>{const thread=threads.find(item=>item.id===id);setResultNotification(null);if(thread)setSelected(thread)}}/>}
   </SafeAreaView>;
 }
 
 function Root() {
   const [credential, setCredential] = useState<PairingCredential | null | undefined>(undefined);
   const [showTour, setShowTour] = useState(false);
-  const dark = useColorScheme() === "dark";
   useEffect(() => { void Promise.all([loadCredential(),hasSeenTour()]).then(([saved,seen])=>{setCredential(saved);setShowTour(Boolean(saved&&!seen));}); }, []);
   async function pair(next: PairingCredential) { await new BoardApi(next).health(); await saveCredential(next); setCredential(next); setShowTour(true); }
   async function disconnect() { await clearCredential(); setCredential(null); }
   if (credential === undefined) return <View style={styles.center}><ActivityIndicator /></View>;
-  return <><StatusBar style={dark ? "light" : "dark"} />{credential ? <Board credential={credential} onDisconnect={disconnect} onOpenTour={() => setShowTour(true)} /> : <PairScreen onPair={pair} />}{showTour&&<MobileTour onDone={()=>{void markTourSeen();setShowTour(false)}}/>}</>;
+  return <><StatusBar style="dark" />{credential ? <Board credential={credential} onDisconnect={disconnect} onOpenTour={() => setShowTour(true)} /> : <PairScreen onPair={pair} />}{showTour&&<MobileTour onDone={()=>{void markTourSeen();setShowTour(false)}}/>}</>;
 }
 
 export default function App() { return <SafeAreaProvider><Root /></SafeAreaProvider>; }
@@ -460,6 +501,7 @@ const styles = StyleSheet.create({
   mobileOverview: { paddingHorizontal: 20, paddingTop: 22, paddingBottom: 15, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, overviewEyebrow: { color: "#6266EA", fontSize: 9, fontWeight: "800", letterSpacing: 1.2 }, overviewTitle: { marginTop: 5, color: "#171923", fontSize: 24, lineHeight: 29, fontWeight: "800", letterSpacing: -0.8 }, liveMetric: { minWidth: 60, paddingVertical: 8, paddingHorizontal: 11, alignItems: "center", borderRadius: 13, borderWidth: 1, borderColor: "#E2E4EC", backgroundColor: "white" }, liveMetricNumber: { color: "#171923", fontSize: 16, fontWeight: "800" }, liveMetricLabel: { color: "#7B808E", fontSize: 9, fontWeight: "600" },
   overviewActions: { flexDirection: "row", alignItems: "center", gap: 8 }, mobileNewTask: { width: 42, height: 42, alignItems: "center", justifyContent: "center", borderRadius: 13, backgroundColor: "#1B1E2B" }, mobileNewTaskText: { color: "white", fontSize: 21, lineHeight: 23, fontWeight: "600" }, newTaskMobile: { padding: 20, gap: 10 }, newTaskPrompt: { minHeight: 150, textAlignVertical: "top" },
   notificationBadge: { position: "absolute", top: -5, right: -5, minWidth: 17, height: 17, paddingHorizontal: 3, alignItems: "center", justifyContent: "center", borderRadius: 9, backgroundColor: "#E45E50" }, notificationBadgeText: { color: "white", fontSize: 8, fontWeight: "800" }, mobileInbox: { padding: 16 }, mobileInboxItem: { minHeight: 70, marginBottom: 9, padding: 14, flexDirection: "row", alignItems: "center", gap: 11, borderWidth: 1, borderColor: "#E1E3EA", borderRadius: 14, backgroundColor: "white" }, mobileInboxRead: { opacity: .55 }, mobileInboxDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: "#6266EA" }, mobileInboxDotError: { backgroundColor: "#E45E50" }, mobileInboxDotAttention: { backgroundColor: "#E7A33E" },
+  resultLink: { marginTop: 5, color: "#6266EA", fontSize: 9, fontWeight: "700" }, mobileAutomationAlert: { position: "absolute", zIndex: 50, top: 82, left: 14, right: 14, minHeight: 68, padding: 12, flexDirection: "row", alignItems: "center", gap: 11, borderWidth: 1, borderColor: "#C8CAF7", borderRadius: 15, backgroundColor: "white", shadowColor: "#171923", shadowOffset: { width: 0, height: 9 }, shadowOpacity: .16, shadowRadius: 24, elevation: 8 }, mobileAutomationAlertIcon: { width: 38, height: 38, alignItems: "center", justifyContent: "center", borderRadius: 12, backgroundColor: "#EEEFFF" },
   tourMobile: { flex: 1, backgroundColor: "#F5F6FA" }, tourMobileArt: { flex: 1.05, alignItems: "center", justifyContent: "center", gap: 30, backgroundColor: "#1B1E2B" }, tourMiniBoard: { width: "78%", height: 170, padding: 12, flexDirection: "row", gap: 8, borderRadius: 18, backgroundColor: "rgba(255,255,255,.08)" }, tourMiniColumn: { flex: 1, borderRadius: 11, backgroundColor: "rgba(255,255,255,.16)" }, tourMobileCopy: { flex: .95, padding: 28, justifyContent: "center" }, tourMobileTitle: { marginTop: 8, color: "#171923", fontSize: 30, lineHeight: 35, fontWeight: "800", letterSpacing: -1 }, tourMobileText: { marginTop: 12, color: "#747987", fontSize: 14, lineHeight: 22 }, tourMobileDots: { marginTop: 25, marginBottom: 10, flexDirection: "row", gap: 6 }, tourMobileDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: "#D3D5DE" }, tourMobileDotActive: { width: 24, backgroundColor: "#6266EA" },
   projectFilter: { minHeight: 50, marginHorizontal: 16, marginBottom: 8, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderColor: "#E0E2E9", borderRadius: 13, backgroundColor: "white" }, projectFilterLabel: { color: "#969AA6", fontSize: 8, fontWeight: "800", letterSpacing: 1 }, projectFilterValue: { marginTop: 3, color: "#292C35", fontSize: 13, fontWeight: "700" }, projectFilterChevron: { color: "#6266EA", fontSize: 19 },
   categoryTabsScroll: { flexGrow: 0, flexShrink: 0, height: 52 }, categoryTabs: { height: 52, paddingHorizontal: 16, paddingBottom: 10, alignItems: "center", gap: 8 }, categoryTab: { height: 38, paddingLeft: 14, paddingRight: 7, flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 19, borderWidth: 1, borderColor: "#E0E2E9", backgroundColor: "white" }, categoryTabActive: { borderColor: "#1B1E2B", backgroundColor: "#1B1E2B" }, categoryTabText: { color: "#686D7A", fontSize: 12, fontWeight: "700" }, categoryTabTextActive: { color: "white" }, categoryTabCount: { minWidth: 23, height: 23, paddingHorizontal: 6, textAlign: "center", textAlignVertical: "center", borderRadius: 12, overflow: "hidden", color: "#6F7481", backgroundColor: "#F0F1F5", fontSize: 10, fontWeight: "800" }, categoryTabCountActive: { color: "#1B1E2B", backgroundColor: "white" },

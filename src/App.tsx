@@ -4,15 +4,13 @@ import {
   KeyboardSensor,
   PointerSensor,
   closestCenter,
-  useDraggable,
   useSensor,
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { asCodexError, clearNotifications, createThread, drainCodexEvents, getBoardConfig, getMessageQueues, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameThread, sendMessage, setBoardConfig } from "./api";
 import type { BoardNotification } from "@codex-board/protocol";
 import "./App.css";
@@ -26,6 +24,16 @@ import { InboxDialog } from "./InboxDialog";
 import { MoveThreadDialog } from "./MoveThreadDialog";
 import { CategoryManagerDialog } from "./CategoryManagerDialog";
 import { BoardSettingsDialog } from "./BoardSettingsDialog";
+import { AutomationResultDialog } from "./AutomationResultDialog";
+import {
+  ALL_STATUSES,
+  BoardWorkspace,
+  CATEGORY_DRAG_PREFIX,
+  categoryDragId,
+  categoryFromDragId,
+  THREAD_DRAG_PREFIX,
+  ThreadDragOverlay,
+} from "./BoardWorkspace";
 import { moveThread, toBoardThreads } from "./lib/board";
 import { loadApprovalMode, saveApprovalMode, type ApprovalMode } from "./lib/approvals";
 import {
@@ -40,139 +48,12 @@ import {
 import { ALL_PROJECTS, projectOptions, buildProjectMap } from "./lib/projects";
 import { buildThreadTitle, threadCategories, UNCATEGORIZED } from "./lib/threadStatus";
 import type { BoardThread, CodexError, CodexEvent, JsonValue, QueuedMessage, SequencedCodexEvent } from "./types";
-
-const THREAD_DRAG_PREFIX = "thread:";
-const CATEGORY_DRAG_PREFIX = "category:";
-const ALL_STATUSES = "__all_statuses__";
-const threadDragId = (threadId: string) => `${THREAD_DRAG_PREFIX}${threadId}`;
-const categoryDragId = (category: string) => `${CATEGORY_DRAG_PREFIX}${encodeURIComponent(category)}`;
-const categoryFromDragId = (id: string) => decodeURIComponent(id.slice(CATEGORY_DRAG_PREFIX.length));
 type JsonObject = Record<string, JsonValue>;
 const record = (value: JsonValue | undefined): JsonObject => value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
 const text = (value: JsonValue | undefined): string => typeof value === "string" ? value : "";
 const eventThreadId = (event: CodexEvent): string => text(record(event.params).threadId);
 type CategoryDialogState = { mode: "create" } | { mode: "rename"; category: string };
 interface Toast { id: number; threadId: string; title: string; message: string; kind: "done" | "error"; }
-
-function ThreadCard({
-  thread,
-  pending,
-  working,
-  queuedCount,
-  showProject,
-  onOpen,
-  onMove,
-  overlay = false,
-}: {
-  thread: BoardThread;
-  pending: boolean;
-  working: boolean;
-  queuedCount: number;
-  showProject: boolean;
-  onOpen?: (threadId: string) => void;
-  onMove?: (threadId: string) => void;
-  overlay?: boolean;
-}) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: threadDragId(thread.id),
-    disabled: pending || overlay,
-  });
-  const style: CSSProperties | undefined = transform
-    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
-    : undefined;
-
-  return (
-    <article
-      ref={setNodeRef}
-      style={style}
-      className={`thread-card${isDragging ? " is-dragging" : ""}${working ? " is-working" : ""}${overlay ? " overlay" : ""}`}
-      {...listeners}
-      {...attributes}
-      aria-busy={pending}
-    >
-      <div className="card-title">{thread.displayTitle || "Untitled thread"}</div>
-      {thread.preview && thread.preview.trim() !== thread.displayTitle && (
-        <div className="card-preview">{thread.preview}</div>
-      )}
-      <footer>
-        {showProject && <span className="project-chip">{thread.projectLabel}</span>}
-        {pending && <span className="saving">Saving…</span>}
-        {working && <span className="card-working"><i />Codex is working</span>}
-        {queuedCount > 0 && <span className="queue-count">+{queuedCount} queued</span>}
-        {!overlay && (
-          <button className="move-thread" type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onMove?.(thread.id); }}>Move</button>
-        )}
-        {!overlay && (
-          <button
-            className="open-thread"
-            type="button"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpen?.(thread.id);
-            }}
-          >
-            Chat
-          </button>
-        )}
-      </footer>
-    </article>
-  );
-}
-
-function Column({
-  category,
-  threads,
-  pendingIds,
-  workingIds,
-  queues,
-  showProject,
-  onOpen,
-  onMove,
-  onRename,
-}: {
-  category: string;
-  threads: BoardThread[];
-  pendingIds: Set<string>;
-  workingIds: Set<string>;
-  queues: Record<string, QueuedMessage[]>;
-  showProject: boolean;
-  onOpen: (threadId: string) => void;
-  onMove: (threadId: string) => void;
-  onRename: (category: string) => void;
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } = useSortable({
-    id: categoryDragId(category),
-  });
-  const style: CSSProperties = { transform: CSS.Transform.toString(transform), transition };
-  const hue = [...category].reduce((value, character) => value + character.charCodeAt(0), 0) % 360;
-  return (
-    <section ref={setNodeRef} style={style} className={`board-column${isOver ? " is-over" : ""}${isDragging ? " is-dragging-column" : ""}`}>
-      <header className="column-header">
-        <button className="column-drag-handle" type="button" aria-label={`Move ${category} column`} {...attributes} {...listeners}>⠿</button>
-        <span className="status-dot" style={{ backgroundColor: `hsl(${hue} 55% 55%)` }} />
-        <h2>{category}</h2>
-        <span className="count">{threads.length}</span>
-        <button className="column-rename" type="button" aria-label={`Rename ${category}`} onClick={() => onRename(category)}>✎</button>
-      </header>
-      <div className="column-body">
-        {threads.map((thread) => (
-          <ThreadCard
-            key={thread.id}
-            thread={thread}
-            pending={pendingIds.has(thread.id)}
-            working={workingIds.has(thread.id)}
-            queuedCount={queues[thread.id]?.length || 0}
-            showProject={showProject}
-            onOpen={onOpen}
-            onMove={onMove}
-          />
-        ))}
-        {threads.length === 0 && <div className="column-empty">Drop a thread here</div>}
-      </div>
-    </section>
-  );
-}
 
 function App() {
   const [threads, setThreads] = useState<BoardThread[]>([]);
@@ -196,6 +77,8 @@ function App() {
   const [newTaskDialog, setNewTaskDialog] = useState(false);
   const [productTour, setProductTour] = useState(() => localStorage.getItem("codex-board.tour.v1") !== "done");
   const [notifications, setNotifications] = useState<BoardNotification[]>([]);
+  const [automationAlerts, setAutomationAlerts] = useState<BoardNotification[]>([]);
+  const [resultNotification, setResultNotification] = useState<BoardNotification | null>(null);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [categoryBusy, setCategoryBusy] = useState(false);
   const [events, setEvents] = useState<SequencedCodexEvent[]>([]);
@@ -211,6 +94,8 @@ function App() {
   const toastSequence = useRef(0);
   const approvalModeRef = useRef(approvalMode);
   const boardConfigReady = useRef(false);
+  const notificationIdsRef = useRef<Set<string> | null>(null);
+  const automationTurnIdsRef = useRef(new Set<string>());
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -260,7 +145,25 @@ function App() {
   useEffect(() => { threadsRef.current = threads; }, [threads]);
   useEffect(() => { workingIdsRef.current = workingIds; }, [workingIds]);
   useEffect(() => { queuesRef.current = queues; }, [queues]);
-  useEffect(() => { const load=()=>void listNotifications().then(setNotifications); load(); const timer=window.setInterval(load,2000); return()=>window.clearInterval(timer); }, []);
+  useEffect(() => {
+    const load = () => void listNotifications().then((items) => {
+      const previous = notificationIdsRef.current;
+      if (previous) {
+        const fresh = items.filter((item) => item.automation && !previous.has(item.id));
+        if (fresh.length) {
+          setAutomationAlerts((current) => [...fresh, ...current].slice(0, 3));
+          for (const item of fresh) {
+            window.setTimeout(() => setAutomationAlerts((current) => current.filter((entry) => entry.id !== item.id)), 10_000);
+          }
+        }
+      }
+      notificationIdsRef.current = new Set(items.map((item) => item.id));
+      setNotifications(items);
+    });
+    load();
+    const timer = window.setInterval(load, 2000);
+    return () => window.clearInterval(timer);
+  }, []);
   const persistBoardConfig = useCallback((categories: string[], mode: ApprovalMode) => {
     saveCategoryOrder(categories);
     saveApprovalMode(mode);
@@ -298,7 +201,7 @@ function App() {
     let stopped = false;
     let polling = false;
 
-    const finishTurn = (threadId: string, completedEvent: CodexEvent) => {
+    const finishTurn = (threadId: string, completedEvent: CodexEvent, automated: boolean) => {
       if ((queuesRef.current[threadId]?.length || 0) > 0) return;
       setThreadWorking(threadId, false);
       setActiveTurns((current) => {
@@ -308,7 +211,7 @@ function App() {
       });
       const turn = record(record(completedEvent.params).turn);
       const status = text(turn.status);
-      showToast(threadId, status === "failed" ? "Ho finito, ma il turno è terminato con un errore." : status === "interrupted" ? "Mi sono fermato." : "Hey, ho finito!", status === "failed" ? "error" : "done");
+      if (!automated) showToast(threadId, status === "failed" ? "Ho finito, ma il turno è terminato con un errore." : status === "interrupted" ? "Mi sono fermato." : "Hey, ho finito!", status === "failed" ? "error" : "done");
       void refresh(true);
     };
 
@@ -323,7 +226,10 @@ function App() {
         for (const event of drained) {
           const threadId = eventThreadId(event);
           if (!threadId) continue;
-          if (event.method === "board/queue/updated") {
+          if (event.method === "board/automation/turn-started") {
+            const turnId = text(record(event.params).turnId);
+            if (turnId) automationTurnIdsRef.current.add(turnId);
+          } else if (event.method === "board/queue/updated") {
             const messages = record(event.params).messages;
             const next = { ...queuesRef.current, [threadId]: Array.isArray(messages) ? messages as unknown as QueuedMessage[] : [] };
             if (next[threadId].length === 0) delete next[threadId];
@@ -334,7 +240,9 @@ function App() {
             const turnId = text(record(record(event.params).turn).id);
             if (turnId) setActiveTurns((current) => ({ ...current, [threadId]: turnId }));
           } else if (event.method === "turn/completed") {
-            finishTurn(threadId, event);
+            const turnId = text(record(record(event.params).turn).id);
+            const automated = automationTurnIdsRef.current.delete(turnId);
+            finishTurn(threadId, event, automated);
           }
         }
       } catch (cause) {
@@ -575,76 +483,39 @@ function App() {
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={(event) => void handleDragEnd(event)}>
-      <main className="app-shell">
-        <header className="topbar">
-          <div className="brand">
-            <div className="brand-mark"><span /><span /><span /></div>
-            <div><h1>Codex Board</h1><p>Threads, organized.</p></div>
-          </div>
-          <nav className="utility-toolbar" aria-label="App tools">
-            <button className="utility-button" onClick={() => setSettingsOpen(true)}><span>⚙</span> Settings</button>
-            <button className="utility-button" onClick={() => setProductTour(true)}><span>?</span> Guide</button>
-            <button className="utility-button inbox-button" onClick={() => setInboxOpen(true)}><span>◇</span> Inbox{notifications.some(item=>!item.read)&&<b>{notifications.filter(item=>!item.read).length}</b>}</button>
-            <button className="remote-button" onClick={() => setRemoteDialog(true)}><i />Remote</button>
-          </nav>
-        </header>
-
-        {error && (
-          <div className="error-banner" role="alert">
-            <span>{error.message}</span>
-            <button onClick={() => setError(null)} aria-label="Dismiss">×</button>
-          </div>
-        )}
-
-        <section className="workspace-header">
-          <div className="board-heading">
-            <div>
-              <span className="eyebrow">Workspace</span>
-              <h2>{project === ALL_PROJECTS ? "All projects" : projects.find((item) => item.key === project)?.label || "Project"}</h2>
-              <p>Move work between stages and open any thread to continue with Codex.</p>
-            </div>
-            <div className="board-actions" aria-label="Board actions">
-              <button className="refresh-button" disabled={refreshing} onClick={() => void refresh(true)}><span className={refreshing ? "spin" : ""}>↻</span> Refresh</button>
-              <button className="new-category-button" onClick={() => setCategoryManager(true)}>Categories</button>
-              <button className="automation-button" onClick={() => setAutomationsDialog(true)}>⚡ Automations</button>
-              <button className="new-task-button" onClick={() => setNewTaskDialog(true)}>＋ New task</button>
-            </div>
-          </div>
-          <div className="board-controlbar">
-            <div className="board-filters">
-              <label className="filter-field"><span>Project</span><select value={project} onChange={(event) => setProject(event.target.value)}><option value={ALL_PROJECTS}>All projects</option>{projects.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label>
-              <label className="filter-field"><span>Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value={ALL_STATUSES}>All statuses</option>{populatedCategories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label>
-            </div>
-            <div className="board-tools"><div className="board-metrics"><span><strong>{visibleThreads.length}</strong> threads</span><span className={workingIds.size ? "metric-live" : ""}><strong>{workingIds.size}</strong> working</span></div><label className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search threads" /></label></div>
-          </div>
-        </section>
-
-        {categories.length === 0 ? (
-          <div className="empty-board">
-            <h2>No threads here yet</h2>
-            <p>{project === ALL_PROJECTS ? "Your Codex threads will appear automatically." : "This project has no visible threads."}</p>
-          </div>
-        ) : (
-          <SortableContext items={displayedCategories.map(categoryDragId)} strategy={horizontalListSortingStrategy}>
-            <div className="board">
-              {displayedCategories.map((category) => (
-                <Column
-                  key={category}
-                  category={category}
-                  threads={filteredThreads.filter((thread) => thread.category === category)}
-                  pendingIds={pendingIds}
-                  workingIds={workingIds}
-                  queues={queues}
-                  showProject={project === ALL_PROJECTS}
-                  onOpen={setChatThreadId}
-                  onMove={setMovingThreadId}
-                  onRename={(category) => setCategoryDialog({ mode: "rename", category })}
-                />
-              ))}
-            </div>
-          </SortableContext>
-        )}
-      </main>
+      <SortableContext items={displayedCategories.map(categoryDragId)} strategy={horizontalListSortingStrategy}>
+        <BoardWorkspace
+          project={project}
+          statusFilter={statusFilter}
+          search={search}
+          projects={projects}
+          populatedCategories={populatedCategories}
+          displayedCategories={displayedCategories}
+          filteredThreads={filteredThreads}
+          visibleThreadCount={visibleThreads.length}
+          workingCount={workingIds.size}
+          pendingIds={pendingIds}
+          workingIds={workingIds}
+          queues={queues}
+          notifications={notifications}
+          refreshing={refreshing}
+          onProjectChange={setProject}
+          onStatusChange={setStatusFilter}
+          onSearchChange={setSearch}
+          onRefresh={() => void refresh(true)}
+          onCategories={() => setCategoryManager(true)}
+          onAutomations={() => setAutomationsDialog(true)}
+          onNewTask={() => setNewTaskDialog(true)}
+          onSettings={() => setSettingsOpen(true)}
+          onGuide={() => setProductTour(true)}
+          onInbox={() => setInboxOpen(true)}
+          onRemote={() => setRemoteDialog(true)}
+          onOpen={setChatThreadId}
+          onMove={setMovingThreadId}
+          onRename={(category) => setCategoryDialog({ mode: "rename", category })}
+        />
+      </SortableContext>
+      {error && <div className="error-banner" role="alert"><span>{error.message}</span><button onClick={() => setError(null)} aria-label="Dismiss">×</button></div>}
       {chatThread && (
         <ChatPanel
           thread={chatThread}
@@ -679,8 +550,10 @@ function App() {
       {automationsDialog && <AutomationsDialog threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}
       {newTaskDialog && <NewTaskDialog threads={threads} categories={categories} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt) => { const created = await createThread(cwd, category, title, prompt); await refresh(true); setChatThreadId(created.id); }} />}
       {productTour && <ProductTour onClose={() => { localStorage.setItem("codex-board.tour.v1", "done"); setProductTour(false); }} />}
-      {inboxOpen && <InboxDialog items={notifications} onClose={()=>setInboxOpen(false)} onReadAll={()=>void markNotificationsRead().then(()=>listNotifications().then(setNotifications))} onClear={()=>void clearNotifications().then(()=>setNotifications([]))} onOpen={(threadId)=>{setInboxOpen(false);setChatThreadId(threadId);const item=notifications.find(entry=>entry.threadId===threadId&&!entry.read);if(item)void markNotificationsRead(item.id);}} />}
+      {inboxOpen && <InboxDialog items={notifications} onClose={()=>setInboxOpen(false)} onReadAll={()=>void markNotificationsRead().then(()=>listNotifications().then(setNotifications))} onClear={()=>void clearNotifications().then(()=>setNotifications([]))} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item);if(!item.read)void markNotificationsRead(item.id);}} onOpen={(threadId)=>{setInboxOpen(false);setChatThreadId(threadId);const item=notifications.find(entry=>entry.threadId===threadId&&!entry.read);if(item)void markNotificationsRead(item.id);}} />}
+      {resultNotification && <AutomationResultDialog notification={resultNotification} onClose={()=>setResultNotification(null)} onOpenThread={(threadId)=>{setResultNotification(null);setChatThreadId(threadId);}} />}
       <aside className="toast-stack" aria-live="polite">
+        {automationAlerts.map((item) => <button className="completion-toast automation-alert" key={item.id} onClick={()=>{setResultNotification(item);setAutomationAlerts((current)=>current.filter((entry)=>entry.id!==item.id));if(!item.read)void markNotificationsRead(item.id);}}><span className="toast-icon">⚡</span><span><strong>Automation completed</strong><small>{item.automation?.name}</small></span><i onClick={(event)=>{event.stopPropagation();setAutomationAlerts((current)=>current.filter((entry)=>entry.id!==item.id));}}>×</i></button>)}
         {toasts.map((toast) => (
           <button className={`completion-toast ${toast.kind}`} key={toast.id} onClick={() => {
             setChatThreadId(toast.threadId);
@@ -693,7 +566,7 @@ function App() {
         ))}
       </aside>
       <DragOverlay>
-        {activeThread ? <ThreadCard thread={activeThread} pending={false} working={workingIds.has(activeThread.id)} queuedCount={queues[activeThread.id]?.length || 0} showProject={project === ALL_PROJECTS} overlay /> : activeCategory ? <div className="column-overlay">{activeCategory}</div> : null}
+        {activeThread ? <ThreadDragOverlay thread={activeThread} pending={false} working={workingIds.has(activeThread.id)} queuedCount={queues[activeThread.id]?.length || 0} showProject={project === ALL_PROJECTS} /> : activeCategory ? <div className="column-overlay">{activeCategory}</div> : null}
       </DragOverlay>
     </DndContext>
   );
