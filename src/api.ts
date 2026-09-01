@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import type { CodexError, CodexEvent, CodexThread, JsonValue, QueuedMessage, SendOutcome, ThreadDto } from "./types";
 import type { Automation, CreateAutomationInput } from "@codex-board/protocol";
 import type { BoardNotification } from "@codex-board/protocol";
@@ -17,10 +16,6 @@ export async function renameThread(threadId: string, newName: string): Promise<T
 }
 export async function createThread(cwd: string, category: string, title: string, prompt: string): Promise<ThreadDto> {
   return invoke<ThreadDto>("create_thread", { cwd, category, title, prompt });
-}
-
-export async function openThread(threadId: string): Promise<void> {
-  await openUrl(`codex://threads/${encodeURIComponent(threadId)}`);
 }
 
 export async function loadThread(threadId: string): Promise<CodexThread> {

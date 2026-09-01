@@ -8,12 +8,12 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import Markdown from "react-native-markdown-display";
 import {
-  categoryFromTitle, displayTitle, parsePairingPayload,
+  categoryFromTitle, displayTitle, formatCodexDirectives, parsePairingPayload,
   type Automation, type BoardConfig, type BoardNotification, type CreateAutomationInput, type JsonValue, type PairingCredential,
   type PendingRemoteRequest, type QueuedMessage, type ThreadDto,
 } from "@codex-board/protocol";
 import { BoardApi } from "./src/api";
-import { clearCredential, hasSeenTour, loadCredential, markTourSeen, saveCredential } from "./src/connection";
+import { clearCredential, hasSeenTour, loadCredential, loadSelectedBoard, markTourSeen, saveCredential, saveSelectedBoard } from "./src/connection";
 import { MobileBoardHome } from "./src/MobileBoardHome";
 import { AutomationResultModal } from "./src/AutomationResultModal";
 
@@ -77,6 +77,21 @@ function projectLabel(cwd: string | null): string {
 
 const ALL_PROJECTS = "__all_projects__";
 const projectKey = (cwd: string | null): string => (cwd || "").trim().replace(/[\\/]+$/, "").toLocaleLowerCase() || "__local__";
+
+function projectBoards(threads: ThreadDto[]): { key: string; label: string; cwd: string; count: number }[] {
+  const values = [...new Map(threads.map((thread) => {
+    const cwd = thread.cwd || "Local project";
+    return [projectKey(thread.cwd), { key: projectKey(thread.cwd), cwd, base: projectLabel(thread.cwd) }];
+  })).values()];
+  const duplicateCounts = new Map<string, number>();
+  for (const item of values) duplicateCounts.set(item.base, (duplicateCounts.get(item.base) || 0) + 1);
+  return values.map((item) => {
+    const parts = item.cwd.split(/[\\/]/).filter(Boolean);
+    const parent = parts.at(-2);
+    const label = (duplicateCounts.get(item.base) || 0) > 1 && parent ? `${parent} / ${item.base}` : item.base;
+    return { key: item.key, cwd: item.cwd, label, count: threads.filter((thread) => projectKey(thread.cwd) === item.key).length };
+  }).sort((a, b) => a.label.localeCompare(b.label));
+}
 
 function taskName(category: string, title: string): string {
   return category === "Uncategorized" ? title : `${category} - ${title}`;
@@ -191,32 +206,38 @@ function RequestCard({ request, api, onDone }: { request: PendingRemoteRequest; 
   </View>;
 }
 
-function Chat({ thread, api, queue, requests, eventRevision, onClose, onChanged }: { thread: ThreadDto; api: BoardApi; queue: QueuedMessage[]; requests: PendingRemoteRequest[]; eventRevision: number; onClose: () => void; onChanged: () => void }) {
-  const [loaded, setLoaded] = useState<JsonObject | null>(() => threadCache.get(thread.id) || null);
+function MobileChatComposer({ threadId, api, working, onChanged }: { threadId: string; api: BoardApi; working: boolean; onChanged: () => void }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+
+  async function send() {
+    const text = draft.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    try { await api.send(threadId, text); setDraft(""); onChanged(); }
+    catch (error) { Alert.alert("Could not send", error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  }
+
+  return <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}><View style={styles.composer}><TextInput value={draft} onChangeText={setDraft} style={styles.composerInput} placeholder={working ? "Add to queue…" : "Message Codex…"} multiline /><Pressable disabled={!draft.trim() || busy} style={[styles.send, (!draft.trim() || busy) && styles.disabled]} onPress={() => void send()}><Text style={styles.primaryButtonText}>{working ? "Queue" : "Send"}</Text></Pressable></View></KeyboardAvoidingView>;
+}
+
+function Chat({ thread, api, queue, requests, eventRevision, onClose, onChanged }: { thread: ThreadDto; api: BoardApi; queue: QueuedMessage[]; requests: PendingRemoteRequest[]; eventRevision: number; onClose: () => void; onChanged: () => void }) {
+  const [loaded, setLoaded] = useState<JsonObject | null>(() => threadCache.get(thread.id) || null);
   const lines = useMemo(() => conversation(loaded), [loaded]);
   const timeline = useMemo(() => [...lines].reverse(), [lines]);
   const refresh = useCallback(() => void api.thread(thread.id).then((next) => { threadCache.set(thread.id, next); setLoaded(next); }).catch((error) => Alert.alert("Chat unavailable", error.message)), [api, thread.id]);
   useEffect(refresh, [refresh]);
   useEffect(() => { if (eventRevision > 0) refresh(); }, [eventRevision, refresh]);
 
-  async function send() {
-    const text = draft.trim(); if (!text || busy) return;
-    setBusy(true);
-    try { await api.send(thread.id, text); setDraft(""); onChanged(); }
-    catch (error) { Alert.alert("Could not send", error instanceof Error ? error.message : String(error)); }
-    finally { setBusy(false); }
-  }
-
   const turnId = activeTurnId(loaded);
   return <Modal animationType="slide"><SafeAreaView style={styles.page}>
-    <View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Back to board" style={styles.chatBackButton} onPress={onClose}><Text style={styles.back}>‹</Text></Pressable><View style={styles.headerCopy}><View style={styles.chatTitleRow}><Text style={styles.headerTitle} numberOfLines={1}>{displayTitle(thread.name, thread.preview)}</Text><View style={[styles.chatState, turnId && styles.chatStateLive]}><Text style={[styles.chatStateText, turnId && styles.chatStateTextLive]}>{turnId ? "Working" : "Ready"}</Text></View></View><Text style={styles.headerMeta} numberOfLines={1}>{projectLabel(thread.cwd)}</Text></View>{turnId && <Pressable accessibilityRole="button" accessibilityLabel="Stop Codex" style={[styles.topbarIconButton, styles.topbarIconDanger]} onPress={() => void api.interrupt(thread.id, turnId)}><Text style={styles.stopIcon}>■</Text></Pressable>}</View>
-    <FlatList inverted style={styles.chat} contentContainerStyle={styles.chatContent} data={timeline} keyExtractor={(item) => item.id} maintainVisibleContentPosition={{ minIndexForVisible: 0 }} ListEmptyComponent={<Text style={styles.empty}>No messages yet.</Text>} renderItem={({ item }) => <View style={[styles.bubble, styles[`bubble_${item.role}`]]}>{item.role !== "user" && <View style={styles.activityHeading}><Text style={styles.bubbleLabel}>{item.role === "assistant" ? "CODEX" : item.title || "ACTIVITY"}</Text>{item.status&&<Text style={styles.activityStatus}>{item.status}</Text>}</View>}{item.role === "assistant" ? <Markdown style={markdownStyles}>{item.text || "…"}</Markdown> : item.role === "activity" ? <Markdown style={markdownStyles}>{item.text || "…"}</Markdown> : <Text style={[styles.bubbleText, styles.userText]}>{item.text || "…"}</Text>}</View>} ListHeaderComponent={<>
+    <View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Back to board" style={styles.chatBackButton} onPress={onClose}><Text style={styles.back}>←</Text></Pressable><View style={styles.headerCopy}><View style={styles.chatTitleRow}><Text style={styles.headerTitle} numberOfLines={1}>{displayTitle(thread.name, thread.preview)}</Text><View style={[styles.chatState, turnId && styles.chatStateLive]}><Text style={[styles.chatStateText, turnId && styles.chatStateTextLive]}>{turnId ? "Working" : "Ready"}</Text></View></View><Text style={styles.headerMeta} numberOfLines={1}>{projectLabel(thread.cwd)}</Text></View>{turnId && <Pressable accessibilityRole="button" accessibilityLabel="Stop Codex" style={[styles.topbarIconButton, styles.topbarIconDanger]} onPress={() => void api.interrupt(thread.id, turnId)}><Text style={styles.stopIcon}>■</Text></Pressable>}</View>
+    <FlatList inverted style={styles.chat} contentContainerStyle={styles.chatContent} data={timeline} keyExtractor={(item) => item.id} maintainVisibleContentPosition={{ minIndexForVisible: 0 }} ListEmptyComponent={<Text style={styles.empty}>No messages yet.</Text>} renderItem={({ item }) => <View style={[styles.bubble, styles[`bubble_${item.role}`]]}>{item.role !== "user" && <View style={styles.activityHeading}><Text style={styles.bubbleLabel}>{item.role === "assistant" ? "CODEX" : item.title || "ACTIVITY"}</Text>{item.status&&<Text style={styles.activityStatus}>{item.status}</Text>}</View>}{item.role === "assistant" ? <Markdown style={markdownStyles}>{formatCodexDirectives(item.text || "…")}</Markdown> : item.role === "activity" ? <Markdown style={markdownStyles}>{formatCodexDirectives(item.text || "…")}</Markdown> : <Text style={[styles.bubbleText, styles.userText]}>{item.text || "…"}</Text>}</View>} ListHeaderComponent={<>
       {queue.length > 0 && <View style={styles.queueBox}><Text style={styles.requestTitle}>{queue.length} queued</Text>{queue.map((message, index) => <View key={message.id} style={styles.queueRow}><Text style={styles.queueIndex}>{index + 1}</Text><Text style={styles.queueText}>{message.text}</Text><Pressable onPress={() => void api.removeQueued(thread.id, message.id).then(onChanged)}><Text style={styles.remove}>×</Text></Pressable></View>)}</View>}
       {requests.map((request) => <RequestCard key={JSON.stringify(request.requestId)} request={request} api={api} onDone={onChanged} />)}
     </>} />
-    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}><View style={styles.composer}><TextInput value={draft} onChangeText={setDraft} style={styles.composerInput} placeholder={turnId ? "Add to queue…" : "Message Codex…"} multiline /><Pressable disabled={!draft.trim() || busy} style={[styles.send, (!draft.trim() || busy) && styles.disabled]} onPress={() => void send()}><Text style={styles.primaryButtonText}>{turnId ? "Queue" : "Send"}</Text></Pressable></View></KeyboardAvoidingView>
+    <MobileChatComposer key={thread.id} threadId={thread.id} api={api} working={Boolean(turnId)} onChanged={onChanged} />
   </SafeAreaView></Modal>;
 }
 
@@ -279,20 +300,20 @@ function MoveDialog({ thread, categories, api, onClose, onMoved }: { thread: Thr
   return <Modal transparent animationType="fade"><View style={styles.modalBackdrop}><View style={styles.moveDialog}><View style={styles.sheetHandle} /><Text style={styles.moveEyebrow}>MOVE TASK</Text><Text style={styles.moveTitle} numberOfLines={2}>{displayTitle(thread.name, thread.preview)}</Text><Text style={styles.moveSubtitle}>Choose the next board stage.</Text><ScrollView style={styles.moveOptions}>{categories.map((category) => { const selected = category === current; return <Pressable key={category} disabled={busy || selected} style={[styles.moveOption, selected && styles.moveOptionSelected]} onPress={() => void move(category)}><View style={[styles.categoryDot, selected && styles.categoryDotSelected]} /><Text style={[styles.moveOptionText, selected && styles.moveOptionTextSelected]}>{category}</Text>{selected ? <Text style={styles.currentLabel}>CURRENT</Text> : <Text style={styles.moveChevron}>›</Text>}</Pressable>; })}</ScrollView><Pressable style={styles.moveCancel} onPress={onClose}><Text style={styles.moveCancelText}>Cancel</Text></Pressable></View></View></Modal>;
 }
 
-function ChoiceModal({ title, options, selected, onSelect, onClose }: { title: string; options: { key: string; label: string; meta?: string }[]; selected: string; onSelect: (key: string) => void; onClose: () => void }) {
-  return <Modal transparent animationType="fade"><View style={styles.modalBackdrop}><View style={styles.choiceDialog}><View style={styles.sheetHandle} /><Text style={styles.moveTitle}>{title}</Text><ScrollView style={styles.choiceList}>{options.map((option) => <Pressable key={option.key} style={[styles.choiceRow, option.key === selected && styles.choiceRowSelected]} onPress={() => { onSelect(option.key); onClose(); }}><View><Text style={styles.choiceLabel}>{option.label}</Text>{option.meta && <Text style={styles.headerMeta}>{option.meta}</Text>}</View>{option.key === selected && <Text style={styles.choiceCheck}>✓</Text>}</Pressable>)}</ScrollView><Pressable style={styles.moveCancel} onPress={onClose}><Text style={styles.moveCancelText}>Cancel</Text></Pressable></View></View></Modal>;
+function ChoiceModal({ title, subtitle, options, selected, onSelect, onClose }: { title: string; subtitle?: string; options: { key: string; label: string; meta?: string }[]; selected: string; onSelect: (key: string) => void; onClose: () => void }) {
+  return <Modal transparent animationType="fade"><View style={styles.modalBackdrop}><View style={styles.choiceDialog}><View style={styles.sheetHandle} /><Text style={styles.moveTitle}>{title}</Text>{subtitle&&<Text style={styles.moveSubtitle}>{subtitle}</Text>}<ScrollView style={styles.choiceList}>{options.map((option) => <Pressable key={option.key} style={[styles.choiceRow, option.key === selected && styles.choiceRowSelected]} onPress={() => { onSelect(option.key); onClose(); }}><View style={styles.categoryCopy}><Text style={styles.choiceLabel}>{option.label}</Text>{option.meta && <Text style={styles.headerMeta}>{option.meta}</Text>}</View>{option.key === selected && <Text style={styles.choiceCheck}>✓</Text>}</Pressable>)}</ScrollView><Pressable style={styles.moveCancel} onPress={onClose}><Text style={styles.moveCancelText}>Cancel</Text></Pressable></View></View></Modal>;
 }
 
-function NewTaskModal({ api, threads, categories, onClose, onCreated }: { api: BoardApi; threads: ThreadDto[]; categories: string[]; onClose: () => void; onCreated: (thread: ThreadDto) => void }) {
-  const projects = [...new Map(threads.filter((thread) => thread.cwd).map((thread) => [projectKey(thread.cwd), { cwd: thread.cwd!, label: projectLabel(thread.cwd) }])).values()];
-  const [cwd, setCwd] = useState(projects[0]?.cwd || ""); const [category, setCategory] = useState(categories[0] || "Uncategorized"); const [title, setTitle] = useState(""); const [prompt, setPrompt] = useState(""); const [busy, setBusy] = useState(false);
+function NewTaskModal({ api, threads, categories, defaultProjectKey, onClose, onCreated }: { api: BoardApi; threads: ThreadDto[]; categories: string[]; defaultProjectKey?: string; onClose: () => void; onCreated: (thread: ThreadDto) => void }) {
+  const projects = projectBoards(threads).filter((project) => project.key !== "__local__");
+  const [cwd, setCwd] = useState(projects.find((project) => project.key === defaultProjectKey)?.cwd || projects[0]?.cwd || ""); const [category, setCategory] = useState(categories[0] || "Uncategorized"); const [title, setTitle] = useState(""); const [prompt, setPrompt] = useState(""); const [busy, setBusy] = useState(false);
   async function create() { setBusy(true); try { const created = await api.createThread({ cwd, category, title: title.trim(), prompt: prompt.trim() }); onCreated(created); } catch (error) { Alert.alert("Could not create task", error instanceof Error ? error.message : String(error)); } finally { setBusy(false); } }
   return <Modal animationType="slide"><SafeAreaView style={styles.page}><View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Cancel new task" style={styles.chatBackButton} onPress={onClose}><Text style={styles.closeIcon}>×</Text></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>New Codex task</Text><Text style={styles.headerMeta}>Create and start directly from mobile</Text></View></View><ScrollView contentContainerStyle={styles.newTaskMobile}><Text style={styles.fieldLabel}>PROJECT</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.miniChoices}>{projects.map((project) => <Pressable key={project.cwd} style={[styles.miniChoice, project.cwd === cwd && styles.miniChoiceActive]} onPress={() => setCwd(project.cwd)}><Text style={[styles.miniChoiceText, project.cwd === cwd && styles.miniChoiceTextActive]}>{project.label}</Text></Pressable>)}</ScrollView><Text style={styles.fieldLabel}>CATEGORY</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.miniChoices}>{categories.map((item) => <Pressable key={item} style={[styles.miniChoice, item === category && styles.miniChoiceActive]} onPress={() => setCategory(item)}><Text style={[styles.miniChoiceText, item === category && styles.miniChoiceTextActive]}>{item}</Text></Pressable>)}</ScrollView><Text style={styles.fieldLabel}>TITLE</Text><TextInput style={styles.smallInput} value={title} onChangeText={setTitle} placeholder="What are we building?" /><Text style={styles.fieldLabel}>FIRST MESSAGE</Text><TextInput style={[styles.smallInput, styles.newTaskPrompt]} value={prompt} onChangeText={setPrompt} multiline placeholder="Describe what Codex should do…" /><Pressable disabled={busy || !cwd || !title.trim() || !prompt.trim()} style={[styles.primaryButton, (busy || !cwd || !title.trim() || !prompt.trim()) && styles.disabled]} onPress={() => void create()}>{busy ? <ActivityIndicator color="white" /> : <Text style={styles.primaryButtonText}>Create and start</Text>}</Pressable></ScrollView></SafeAreaView></Modal>;
 }
 
 function InboxModal({ api, items, onClose, onOpen, onOpenResult, onChanged }: { api: BoardApi; items: BoardNotification[]; onClose: () => void; onOpen: (id: string) => void; onOpenResult: (item: BoardNotification) => void; onChanged: () => void }) { return <Modal animationType="slide"><SafeAreaView style={styles.page}><View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Close inbox" style={styles.chatBackButton} onPress={onClose}><Text style={styles.closeIcon}>×</Text></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>Inbox</Text><Text style={styles.headerMeta}>Everything that needs your attention</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Mark all notifications as read" style={styles.topbarIconButton} onPress={()=>void api.markNotificationsRead().then(onChanged)}><Text style={styles.readAllIcon}>✓✓</Text></Pressable></View><FlatList contentContainerStyle={styles.mobileInbox} data={items} keyExtractor={item=>item.id} ListEmptyComponent={<View style={styles.emptyColumn}><Text style={styles.emptyTitle}>You're all caught up</Text></View>} renderItem={({item})=><Pressable style={[styles.mobileInboxItem,item.read&&styles.mobileInboxRead]} onPress={()=>{void api.markNotificationsRead(item.id);if(item.automation)onOpenResult(item);else if(item.threadId)onOpen(item.threadId)}}><View style={[styles.mobileInboxDot,item.kind==="error"&&styles.mobileInboxDotError,item.kind==="attention"&&styles.mobileInboxDotAttention]}/><View style={styles.categoryCopy}><Text style={styles.automationName}>{item.title}</Text><Text style={styles.automationDescription}>{item.automation?.name||item.message}</Text>{item.automation&&<Text style={styles.resultLink}>View quick result</Text>}</View><Text style={styles.openArrow}>→</Text></Pressable>} ListFooterComponent={items.length?<Pressable style={styles.moveCancel} onPress={()=>void api.clearNotifications().then(onChanged)}><Text style={styles.deleteAutomation}>Clear notifications</Text></Pressable>:null}/></SafeAreaView></Modal> }
 
-const mobileTourSteps = [["YOUR BOARD","Work, organized","Every Codex thread is a card. Categories follow your prefixes and projects remain filterable."],["REAL CHAT","Continue anywhere","Read history, send instructions, approve commands and answer Codex directly from mobile."],["AUTOMATIONS","Build your routine","Schedule recurring prompts and timed moves that run persistently on your PC."]];
+const mobileTourSteps = [["YOUR BOARDS","Projects, separated","Open every project as its own board. Categories still follow your prefixes, while All projects gives you a complete overview."],["REAL CHAT","Continue anywhere","Read history, send instructions, approve commands and answer Codex directly from mobile."],["AUTOMATIONS","Build your routine","Schedule recurring prompts and timed moves that run persistently on your PC."]];
 function MobileTour({onDone}:{onDone:()=>void}){const[index,setIndex]=useState(0);const step=mobileTourSteps[index];return <Modal animationType="fade"><SafeAreaView style={styles.tourMobile}><View style={styles.tourMobileArt}><View style={styles.mobileLogo}><View style={[styles.logoBar,{height:9}]}/><View style={[styles.logoBar,{height:18}]}/><View style={[styles.logoBar,{height:13}]}/></View><View style={styles.tourMiniBoard}><View style={styles.tourMiniColumn}/><View style={styles.tourMiniColumn}/><View style={styles.tourMiniColumn}/></View></View><View style={styles.tourMobileCopy}><Text style={styles.overviewEyebrow}>{step[0]}</Text><Text style={styles.tourMobileTitle}>{step[1]}</Text><Text style={styles.tourMobileText}>{step[2]}</Text><View style={styles.tourMobileDots}>{mobileTourSteps.map((_,dot)=><View key={dot} style={[styles.tourMobileDot,dot===index&&styles.tourMobileDotActive]}/>)}</View><Pressable style={styles.primaryButton} onPress={()=>index===mobileTourSteps.length-1?onDone():setIndex(index+1)}><Text style={styles.primaryButtonText}>{index===mobileTourSteps.length-1?"Start using Board":"Next"}</Text></Pressable><Pressable style={styles.moveCancel} onPress={onDone}><Text style={styles.moveCancelText}>Skip guide</Text></Pressable></View></SafeAreaView></Modal>}
 
 function AutomationManager({ api, automations, threads, categories, onClose, onChanged }: { api: BoardApi; automations: Automation[]; threads: ThreadDto[]; categories: string[]; onClose: () => void; onChanged: () => void }) {
@@ -409,12 +430,13 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
     };
   }, [api, refresh, scheduleRefresh]);
+  useEffect(() => { void loadSelectedBoard().then((saved) => { if (saved) setSelectedProject(saved); }); }, []);
   const discovered = [...new Set(threads.map((thread) => categoryFromTitle(thread.name)))];
   const categories = [...(config?.categories || []), ...discovered.filter((value) => !config?.categories.includes(value))];
-  const projects = [...new Map(threads.map((thread) => [projectKey(thread.cwd), { key: projectKey(thread.cwd), label: projectLabel(thread.cwd), cwd: thread.cwd || "Local project" }])).values()];
+  const projects = useMemo(() => projectBoards(threads), [threads]);
   const projectThreads = selectedProject === ALL_PROJECTS ? threads : threads.filter((thread) => projectKey(thread.cwd) === selectedProject);
   const dashboardCategories = categories.filter((category) => projectThreads.some((thread) => categoryFromTitle(thread.name) === category));
-  useEffect(() => { if (selectedProject !== ALL_PROJECTS && !projects.some((project) => project.key === selectedProject)) setSelectedProject(ALL_PROJECTS); }, [selectedProject, projects.map((project) => project.key).join("\u0000")]);
+  useEffect(() => { if (!loading && selectedProject !== ALL_PROJECTS && !projects.some((project) => project.key === selectedProject)) { setSelectedProject(ALL_PROJECTS); void saveSelectedBoard(ALL_PROJECTS); } }, [loading, selectedProject, projects.map((project) => project.key).join("\u0000")]);
   useEffect(() => {
     if (dashboardCategories.length > 0 && (!activeCategory || !dashboardCategories.includes(activeCategory))) setActiveCategory(dashboardCategories[0]);
   }, [activeCategory, dashboardCategories.join("\u0000")]);
@@ -426,12 +448,19 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   });
   const workingCount = projectThreads.filter(isWorking).length;
   const selectedProjectLabel = selectedProject === ALL_PROJECTS ? "All projects" : projects.find((project) => project.key === selectedProject)?.label || "Project";
+  function selectProjectBoard(key: string) {
+    setSelectedProject(key);
+    setSearch("");
+    setActiveCategory(null);
+    void saveSelectedBoard(key);
+  }
 
   return <SafeAreaView style={styles.page}>
     <MobileBoardHome
       connected={connected}
       loading={loading}
       projectLabel={selectedProjectLabel}
+      showProject={selectedProject === ALL_PROJECTS}
       totalCount={projectThreads.length}
       workingCount={workingCount}
       unreadCount={notifications.filter(item=>!item.read).length}
@@ -457,8 +486,8 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     {selected && <Chat thread={selected} api={api} queue={queues[selected.id] || []} requests={requests.filter((request) => requestThreadId(request) === selected.id)} eventRevision={eventRevision} onClose={() => setSelected(null)} onChanged={refresh} />}
     {managing && config && <CategoryManager config={config} threads={threads} api={api} onClose={() => setManaging(false)} onSaved={refresh} onOpenTour={onOpenTour} onDisconnect={() => void onDisconnect()} />}
     {automating && <AutomationManager api={api} automations={automations} threads={threads} categories={categories} onClose={() => setAutomating(false)} onChanged={refresh} />}
-    {choosingProject && <ChoiceModal title="Filter by project" options={[{ key: ALL_PROJECTS, label: "All projects", meta: `${threads.length} tasks` }, ...projects.map((project) => ({ key: project.key, label: project.label, meta: project.cwd }))]} selected={selectedProject} onSelect={setSelectedProject} onClose={() => setChoosingProject(false)} />}
-    {creatingTask && <NewTaskModal api={api} threads={threads} categories={categories} onClose={() => setCreatingTask(false)} onCreated={(thread) => { setCreatingTask(false); setSelected(thread); void refresh(); }} />}
+    {choosingProject && <ChoiceModal title="Choose a board" subtitle="Open a project dashboard or the complete overview." options={[{ key: ALL_PROJECTS, label: "All projects", meta: `${threads.length} tasks · overview` }, ...projects.map((project) => ({ key: project.key, label: project.label, meta: `${project.count} ${project.count === 1 ? "task" : "tasks"}` }))]} selected={selectedProject} onSelect={selectProjectBoard} onClose={() => setChoosingProject(false)} />}
+    {creatingTask && <NewTaskModal api={api} threads={threads} categories={categories} defaultProjectKey={selectedProject === ALL_PROJECTS ? undefined : selectedProject} onClose={() => setCreatingTask(false)} onCreated={(thread) => { setCreatingTask(false); setSelected(thread); void refresh(); }} />}
     {inboxOpen && <InboxModal api={api} items={notifications} onClose={()=>setInboxOpen(false)} onChanged={refresh} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item)}} onOpen={(id)=>{const thread=threads.find(item=>item.id===id);if(thread){setInboxOpen(false);setSelected(thread)}}}/>}
     {moving && <MoveDialog thread={moving} categories={categories} api={api} onClose={() => setMoving(null)} onMoved={refresh} />}
     {resultNotification&&<AutomationResultModal notification={resultNotification} onClose={()=>setResultNotification(null)} onOpenThread={(id)=>{const thread=threads.find(item=>item.id===id);setResultNotification(null);if(thread)setSelected(thread)}}/>}
@@ -485,7 +514,7 @@ const styles = StyleSheet.create({
   primaryButton: { minHeight: 52, marginTop: 12, borderRadius: 14, backgroundColor: "#6266EA", alignItems: "center", justifyContent: "center", paddingHorizontal: 18 }, compactButton: { minHeight: 42 }, primaryButtonText: { color: "white", fontWeight: "700" }, secondaryButton: { minHeight: 46, borderRadius: 12, backgroundColor: "white", alignItems: "center", justifyContent: "center", paddingHorizontal: 22 }, disabled: { opacity: 0.45 },
   input: { minHeight: 82, borderWidth: 1, borderColor: "#d7d9df", borderRadius: 12, padding: 12, backgroundColor: "white", textAlignVertical: "top" }, smallInput: { minHeight: 42, borderWidth: 1, borderColor: "#d7d9df", borderRadius: 9, padding: 10, backgroundColor: "white" },
   scanner: { flex: 1, backgroundColor: "black" }, scannerOverlay: { flex: 1, alignItems: "center", justifyContent: "space-between", padding: 28 }, scannerTitle: { color: "white", fontSize: 20, fontWeight: "700" }, scanFrame: { width: 250, height: 250, borderWidth: 3, borderColor: "white", borderRadius: 22 },
-  header: { minHeight: 70, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#DFE1E8", backgroundColor: "white" }, headerCopy: { flex: 1 }, headerTitle: { maxWidth: "76%", color: "#171923", fontSize: 17, fontWeight: "800", letterSpacing: -0.35 }, headerMeta: { marginTop: 3, color: "#858A96", fontSize: 10 }, headerAction: { color: "#6266EA", fontSize: 12, fontWeight: "700" }, back: { color: "#6266EA", fontSize: 25, lineHeight: 27 }, stop: { color: "#B6473A", fontSize: 11, fontWeight: "800" }, topbarIconButton: { width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 12, borderWidth: 1, borderColor: "#E1E3EA", backgroundColor: "#FAFAFC" }, topbarIconDanger: { borderColor: "#F0D5D1", backgroundColor: "#FFF0ED" }, stopIcon: { color: "#B6473A", fontSize: 12 }, readAllIcon: { color: "#6266EA", fontSize: 13, fontWeight: "800", letterSpacing: -3 },
+  header: { minHeight: 70, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#DFE1E8", backgroundColor: "white" }, headerCopy: { flex: 1 }, headerTitle: { maxWidth: "76%", color: "#171923", fontSize: 17, fontWeight: "800", letterSpacing: -0.35 }, headerMeta: { marginTop: 3, color: "#858A96", fontSize: 10 }, headerAction: { color: "#6266EA", fontSize: 12, fontWeight: "700" }, back: { color: "#6266EA", fontSize: 20, lineHeight: 20, includeFontPadding: false, textAlignVertical: "center" }, stop: { color: "#B6473A", fontSize: 11, fontWeight: "800" }, topbarIconButton: { width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 12, borderWidth: 1, borderColor: "#E1E3EA", backgroundColor: "#FAFAFC" }, topbarIconDanger: { borderColor: "#F0D5D1", backgroundColor: "#FFF0ED" }, stopIcon: { color: "#B6473A", fontSize: 12 }, readAllIcon: { color: "#6266EA", fontSize: 13, fontWeight: "800", letterSpacing: -3 },
   columns: { padding: 14, gap: 12 }, column: { width: 310, borderRadius: 14, backgroundColor: "#e9ebef", padding: 10 }, columnHeader: { height: 42, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 }, columnTitle: { color: "#31343b", fontSize: 13, fontWeight: "700" }, count: { color: "#777d88", backgroundColor: "white", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, fontSize: 11 },
   card: { marginBottom: 13, padding: 16, borderRadius: 16, borderWidth: 1, borderColor: "#E2E4EC", backgroundColor: "white", shadowColor: "#171923", shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.06, shadowRadius: 14, elevation: 2 }, workingCard: { borderColor: "#9295F2", borderLeftWidth: 4 }, cardTitle: { color: "#171923", fontSize: 17, lineHeight: 22, fontWeight: "700", letterSpacing: -0.3 }, cardPreview: { marginTop: 8, color: "#747987", fontSize: 13, lineHeight: 19 }, cardStatus: { color: "#6266EA", fontSize: 11, fontWeight: "700" }, workingText: { color: "#6266EA" }, empty: { textAlign: "center", color: "#777", marginTop: 50 },
   chat: { flex: 1 }, chatContent: { padding: 16, paddingBottom: 22, gap: 11 }, bubble: { maxWidth: "90%", borderRadius: 17, paddingHorizontal: 15, paddingVertical: 12 }, bubble_user: { alignSelf: "flex-end", backgroundColor: "#6266EA", borderBottomRightRadius: 5 }, bubble_assistant: { alignSelf: "flex-start", backgroundColor: "white", borderBottomLeftRadius: 5, borderWidth: 1, borderColor: "#E4E6ED" }, bubble_activity: { alignSelf: "stretch", maxWidth: "100%", backgroundColor: "#ECEEF4", borderRadius: 12 }, bubbleLabel: { marginBottom: 7, color: "#858A96", fontSize: 8, fontWeight: "800", letterSpacing: 1 }, bubbleText: { color: "#252832", fontSize: 14, lineHeight: 21 }, userText: { color: "white" },

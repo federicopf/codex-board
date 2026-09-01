@@ -101,6 +101,7 @@ export interface BoardWorkspaceProps {
   statusFilter: string;
   search: string;
   projects: ProjectInfo[];
+  projectStats: Record<string, { tasks: number; working: number }>;
   populatedCategories: string[];
   displayedCategories: string[];
   filteredThreads: BoardThread[];
@@ -140,9 +141,16 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
           <button className="sidebar-link" onClick={props.onAutomations}><Icon name="automations" /><span>Automations</span></button>
           <button className="sidebar-link" onClick={props.onInbox}><Icon name="bell" /><span>Inbox</span>{unread > 0 && <b>{unread}</b>}</button>
         </nav>
-        <div className="sidebar-section-label">Workspace</div>
-        <div className="sidebar-project">
-          <span>{projectLabel.slice(0, 1).toUpperCase()}</span><div><strong>{projectLabel}</strong><small>{props.visibleThreadCount} active tasks</small></div>
+        <div className="sidebar-section-label">Project boards</div>
+        <div className="sidebar-project-list" role="navigation" aria-label="Project boards">
+          {[{ key: ALL_PROJECTS, label: "All projects" }, ...props.projects].map((item) => {
+            const stats = props.projectStats[item.key] || { tasks: 0, working: 0 };
+            return <button key={item.key} type="button" className={`sidebar-project${props.project === item.key ? " active" : ""}`} aria-current={props.project === item.key ? "page" : undefined} onClick={() => props.onProjectChange(item.key)}>
+              <span>{item.key === ALL_PROJECTS ? "ALL" : item.label.slice(0, 2).toUpperCase()}</span>
+              <div><strong>{item.label}</strong><small>{stats.tasks} {stats.tasks === 1 ? "task" : "tasks"}{stats.working > 0 ? ` · ${stats.working} working` : ""}</small></div>
+              {stats.working > 0 && <i className="project-live-dot" aria-label={`${stats.working} working`} />}
+            </button>;
+          })}
         </div>
         <div className="sidebar-footer">
           <button className="sidebar-link remote-link" onClick={props.onRemote}><Icon name="remote" /><span>Remote access</span><i /></button>
@@ -153,7 +161,7 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
 
       <section className="workspace-view">
         <header className="workspace-titlebar">
-          <div><span className="eyebrow">Workspace</span><h1>{projectLabel}</h1><p>Move tasks through your workflow and continue any Codex conversation.</p></div>
+          <div><span className="eyebrow">Project board</span><h1>{projectLabel}</h1><p>{props.project === ALL_PROJECTS ? "A complete overview of work across every project." : "Move tasks through this project's workflow and continue any Codex conversation."}</p></div>
           <div className="titlebar-actions">
             <button className="button secondary" disabled={props.refreshing} onClick={props.onRefresh}><Icon name="refresh" className={props.refreshing ? "spin" : ""} /> Refresh</button>
             <button className="button secondary" onClick={props.onCategories}><Icon name="categories" /> Categories</button>
@@ -163,7 +171,6 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
 
         <div className="workspace-commandbar">
           <div className="filter-group">
-            <label className="select-control"><span>Project</span><select id="project-filter" value={props.project} onChange={(event) => props.onProjectChange(event.target.value)}><option value={ALL_PROJECTS}>All projects</option>{props.projects.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select><Icon name="chevronDown" /></label>
             <label className="select-control"><span>Status</span><select value={props.statusFilter} onChange={(event) => props.onStatusChange(event.target.value)}><option value={ALL_STATUSES}>All statuses</option>{props.populatedCategories.map((category) => <option key={category} value={category}>{category}</option>)}</select><Icon name="chevronDown" /></label>
           </div>
           <label className="search-control"><Icon name="search" /><input value={props.search} onChange={(event) => props.onSearchChange(event.target.value)} placeholder="Search tasks…" />{props.search && <button type="button" aria-label="Clear search" onClick={() => props.onSearchChange("")}>×</button>}</label>
@@ -171,7 +178,7 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
         </div>
 
         {props.displayedCategories.length === 0 ? (
-          <div className="empty-board"><div className="empty-illustration"><Icon name="search" /></div><h2>No tasks match this view</h2><p>Change the project, status, or search filter to see more work.</p>{(props.search || props.statusFilter !== ALL_STATUSES || props.project !== ALL_PROJECTS) && <button className="button secondary" onClick={() => { props.onSearchChange(""); props.onStatusChange(ALL_STATUSES); props.onProjectChange(ALL_PROJECTS); }}>Clear all filters</button>}</div>
+          <div className="empty-board"><div className="empty-illustration"><Icon name="search" /></div><h2>No tasks match this board</h2><p>Change the status or search to see more work in this project.</p>{(props.search || props.statusFilter !== ALL_STATUSES) && <button className="button secondary" onClick={() => { props.onSearchChange(""); props.onStatusChange(ALL_STATUSES); }}>Clear filters</button>}</div>
         ) : (
           <div className="board" aria-label="Task board">
             {props.displayedCategories.map((category) => <BoardColumn key={category} category={category} threads={props.filteredThreads.filter((thread) => thread.category === category)} pendingIds={props.pendingIds} workingIds={props.workingIds} queues={props.queues} showProject={props.project === ALL_PROJECTS} onOpen={props.onOpen} onMove={props.onMove} onRename={props.onRename} />)}

@@ -54,10 +54,11 @@ const text = (value: JsonValue | undefined): string => typeof value === "string"
 const eventThreadId = (event: CodexEvent): string => text(record(event.params).threadId);
 type CategoryDialogState = { mode: "create" } | { mode: "rename"; category: string };
 interface Toast { id: number; threadId: string; title: string; message: string; kind: "done" | "error"; }
+const PROJECT_BOARD_KEY = "codex-board.project-board.v1";
 
 function App() {
   const [threads, setThreads] = useState<BoardThread[]>([]);
-  const [project, setProject] = useState(ALL_PROJECTS);
+  const [project, setProject] = useState(() => localStorage.getItem(PROJECT_BOARD_KEY) || ALL_PROJECTS);
   const [statusFilter, setStatusFilter] = useState(ALL_STATUSES);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -269,10 +270,18 @@ function App() {
   }, [threads]);
 
   useEffect(() => {
-    if (project !== ALL_PROJECTS && !projects.some(({ key }) => key === project)) {
+    if (!loading && project !== ALL_PROJECTS && !projects.some(({ key }) => key === project)) {
       setProject(ALL_PROJECTS);
+      localStorage.setItem(PROJECT_BOARD_KEY, ALL_PROJECTS);
     }
-  }, [project, projects]);
+  }, [loading, project, projects]);
+
+  const selectProjectBoard = useCallback((key: string) => {
+    setProject(key);
+    setStatusFilter(ALL_STATUSES);
+    setSearch("");
+    localStorage.setItem(PROJECT_BOARD_KEY, key);
+  }, []);
 
   const visibleThreads = useMemo(
     () => (project === ALL_PROJECTS ? threads : threads.filter((item) => item.projectKey === project)),
@@ -296,12 +305,23 @@ function App() {
     });
   }, [discoveredCategories, persistBoardConfig]);
   const categories = categoryOrder;
-  const populatedCategories = useMemo(() => categories.filter((category) => threads.some((thread) => thread.category === category)), [categories, threads]);
+  const populatedCategories = useMemo(() => categories.filter((category) => visibleThreads.some((thread) => thread.category === category)), [categories, visibleThreads]);
   const dashboardCategories = useMemo(
     () => categories.filter((category) => filteredThreads.some((thread) => thread.category === category)),
     [categories, filteredThreads],
   );
   const displayedCategories = statusFilter === ALL_STATUSES ? dashboardCategories : dashboardCategories.filter((category) => category === statusFilter);
+  const projectStats = useMemo(() => {
+    const stats: Record<string, { tasks: number; working: number }> = {
+      [ALL_PROJECTS]: { tasks: threads.length, working: threads.filter((thread) => workingIds.has(thread.id)).length },
+    };
+    for (const item of projects) {
+      const projectThreads = threads.filter((thread) => thread.projectKey === item.key);
+      stats[item.key] = { tasks: projectThreads.length, working: projectThreads.filter((thread) => workingIds.has(thread.id)).length };
+    }
+    return stats;
+  }, [projects, threads, workingIds]);
+  const visibleWorkingCount = visibleThreads.filter((thread) => workingIds.has(thread.id)).length;
   const activeThread = threads.find((thread) => thread.id === activeId) ?? null;
   const chatThread = threads.find((thread) => thread.id === chatThreadId) ?? null;
   const movingThread = threads.find((thread) => thread.id === movingThreadId) ?? null;
@@ -489,17 +509,18 @@ function App() {
           statusFilter={statusFilter}
           search={search}
           projects={projects}
+          projectStats={projectStats}
           populatedCategories={populatedCategories}
           displayedCategories={displayedCategories}
           filteredThreads={filteredThreads}
           visibleThreadCount={visibleThreads.length}
-          workingCount={workingIds.size}
+          workingCount={visibleWorkingCount}
           pendingIds={pendingIds}
           workingIds={workingIds}
           queues={queues}
           notifications={notifications}
           refreshing={refreshing}
-          onProjectChange={setProject}
+          onProjectChange={selectProjectBoard}
           onStatusChange={setStatusFilter}
           onSearchChange={setSearch}
           onRefresh={() => void refresh(true)}
@@ -548,7 +569,7 @@ function App() {
       {settingsOpen && <BoardSettingsDialog approvalMode={approvalMode} onApprovalMode={setApprovalMode} onClose={() => setSettingsOpen(false)} />}
       {remoteDialog && <RemoteDialog onClose={() => setRemoteDialog(false)} />}
       {automationsDialog && <AutomationsDialog threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}
-      {newTaskDialog && <NewTaskDialog threads={threads} categories={categories} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt) => { const created = await createThread(cwd, category, title, prompt); await refresh(true); setChatThreadId(created.id); }} />}
+      {newTaskDialog && <NewTaskDialog threads={threads} categories={categories} defaultProjectKey={project === ALL_PROJECTS ? undefined : project} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt) => { const created = await createThread(cwd, category, title, prompt); await refresh(true); setChatThreadId(created.id); }} />}
       {productTour && <ProductTour onClose={() => { localStorage.setItem("codex-board.tour.v1", "done"); setProductTour(false); }} />}
       {inboxOpen && <InboxDialog items={notifications} onClose={()=>setInboxOpen(false)} onReadAll={()=>void markNotificationsRead().then(()=>listNotifications().then(setNotifications))} onClear={()=>void clearNotifications().then(()=>setNotifications([]))} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item);if(!item.read)void markNotificationsRead(item.id);}} onOpen={(threadId)=>{setInboxOpen(false);setChatThreadId(threadId);const item=notifications.find(entry=>entry.threadId===threadId&&!entry.read);if(item)void markNotificationsRead(item.id);}} />}
       {resultNotification && <AutomationResultDialog notification={resultNotification} onClose={()=>setResultNotification(null)} onOpenThread={(threadId)=>{setResultNotification(null);setChatThreadId(threadId);}} />}

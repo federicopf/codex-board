@@ -168,14 +168,13 @@ impl AutomationStore {
                 every_minutes,
                 start_in_minutes,
             } => {
-                if every_minutes == 0 {
-                    return Err("Recurring interval must be at least one minute".into());
-                }
+                minutes_ms(every_minutes, "Recurring interval")?;
+                let start_ms = minutes_ms(start_in_minutes.max(1), "Start delay")?;
                 AutomationAction::RecurringMessage {
                     thread_id: required(thread_id, "Thread")?,
                     prompt: required(prompt, "Prompt")?,
                     every_minutes,
-                    next_run_at: now_ms().saturating_add((start_in_minutes.max(1) * 60_000) as i64),
+                    next_run_at: now_ms().saturating_add(start_ms),
                 }
             }
             CreateAutomationAction::CategoryPipeline {
@@ -188,9 +187,7 @@ impl AutomationStore {
                 if from_category == to_category {
                     return Err("Pipeline categories must be different".into());
                 }
-                if after_minutes == 0 {
-                    return Err("Pipeline delay must be at least one minute".into());
-                }
+                minutes_ms(after_minutes, "Pipeline delay")?;
                 AutomationAction::CategoryPipeline {
                     from_category,
                     to_category,
@@ -362,7 +359,9 @@ impl AutomationStore {
                         if let AutomationAction::RecurringMessage { next_run_at, .. } =
                             &mut current.action
                         {
-                            *next_run_at = now.saturating_add((every_minutes * 60_000) as i64);
+                            *next_run_at = now.saturating_add(
+                                minutes_ms(every_minutes, "Recurring interval").unwrap_or(i64::MAX),
+                            );
                         }
                     }
                     let _ = self.persist(&state);
@@ -462,6 +461,7 @@ impl AutomationStore {
                         continue;
                     };
                     let mut active_ids = Vec::new();
+                    let mut tracking_changed = false;
                     for thread in threads {
                         if title_category(thread.name.as_deref()) != from_category {
                             continue;
@@ -470,9 +470,17 @@ impl AutomationStore {
                         let key = format!("{}:{}", automation.id, thread.id);
                         let entered = {
                             let mut state = self.state.lock().await;
-                            *state.entered_at.entry(key.clone()).or_insert(now)
+                            if let Some(entered) = state.entered_at.get(&key) {
+                                *entered
+                            } else {
+                                state.entered_at.insert(key.clone(), now);
+                                tracking_changed = true;
+                                now
+                            }
                         };
-                        if now.saturating_sub(entered) < (after_minutes * 60_000) as i64 {
+                        if now.saturating_sub(entered)
+                            < minutes_ms(after_minutes, "Pipeline delay").unwrap_or(i64::MAX)
+                        {
                             continue;
                         }
                         let title =
@@ -512,11 +520,15 @@ impl AutomationStore {
                     }
                     let prefix = format!("{}:", automation.id);
                     let mut state = self.state.lock().await;
+                    let tracked_before = state.entered_at.len();
                     state.entered_at.retain(|key, _| {
                         !key.starts_with(&prefix)
                             || active_ids.iter().any(|id| key == &format!("{prefix}{id}"))
                     });
-                    let _ = self.persist(&state);
+                    tracking_changed |= tracked_before != state.entered_at.len();
+                    if tracking_changed {
+                        let _ = self.persist(&state);
+                    }
                 }
                 AutomationAction::ScheduledCategoryPipeline {
                     from_category,
@@ -557,7 +569,14 @@ impl AutomationStore {
                         } else {
                             Some(format!("{} task(s) could not be moved", errors.len()))
                         };
-                        current.enabled = false;
+                        if errors.is_empty() {
+                            current.enabled = false;
+                        } else if let AutomationAction::ScheduledCategoryPipeline {
+                            run_at, ..
+                        } = &mut current.action
+                        {
+                            *run_at = now.saturating_add(60_000);
+                        }
                     }
                     let _ = self.persist(&state);
                     drop(state);
@@ -635,6 +654,16 @@ fn category(value: String) -> Result<String, String> {
     } else {
         Ok(value)
     }
+}
+
+fn minutes_ms(minutes: u64, label: &str) -> Result<i64, String> {
+    if minutes == 0 {
+        return Err(format!("{label} must be at least one minute"));
+    }
+    minutes
+        .checked_mul(60_000)
+        .and_then(|value| i64::try_from(value).ok())
+        .ok_or_else(|| format!("{label} is too large"))
 }
 
 fn valid_weekdays(mut weekdays: Vec<u8>) -> Result<Vec<u8>, String> {
@@ -765,5 +794,18 @@ mod tests {
         );
         // UTC+1 is represented by JavaScript's getTimezoneOffset as -60.
         assert_eq!(next_calendar_run(0, &[4], 120, -60), 3_600_000);
+    }
+
+    #[test]
+    fn automation_minute_values_are_checked_without_overflow() {
+        assert_eq!(minutes_ms(1, "Interval").unwrap(), 60_000);
+        assert_eq!(
+            minutes_ms(0, "Interval").unwrap_err(),
+            "Interval must be at least one minute"
+        );
+        assert_eq!(
+            minutes_ms(u64::MAX, "Interval").unwrap_err(),
+            "Interval is too large"
+        );
     }
 }

@@ -11,6 +11,7 @@ interface MobileBoardHomeProps {
   connected: boolean;
   loading: boolean;
   projectLabel: string;
+  showProject: boolean;
   totalCount: number;
   workingCount: number;
   unreadCount: number;
@@ -37,11 +38,11 @@ function Logo() {
   return <View style={styles.logo}><View style={[styles.logoBar,{height:8}]} /><View style={[styles.logoBar,{height:17}]} /><View style={[styles.logoBar,{height:12}]} /></View>;
 }
 
-function TaskCard({ thread, queueCount, working, title, project, onOpen, onMove }: { thread: ThreadDto; queueCount: number; working: boolean; title: string; project: string; onOpen: () => void; onMove: () => void }) {
+function TaskCard({ thread, queueCount, working, title, project, showProject, onOpen, onMove }: { thread: ThreadDto; queueCount: number; working: boolean; title: string; project: string; showProject: boolean; onOpen: () => void; onMove: () => void }) {
   return (
     <View style={[styles.card,working&&styles.workingCard]}>
       <Pressable onPress={onOpen} accessibilityRole="button" accessibilityLabel={`Open ${title}`}>
-        <View style={styles.cardTop}><Text style={styles.projectPill} numberOfLines={1}>{project}</Text>{working&&<View style={styles.workingPill}><View style={styles.liveDot}/><Text style={styles.workingPillText}>Working</Text></View>}</View>
+        <View style={styles.cardTop}>{showProject?<Text style={styles.projectPill} numberOfLines={1}>{project}</Text>:<View/>}{working&&<View style={styles.workingPill}><View style={styles.liveDot}/><Text style={styles.workingPillText}>Working</Text></View>}</View>
         <Text style={styles.cardTitle}>{title}</Text>
         {thread.preview ? <Text style={styles.cardPreview} numberOfLines={2}>{thread.preview}</Text> : null}
       </Pressable>
@@ -63,12 +64,12 @@ export function MobileBoardHome(props: MobileBoardHomeProps) {
       </View>
 
       <View style={styles.overview}>
-        <View><Text style={styles.eyebrow}>CURRENT WORKSPACE</Text><Text style={styles.overviewTitle}>{props.projectLabel}</Text><Text style={styles.overviewSubtitle}>{props.totalCount} active {props.totalCount===1?"task":"tasks"}</Text></View>
+        <View><Text style={styles.eyebrow}>CURRENT BOARD</Text><Text style={styles.overviewTitle}>{props.projectLabel}</Text><Text style={styles.overviewSubtitle}>{props.totalCount} active {props.totalCount===1?"task":"tasks"}</Text></View>
         <View style={[styles.liveMetric,props.workingCount>0&&styles.liveMetricActive]}><View style={styles.metricRow}><View style={[styles.metricDot,props.workingCount>0&&styles.metricDotActive]}/><Text style={styles.metricNumber}>{props.workingCount}</Text></View><Text style={styles.metricLabel}>working now</Text></View>
       </View>
 
       <View style={styles.controls}>
-        <Pressable style={styles.projectControl} onPress={props.onProject}><View><Text style={styles.controlLabel}>PROJECT</Text><Text style={styles.controlValue} numberOfLines={1}>{props.projectLabel}</Text></View><Text style={styles.chevron}>⌄</Text></Pressable>
+        <Pressable style={styles.projectControl} onPress={props.onProject}><View><Text style={styles.controlLabel}>SWITCH BOARD</Text><Text style={styles.controlValue} numberOfLines={1}>{props.projectLabel}</Text></View><Text style={styles.chevron}>⌄</Text></Pressable>
         <View style={styles.searchControl}><Text style={styles.searchIcon}>⌕</Text><TextInput style={styles.searchInput} value={props.search} onChangeText={props.onSearch} placeholder="Search tasks" placeholderTextColor={colors.textSoft}/>{props.search?<Pressable onPress={()=>props.onSearch("")}><Text style={styles.clearSearch}>×</Text></Pressable>:null}</View>
       </View>
 
@@ -81,7 +82,7 @@ export function MobileBoardHome(props: MobileBoardHomeProps) {
         keyExtractor={thread=>thread.id}
         ListHeaderComponent={<View style={styles.listHeader}><View><Text style={styles.listTitle}>{props.activeCategory||"Tasks"}</Text><Text style={styles.listSubtitle}>{props.search?`Results for “${props.search}”`:"Your current stage"}</Text></View><Text style={styles.listCount}>{props.threads.length}</Text></View>}
         ListEmptyComponent={<View style={styles.empty}>{props.loading?<><ActivityIndicator color={colors.primary}/><Text style={styles.emptyText}>Loading your workspace…</Text></>:<><View style={styles.emptyIcon}><Text>⌕</Text></View><Text style={styles.emptyTitle}>No tasks found</Text><Text style={styles.emptyText}>{props.search?"Try a different search.":"This stage has no tasks for the selected project."}</Text></>}</View>}
-        renderItem={({item})=><TaskCard thread={item} queueCount={props.queues[item.id]?.length||0} working={props.isWorking(item)} title={props.titleFor(item)} project={props.projectFor(item)} onOpen={()=>props.onOpen(item)} onMove={()=>props.onMove(item)}/>} />
+        renderItem={({item})=><TaskCard thread={item} queueCount={props.queues[item.id]?.length||0} working={props.isWorking(item)} title={props.titleFor(item)} project={props.projectFor(item)} showProject={props.showProject} onOpen={()=>props.onOpen(item)} onMove={()=>props.onMove(item)}/>} />
 
       <View style={styles.bottomNav}>
         <Pressable style={styles.navItem} accessibilityRole="button" accessibilityState={{selected:true}}><Text style={[styles.navIcon,styles.navIconActive]}>⌂</Text><Text style={[styles.navLabel,styles.navLabelActive]}>Board</Text></Pressable>

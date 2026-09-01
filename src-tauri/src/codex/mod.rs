@@ -281,10 +281,10 @@ impl CodexClient {
     }
 
     pub fn shutdown_best_effort(&self) {
-        if let Ok(mut running) = self.running.try_lock() {
-            if let Some(client) = running.take() {
-                client.shutdown_now();
-            }
+        if let Ok(mut running) = self.running.try_lock()
+            && let Some(client) = running.take()
+        {
+            client.shutdown_now();
         }
     }
 }

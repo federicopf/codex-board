@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { MarkdownContent } from "./MarkdownContent";
+import { formatCodexDirectives, MarkdownContent } from "./MarkdownContent";
 
 describe("MarkdownContent", () => {
   it("renders common chat formatting", () => {
@@ -18,5 +18,16 @@ describe("MarkdownContent", () => {
     );
     expect(html).toContain('type="checkbox"');
     expect(html).toContain("<table>");
+  });
+
+  it("turns Codex git directives into readable operation summaries", () => {
+    const source = "::git-stage{cwd=\"/var/www/travelmanager\"}\\\n::git-commit{cwd=\"/var/www/travelmanager\"}\\\n::git-push{cwd=\"/var/www/travelmanager\" branch=\"main\"}";
+    const formatted = formatCodexDirectives(source);
+    expect(formatted).not.toContain("::git-");
+    expect(formatted).toContain("**Stage changes**");
+    expect(formatted).toContain("branch `main`");
+    const html = renderToStaticMarkup(<MarkdownContent>{source}</MarkdownContent>);
+    expect(html).toContain("<li>");
+    expect(html).toContain("Push changes");
   });
 });

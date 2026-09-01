@@ -197,7 +197,6 @@ async fn clear_notifications(
 pub fn run() {
     let client = Arc::new(CodexClient::new());
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .manage(client.clone())
         .setup(move |app| {
             let directory = app.path().app_data_dir()?;

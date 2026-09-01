@@ -53,6 +53,29 @@ export interface BoardNotification {
   automation?: AutomationResultDetails | null;
 }
 
+const directiveLabels: Record<string, string> = {
+  "git-stage": "Stage changes",
+  "git-commit": "Commit changes",
+  "git-push": "Push changes",
+};
+
+function inlineCode(value: string): string {
+  return `\`${value.replace(/`/g, "\\`")}\``;
+}
+
+export function formatCodexDirectives(value: string): string {
+  return value.replace(/^::([\w-]+)\{([^}]*)\}\\?(?:&#x20;)?\s*$/gm, (_line, name: string, rawAttributes: string) => {
+    const attributes = new Map<string, string>();
+    for (const match of rawAttributes.matchAll(/([\w-]+)="([^"]*)"/g)) attributes.set(match[1], match[2]);
+    const label = directiveLabels[name] || name.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+    const details = [
+      attributes.get("cwd") && inlineCode(attributes.get("cwd")!),
+      attributes.get("branch") && `branch ${inlineCode(attributes.get("branch")!)}`,
+    ].filter(Boolean).join(" · ");
+    return `- **${label}**${details ? ` — ${details}` : ""}`;
+  });
+}
+
 export type AutomationAction =
     | { kind: "recurringMessage"; threadId: string; prompt: string; everyMinutes: number; nextRunAt: number }
     | { kind: "scheduledMessage"; threadId: string; prompt: string; runAt: number }

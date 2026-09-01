@@ -1,5 +1,6 @@
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Markdown from "react-native-markdown-display";
+import { formatCodexDirectives } from "@codex-board/protocol";
 import type { BoardNotification } from "@codex-board/protocol";
 import { colors, radius, shadows, spacing } from "./theme";
 
@@ -20,7 +21,7 @@ export function AutomationResultModal({ notification, onClose, onOpenThread }: {
             <View style={styles.headerCopy}><Text style={styles.eyebrow}>AUTOMATION RESULT</Text><Text style={styles.title}>{result.name}</Text><Text style={styles.meta}>{failed?"Finished with an error":"Completed successfully"}{result.durationMs?` · ${Math.max(1,Math.round(result.durationMs/1000))}s`:""}</Text></View>
             <Pressable style={styles.close} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close result"><Text style={styles.closeText}>×</Text></Pressable>
           </View>
-          <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}><Markdown style={markdownStyles}>{result.result}</Markdown></ScrollView>
+          <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}><Markdown style={markdownStyles}>{formatCodexDirectives(result.result)}</Markdown></ScrollView>
           <View style={styles.footer}>
             <Pressable style={styles.secondary} onPress={onClose}><Text style={styles.secondaryText}>Close</Text></Pressable>
             {notification.threadId?<Pressable style={styles.primary} onPress={()=>onOpenThread(notification.threadId!)}><Text style={styles.primaryText}>Open conversation</Text></Pressable>:null}

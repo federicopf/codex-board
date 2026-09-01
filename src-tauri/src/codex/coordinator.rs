@@ -93,14 +93,40 @@ impl TurnCoordinator {
                         .or_default()
                         .active = true;
                 } else if event.method == "turn/completed" {
-                    coordinator.finish_and_continue(thread_id).await;
+                    {
+                        coordinator
+                            .threads
+                            .lock()
+                            .await
+                            .entry(thread_id.clone())
+                            .or_default()
+                            .active = false;
+                    }
+                    let queued = coordinator.clone();
+                    tauri::async_runtime::spawn(async move {
+                        queued.drain_queue(thread_id).await;
+                    });
                 }
+            }
+        });
+        let coordinator = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let queued_threads = coordinator
+                .threads
+                .lock()
+                .await
+                .iter()
+                .filter(|(_, state)| !state.queue.is_empty())
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>();
+            for thread_id in queued_threads {
+                coordinator.clone().drain_queue(thread_id).await;
             }
         });
     }
 
     pub async fn send(
-        &self,
+        self: &Arc<Self>,
         thread_id: String,
         text: String,
     ) -> Result<SendOutcome, CodexErrorDto> {
@@ -108,7 +134,7 @@ impl TurnCoordinator {
     }
 
     pub async fn send_automation(
-        &self,
+        self: &Arc<Self>,
         thread_id: String,
         text: String,
         automation_id: String,
@@ -126,7 +152,7 @@ impl TurnCoordinator {
     }
 
     async fn send_with_context(
-        &self,
+        self: &Arc<Self>,
         thread_id: String,
         text: String,
         automation: Option<AutomationContext>,
@@ -161,7 +187,8 @@ impl TurnCoordinator {
             threads.entry(thread_id.clone()).or_default().active |= active_in_codex;
         }
         let state = threads.entry(thread_id.clone()).or_default();
-        if state.active {
+        if state.active || !state.queue.is_empty() {
+            let should_drain = !state.active;
             let message = QueuedMessage {
                 id: random_id(),
                 text,
@@ -173,6 +200,13 @@ impl TurnCoordinator {
             drop(threads);
             self.persist(persisted);
             self.emit_queue(&thread_id, snapshot).await;
+            if should_drain {
+                let coordinator = self.clone();
+                let queued_thread_id = thread_id.clone();
+                tauri::async_runtime::spawn(async move {
+                    coordinator.drain_queue(queued_thread_id).await;
+                });
+            }
             return Ok(SendOutcome {
                 queued: true,
                 message_id: Some(message.id),
@@ -199,12 +233,18 @@ impl TurnCoordinator {
                 })
             }
             Err(error) => {
-                self.threads
-                    .lock()
-                    .await
-                    .entry(thread_id)
-                    .or_default()
-                    .active = false;
+                let should_drain = {
+                    let mut threads = self.threads.lock().await;
+                    let state = threads.entry(thread_id.clone()).or_default();
+                    state.active = false;
+                    !state.queue.is_empty()
+                };
+                if should_drain {
+                    let coordinator = self.clone();
+                    tauri::async_runtime::spawn(async move {
+                        coordinator.drain_queue(thread_id).await;
+                    });
+                }
                 Err(error)
             }
         }
@@ -215,10 +255,8 @@ impl TurnCoordinator {
             .lock()
             .await
             .iter()
-            .filter_map(|(id, state)| {
-                (!state.queue.is_empty())
-                    .then(|| (id.clone(), state.queue.iter().cloned().collect()))
-            })
+            .filter(|(_, state)| !state.queue.is_empty())
+            .map(|(id, state)| (id.clone(), state.queue.iter().cloned().collect()))
             .collect()
     }
 
@@ -240,22 +278,14 @@ impl TurnCoordinator {
         removed
     }
 
-    async fn finish_and_continue(&self, thread_id: String) {
-        let (next, snapshot, persisted) = {
+    async fn drain_queue(self: Arc<Self>, thread_id: String) {
+        let next = {
             let mut threads = self.threads.lock().await;
-            let state = threads.entry(thread_id.clone()).or_default();
-            state.active = false;
-            let next = state.queue.pop_front();
-            let snapshot = state.queue.iter().cloned().collect::<Vec<_>>();
-            if next.is_some() {
-                state.active = true;
-            }
-            let persisted = queue_snapshot(&threads);
-            (next, snapshot, persisted)
+            reserve_next(&mut threads, &thread_id)
         };
-        self.persist(persisted);
-        self.emit_queue(&thread_id, snapshot).await;
-        if let Some(message) = next {
+        let Some(message) = next else { return };
+        let mut last_error = None;
+        for attempt in 0..4_u32 {
             let submitted_text = automation_text(&message.text, message.automation.as_ref());
             match self
                 .client
@@ -263,27 +293,54 @@ impl TurnCoordinator {
                 .await
             {
                 Ok(response) => {
+                    let (snapshot, persisted) = {
+                        let mut threads = self.threads.lock().await;
+                        acknowledge_started(&mut threads, &thread_id, &message.id);
+                        let state = threads.entry(thread_id.clone()).or_default();
+                        (
+                            state.queue.iter().cloned().collect::<Vec<_>>(),
+                            queue_snapshot(&threads),
+                        )
+                    };
+                    self.persist(persisted);
+                    self.emit_queue(&thread_id, snapshot).await;
                     if let Some(context) = message.automation.as_ref() {
                         self.emit_automation_started(&thread_id, &response, context)
                             .await;
                     }
+                    return;
                 }
                 Err(error) => {
-                    self.threads
-                        .lock()
-                        .await
-                        .entry(thread_id.clone())
-                        .or_default()
-                        .active = false;
-                    self.client
-                        .emit_local_event(
-                            "board/queue/error",
-                            json!({ "threadId": thread_id, "message": error.message }),
-                        )
+                    last_error = Some(error.message);
+                    if attempt < 3 {
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            500 * 2_u64.pow(attempt),
+                        ))
                         .await;
+                    }
                 }
             }
         }
+        let (snapshot, persisted) = {
+            let mut threads = self.threads.lock().await;
+            release_for_retry(&mut threads, &thread_id);
+            let state = threads.entry(thread_id.clone()).or_default();
+            (
+                state.queue.iter().cloned().collect::<Vec<_>>(),
+                queue_snapshot(&threads),
+            )
+        };
+        self.persist(persisted);
+        self.emit_queue(&thread_id, snapshot).await;
+        self.client
+            .emit_local_event(
+                "board/queue/error",
+                json!({
+                    "threadId": thread_id,
+                    "message": last_error.unwrap_or_else(|| "Queued message could not be started".into())
+                }),
+            )
+            .await;
     }
 
     async fn emit_automation_started(
@@ -331,10 +388,41 @@ fn queue_snapshot(
 ) -> HashMap<String, VecDeque<QueuedMessage>> {
     threads
         .iter()
-        .filter_map(|(id, state)| {
-            (!state.queue.is_empty()).then(|| (id.clone(), state.queue.clone()))
-        })
+        .filter(|(_, state)| !state.queue.is_empty())
+        .map(|(id, state)| (id.clone(), state.queue.clone()))
         .collect()
+}
+
+fn reserve_next(
+    threads: &mut HashMap<String, ThreadState>,
+    thread_id: &str,
+) -> Option<QueuedMessage> {
+    let state = threads.entry(thread_id.to_owned()).or_default();
+    if state.active {
+        return None;
+    }
+    let next = state.queue.front().cloned();
+    state.active = next.is_some();
+    next
+}
+
+fn acknowledge_started(
+    threads: &mut HashMap<String, ThreadState>,
+    thread_id: &str,
+    message_id: &str,
+) {
+    let state = threads.entry(thread_id.to_owned()).or_default();
+    if state
+        .queue
+        .front()
+        .is_some_and(|queued| queued.id == message_id)
+    {
+        state.queue.pop_front();
+    }
+}
+
+fn release_for_retry(threads: &mut HashMap<String, ThreadState>, thread_id: &str) {
+    threads.entry(thread_id.to_owned()).or_default().active = false;
 }
 
 fn automation_text(text: &str, automation: Option<&AutomationContext>) -> String {
@@ -385,5 +473,35 @@ mod tests {
         assert!(submitted.starts_with("Run the report\n\n<!-- codex-board-automation:"));
         assert!(submitted.contains("only results found and operations performed"));
         assert_eq!(automation_text("Manual prompt", None), "Manual prompt");
+    }
+
+    #[test]
+    fn queued_message_stays_durable_until_the_turn_is_accepted() {
+        let first = QueuedMessage {
+            id: "first".into(),
+            text: "one".into(),
+            automation: None,
+        };
+        let second = QueuedMessage {
+            id: "second".into(),
+            text: "two".into(),
+            automation: None,
+        };
+        let mut threads = HashMap::from([(
+            "thread".into(),
+            ThreadState {
+                active: false,
+                queue: VecDeque::from([first.clone(), second]),
+            },
+        )]);
+
+        assert_eq!(reserve_next(&mut threads, "thread").unwrap().id, first.id);
+        assert_eq!(threads["thread"].queue.len(), 2);
+        assert!(reserve_next(&mut threads, "thread").is_none());
+
+        release_for_retry(&mut threads, "thread");
+        assert_eq!(reserve_next(&mut threads, "thread").unwrap().id, first.id);
+        acknowledge_started(&mut threads, "thread", &first.id);
+        assert_eq!(threads["thread"].queue.front().unwrap().id, "second");
     }
 }

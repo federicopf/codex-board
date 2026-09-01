@@ -7,6 +7,7 @@ Codex Board is an unofficial, open-source board and chat client for local Codex 
 ## Features
 
 - Dynamic columns from every task-title prefix before the first exact ` - ` separator (`WIP - …`, `To Plan - …`, or any custom prefix).
+- Separate project boards on desktop and mobile, with a persistent board switcher and an optional all-projects overview.
 - Custom empty categories, renaming and drag-to-reorder with no fixed category list.
 - Dragging cards between columns renames the real Codex task and verifies that Codex persisted the title.
 - Internal chat with persisted history, streamed responses, Markdown, collapsible technical activity and turn interruption.

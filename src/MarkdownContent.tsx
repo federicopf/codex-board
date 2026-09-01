@@ -1,6 +1,8 @@
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { formatCodexDirectives } from "@codex-board/protocol";
+export { formatCodexDirectives } from "@codex-board/protocol";
 
 export function MarkdownContent({ children }: { children: string }) {
   return (
@@ -19,7 +21,7 @@ export function MarkdownContent({ children }: { children: string }) {
           ),
         }}
       >
-        {children}
+        {formatCodexDirectives(children)}
       </ReactMarkdown>
     </div>
   );

@@ -457,22 +457,18 @@ fn start_request_worker(state: ApiState) {
                 .unwrap_or(false)
                 .then(|| automatic_approval(&event.method, &event.params))
                 .flatten();
-            if let Some(result) = automatic {
-                if state
+            if let Some(result) = automatic
+                && state
                     .client
                     .respond_to_request(request_id.clone(), result)
                     .await
                     .is_ok()
-                {
-                    state
-                        .client
-                        .emit_local_event(
-                            "serverRequest/resolved",
-                            json!({ "requestId": request_id }),
-                        )
-                        .await;
-                    continue;
-                }
+            {
+                state
+                    .client
+                    .emit_local_event("serverRequest/resolved", json!({ "requestId": request_id }))
+                    .await;
+                continue;
             }
             let mut pending = state.pending_requests.lock().await;
             if !pending

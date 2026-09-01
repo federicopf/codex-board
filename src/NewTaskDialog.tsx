@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
 import type { BoardThread } from "./types";
 
-export function NewTaskDialog({ threads, categories, onClose, onCreate }: { threads: BoardThread[]; categories: string[]; onClose: () => void; onCreate: (cwd: string, category: string, title: string, prompt: string) => Promise<void> }) {
-  const projects = useMemo(() => [...new Map(threads.filter((thread) => thread.cwd).map((thread) => [thread.projectKey, { cwd: thread.cwd!, label: thread.projectLabel }])).values()], [threads]);
-  const [cwd, setCwd] = useState(projects[0]?.cwd || "");
+export function NewTaskDialog({ threads, categories, defaultProjectKey, onClose, onCreate }: { threads: BoardThread[]; categories: string[]; defaultProjectKey?: string; onClose: () => void; onCreate: (cwd: string, category: string, title: string, prompt: string) => Promise<void> }) {
+  const projects = useMemo(() => [...new Map(threads.filter((thread) => thread.cwd).map((thread) => [thread.projectKey, { key: thread.projectKey, cwd: thread.cwd!, label: thread.projectLabel }])).values()], [threads]);
+  const [cwd, setCwd] = useState(projects.find((item) => item.key === defaultProjectKey)?.cwd || projects[0]?.cwd || "");
   const [category, setCategory] = useState(categories[0] || "Uncategorized");
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");

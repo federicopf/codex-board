@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { asCodexError, interruptTurn, loadThread, openThread, respondToCodexRequest } from "./api";
+import { asCodexError, interruptTurn, loadThread, respondToCodexRequest } from "./api";
 import { applyCodexEvent, createChatSession, eventRequest } from "./lib/chat";
 import { denialResult } from "./lib/approvals";
 import { MarkdownContent } from "./MarkdownContent";
+import { Icon } from "./ui/Icon";
 import type { BoardThread, ChatSession, JsonValue, PendingCodexRequest, QueuedMessage, SequencedCodexEvent } from "./types";
 
 type JsonObject = Record<string, JsonValue>;
@@ -65,11 +66,37 @@ function ApprovalPrompt({ request, busy, onResolve }: { request: PendingCodexReq
   </section>;
 }
 
+function ChatComposer({ threadId, working, activeTurnId, loading, onSend, onStop, onError }: {
+  threadId: string;
+  working: boolean;
+  activeTurnId: string | null;
+  loading: boolean;
+  onSend: (threadId: string, message: string) => Promise<void>;
+  onStop: () => Promise<void>;
+  onError: (message: string | null) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+
+  async function submit() {
+    const message = draft.trim();
+    if (!message || sending) return;
+    setSending(true); onError(null);
+    try { await onSend(threadId, message); setDraft(""); }
+    catch (cause) { onError(asCodexError(cause).message); }
+    finally { setSending(false); }
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
+  }
+
+  return <footer className="composer-wrap"><div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} placeholder={working ? "Add another message to the queue…" : "Message Codex…"} disabled={loading} rows={2} />{working ? <><button className="stop-button" disabled={!activeTurnId} onClick={() => void onStop()}>Stop</button><button className="send-button" disabled={!draft.trim() || sending || loading} onClick={() => void submit()}>{sending ? "Adding…" : "Queue"}</button></> : <button className="send-button" disabled={!draft.trim() || sending || loading} onClick={() => void submit()}>{sending ? "Sending…" : "Send"}</button>}</div><small>Enter to send · Shift+Enter for a new line</small></footer>;
+}
+
 export function ChatPanel({ thread, events, queuedMessages, working, activeTurnId, onSend, onRemoveQueued, onSessionState, onClose }: ChatPanelProps) {
   const [session, setSession] = useState<ChatSession | null>(null);
-  const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [requests, setRequests] = useState<PendingCodexRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -109,15 +136,6 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [session?.items, queuedMessages, request]);
   const title = useMemo(() => thread.displayTitle || thread.effectiveTitle || "Untitled thread", [thread]);
 
-  async function submit() {
-    const message = draft.trim();
-    if (!message || sending) return;
-    setSending(true); setError(null);
-    try { await onSend(thread.id, message); setDraft(""); }
-    catch (cause) { setError(asCodexError(cause).message); }
-    finally { setSending(false); }
-  }
-
   async function stop() {
     if (!activeTurnId) return;
     try { await interruptTurn(thread.id, activeTurnId); }
@@ -132,18 +150,8 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
     finally { setApprovalBusy(false); }
   }
 
-  async function openInCodex() {
-    setError(null);
-    try { await openThread(thread.id); }
-    catch (cause) { setError(asCodexError(cause).message); }
-  }
-
-  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
-  }
-
   return <div className="chat-overlay"><section className="chat-panel" aria-label={`Chat: ${title}`}>
-    <header className="chat-header"><button className="icon-button" onClick={onClose} aria-label="Back to board">←</button><div className="chat-heading"><div className="chat-title-row"><h2>{title}</h2><span className={working ? "chat-state live" : "chat-state"}><i />{working ? "Working" : "Ready"}</span></div><p>{thread.cwd || "Local Codex thread"}</p></div><button className="external-button" onClick={() => void openInCodex()}>Open in Codex ↗</button></header>
+    <header className="chat-header"><button className="icon-button chat-back-button" onClick={onClose} aria-label="Back to board"><Icon name="chevronLeft" /></button><div className="chat-heading"><div className="chat-title-row"><h2>{title}</h2><span className={working ? "chat-state live" : "chat-state"}><i />{working ? "Working" : "Ready"}</span></div><p>{thread.cwd || "Local Codex thread"}</p></div></header>
     <div className="chat-body">
       {loading && <div className="chat-loading"><div className="spinner" /><span>Loading conversation…</span></div>}
       {!loading && error && <div className="chat-error" role="alert">{error}<button onClick={() => setError(null)}>×</button></div>}
@@ -154,6 +162,6 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
       {request && <ApprovalPrompt request={request} busy={approvalBusy} onResolve={(result) => void resolveRequest(result)} />}
       <div ref={bottomRef} />
     </div>
-    <footer className="composer-wrap"><div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} placeholder={working ? "Add another message to the queue…" : "Message Codex…"} disabled={loading} rows={2} />{working ? <><button className="stop-button" disabled={!activeTurnId} onClick={() => void stop()}>Stop</button><button className="send-button" disabled={!draft.trim() || sending || loading} onClick={() => void submit()}>{sending ? "Adding…" : "Queue"}</button></> : <button className="send-button" disabled={!draft.trim() || sending || loading} onClick={() => void submit()}>{sending ? "Sending…" : "Send"}</button>}</div><small>Enter to send · Shift+Enter for a new line</small></footer>
+    <ChatComposer key={thread.id} threadId={thread.id} working={working} activeTurnId={activeTurnId} loading={loading} onSend={onSend} onStop={stop} onError={setError} />
   </section></div>;
 }
