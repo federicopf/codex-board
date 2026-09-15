@@ -1,4 +1,4 @@
-import type { Automation, BoardConfig, BoardNotification, CodexEvent, CreateAutomationInput, CreateThreadInput, JsonValue, PairingCredential, PendingRemoteRequest, QueuedMessage, RemoteHealth, SendOutcome, ThreadDto } from "@codex-board/protocol";
+import type { Automation, BoardConfig, BoardNotification, CodexEvent, CreateAutomationInput, CreateThreadInput, ForkThreadInput, JsonValue, PairingCredential, PendingRemoteRequest, QueuedMessage, RemoteHealth, SendOutcome, ThreadDto } from "@codex-board/protocol";
 
 type WebSocketWithHeaders = new (url: string, protocols?: string | string[] | null, options?: { headers?: Record<string, string> }) => WebSocket;
 
@@ -24,6 +24,7 @@ export class BoardApi {
   health() { return this.request<RemoteHealth>("/v1/health"); }
   threads() { return this.request<ThreadDto[]>("/v1/threads"); }
   createThread(input: CreateThreadInput) { return this.request<ThreadDto>("/v1/threads/new", { method: "POST", body: JSON.stringify(input) }); }
+  forkThread(id: string, input: ForkThreadInput) { return this.request<ThreadDto>(`/v1/threads/${encodeURIComponent(id)}/fork`, { method: "POST", body: JSON.stringify(input) }); }
   board() { return this.request<BoardConfig>("/v1/board"); }
   updateBoard(config: BoardConfig) { return this.request<BoardConfig>("/v1/board", { method: "PUT", body: JSON.stringify(config) }); }
   thread(id: string) { return this.request<Record<string, JsonValue>>(`/v1/threads/${encodeURIComponent(id)}`); }

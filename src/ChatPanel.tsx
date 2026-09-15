@@ -20,6 +20,7 @@ interface ChatPanelProps {
   onSend: (threadId: string, message: string) => Promise<void>;
   onRemoveQueued: (threadId: string, messageId: string) => void;
   onSessionState: (threadId: string, running: boolean, turnId: string | null) => void;
+  onFork: (threadId: string) => void;
   onClose: () => void;
 }
 
@@ -94,7 +95,7 @@ function ChatComposer({ threadId, working, activeTurnId, loading, onSend, onStop
   return <footer className="composer-wrap"><div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} placeholder={working ? "Add another message to the queue…" : "Message Codex…"} disabled={loading} rows={2} />{working ? <><button className="stop-button" disabled={!activeTurnId} onClick={() => void onStop()}>Stop</button><button className="send-button" disabled={!draft.trim() || sending || loading} onClick={() => void submit()}>{sending ? "Adding…" : "Queue"}</button></> : <button className="send-button" disabled={!draft.trim() || sending || loading} onClick={() => void submit()}>{sending ? "Sending…" : "Send"}</button>}</div><small>Enter to send · Shift+Enter for a new line</small></footer>;
 }
 
-export function ChatPanel({ thread, events, queuedMessages, working, activeTurnId, onSend, onRemoveQueued, onSessionState, onClose }: ChatPanelProps) {
+export function ChatPanel({ thread, events, queuedMessages, working, activeTurnId, onSend, onRemoveQueued, onSessionState, onFork, onClose }: ChatPanelProps) {
   const [session, setSession] = useState<ChatSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [approvalBusy, setApprovalBusy] = useState(false);
@@ -151,7 +152,7 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
   }
 
   return <div className="chat-overlay"><section className="chat-panel" aria-label={`Chat: ${title}`}>
-    <header className="chat-header"><button className="icon-button chat-back-button" onClick={onClose} aria-label="Back to board"><Icon name="chevronLeft" /></button><div className="chat-heading"><div className="chat-title-row"><h2>{title}</h2><span className={working ? "chat-state live" : "chat-state"}><i />{working ? "Working" : "Ready"}</span></div><p>{thread.cwd || "Local Codex thread"}</p></div></header>
+    <header className="chat-header"><button className="icon-button chat-back-button" onClick={onClose} aria-label="Back to board"><Icon name="chevronLeft" /></button><div className="chat-heading"><div className="chat-title-row"><h2>{title}</h2><span className={working ? "chat-state live" : "chat-state"}><i />{working ? "Working" : "Ready"}</span></div><p>{thread.cwd || "Local Codex thread"}{thread.forkedFromId ? " · Forked conversation" : ""}</p></div><button className="icon-button chat-fork-button" disabled={working || loading} onClick={() => onFork(thread.id)} aria-label="Fork conversation" title={working ? "Wait for the active turn to finish" : "Fork conversation"}><Icon name="fork" /></button></header>
     <div className="chat-body">
       {loading && <div className="chat-loading"><div className="spinner" /><span>Loading conversation…</span></div>}
       {!loading && error && <div className="chat-error" role="alert">{error}<button onClick={() => setError(null)}>×</button></div>}

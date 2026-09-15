@@ -7,6 +7,7 @@ export interface ThreadDto {
   cwd: string | null;
   updatedAt: number | null;
   status?: JsonValue;
+  forkedFromId?: string | null;
 }
 
 export interface BoardConfig {
@@ -35,6 +36,7 @@ export interface QueuedMessage { id: string; text: string; }
 export interface SendOutcome { queued: boolean; messageId?: string | null; turn?: JsonValue; }
 export interface PendingRemoteRequest { requestId: JsonValue; method: string; params: JsonValue; }
 export interface CreateThreadInput { cwd: string; category: string; title: string; prompt: string; }
+export interface ForkThreadInput { category: string; title: string; lastTurnId?: string | null; }
 export interface AutomationResultDetails {
   id: string;
   name: string;

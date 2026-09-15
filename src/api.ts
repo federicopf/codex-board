@@ -17,6 +17,9 @@ export async function renameThread(threadId: string, newName: string): Promise<T
 export async function createThread(cwd: string, category: string, title: string, prompt: string): Promise<ThreadDto> {
   return invoke<ThreadDto>("create_thread", { cwd, category, title, prompt });
 }
+export async function forkThread(threadId: string, category: string, title: string, lastTurnId?: string | null): Promise<ThreadDto> {
+  return invoke<ThreadDto>("fork_thread", { threadId, category, title, lastTurnId: lastTurnId || null });
+}
 
 export async function loadThread(threadId: string): Promise<CodexThread> {
   return invoke<CodexThread>("load_thread", { threadId });

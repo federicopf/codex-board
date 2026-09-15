@@ -5,6 +5,7 @@ export interface ThreadDto {
   cwd: string | null;
   updatedAt: number | null;
   status?: JsonValue;
+  forkedFromId?: string | null;
 }
 
 export interface CodexError {
@@ -42,6 +43,7 @@ export interface CodexThread {
   cwd?: string | null;
   turns?: JsonValue[];
   status?: JsonValue;
+  forkedFromId?: string | null;
 }
 
 export interface CodexEvent {

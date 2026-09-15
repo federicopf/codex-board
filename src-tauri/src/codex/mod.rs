@@ -19,6 +19,14 @@ pub struct CodexClient {
     events: EventQueue,
 }
 
+fn fork_params(thread_id: &str, last_turn_id: Option<&str>) -> Value {
+    let mut params = json!({ "threadId": thread_id });
+    if let Some(last_turn_id) = last_turn_id.filter(|value| !value.trim().is_empty()) {
+        params["lastTurnId"] = json!(last_turn_id);
+    }
+    params
+}
+
 impl CodexClient {
     pub fn new() -> Self {
         Self {
@@ -181,6 +189,35 @@ impl CodexClient {
         Ok(ThreadDto::from(parsed.thread))
     }
 
+    pub async fn fork_thread(
+        &self,
+        thread_id: String,
+        new_name: String,
+        last_turn_id: Option<String>,
+    ) -> Result<ThreadDto, CodexErrorDto> {
+        if thread_id.trim().is_empty() || new_name.trim().is_empty() {
+            return Err(CodexErrorDto::new(
+                CodexErrorCode::RequestFailed,
+                "Source thread and title are required",
+            ));
+        }
+        let client = self.ensure_running().await?;
+        let params = fork_params(&thread_id, last_turn_id.as_deref());
+        let result = client.request("thread/fork", params).await?;
+        let forked_id = result
+            .pointer("/thread/id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                CodexErrorDto::new(
+                    CodexErrorCode::ProtocolError,
+                    "Unexpected thread/fork response",
+                )
+                .with_details(result.to_string())
+            })?;
+        self.rename_thread(forked_id, new_name).await
+    }
+
     pub async fn load_thread(&self, thread_id: String) -> Result<Value, CodexErrorDto> {
         let client = self.ensure_running().await?;
         let result = client
@@ -307,12 +344,27 @@ mod tests {
                 "name": "To Plan - Test",
                 "preview": "Test",
                 "cwd": "C:\\work",
-                "updatedAt": 42
+                "updatedAt": 42,
+                "forkedFromId": "thr_parent"
             }],
             "nextCursor": "next"
         }))
         .unwrap();
         assert_eq!(page.data.len(), 1);
         assert_eq!(page.next_cursor.as_deref(), Some("next"));
+        assert_eq!(page.data[0].forked_from_id.as_deref(), Some("thr_parent"));
+    }
+
+    #[test]
+    fn fork_params_support_full_and_partial_history() {
+        assert_eq!(fork_params("thr_1", None), json!({ "threadId": "thr_1" }));
+        assert_eq!(
+            fork_params("thr_1", Some("turn_3")),
+            json!({ "threadId": "thr_1", "lastTurnId": "turn_3" })
+        );
+        assert_eq!(
+            fork_params("thr_1", Some("  ")),
+            json!({ "threadId": "thr_1" })
+        );
     }
 }

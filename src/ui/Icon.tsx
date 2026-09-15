@@ -8,6 +8,7 @@ export type IconName =
   | "chevronLeft"
   | "chevronDown"
   | "edit"
+  | "fork"
   | "grip"
   | "help"
   | "message"
@@ -26,6 +27,7 @@ const paths: Record<IconName, ReactNode> = {
   chevronLeft: <path d="m15 18-6-6 6-6" />,
   chevronDown: <path d="m7 10 5 5 5-5" />,
   edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" /></>,
+  fork: <><circle cx="7" cy="5" r="2" /><circle cx="17" cy="7" r="2" /><circle cx="17" cy="17" r="2" /><path d="M9 5h1a4 4 0 0 1 4 4v4a4 4 0 0 0 1 2.7M9 5a6 6 0 0 1 6 2" /><path d="M7 7v12" /></>,
   grip: <><circle cx="9" cy="6" r="1" fill="currentColor" stroke="none" /><circle cx="15" cy="6" r="1" fill="currentColor" stroke="none" /><circle cx="9" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="9" cy="18" r="1" fill="currentColor" stroke="none" /><circle cx="15" cy="18" r="1" fill="currentColor" stroke="none" /></>,
   help: <><circle cx="12" cy="12" r="9" /><path d="M9.7 9a2.5 2.5 0 1 1 3.4 2.3c-.8.4-1.1.9-1.1 1.7" /><path d="M12 17h.01" /></>,
   message: <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" />,

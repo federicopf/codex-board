@@ -133,6 +133,14 @@ struct CreateThreadBody {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ForkThreadBody {
+    category: String,
+    title: String,
+    last_turn_id: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct MessageBody {
     text: String,
 }
@@ -236,6 +244,7 @@ impl RemoteGateway {
                 .route("/v1/threads", get(list_threads))
                 .route("/v1/threads/new", post(create_thread))
                 .route("/v1/threads/{id}", get(load_thread))
+                .route("/v1/threads/{id}/fork", post(fork_thread))
                 .route("/v1/threads/{id}/name", put(rename_thread))
                 .route("/v1/threads/{id}/messages", post(send_message))
                 .route("/v1/queues", get(message_queues))
@@ -540,6 +549,27 @@ async fn create_thread(
     let thread = state
         .client
         .create_thread(body.cwd, name, body.prompt)
+        .await?;
+    serde_json::to_value(thread)
+        .map(Json)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+}
+
+async fn fork_thread(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<ForkThreadBody>,
+) -> Result<Json<Value>, ApiError> {
+    authorized(&headers, &state)?;
+    let name = if body.category.trim().is_empty() || body.category == "Uncategorized" {
+        body.title.trim().to_owned()
+    } else {
+        format!("{} - {}", body.category.trim(), body.title.trim())
+    };
+    let thread = state
+        .client
+        .fork_thread(id, name, body.last_turn_id)
         .await?;
     serde_json::to_value(thread)
         .map(Json)

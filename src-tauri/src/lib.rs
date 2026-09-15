@@ -48,6 +48,22 @@ async fn create_thread(
 }
 
 #[tauri::command]
+async fn fork_thread(
+    client: tauri::State<'_, Arc<CodexClient>>,
+    thread_id: String,
+    category: String,
+    title: String,
+    last_turn_id: Option<String>,
+) -> Result<ThreadDto, CodexErrorDto> {
+    let name = if category.trim().is_empty() || category == "Uncategorized" {
+        title.trim().to_owned()
+    } else {
+        format!("{} - {}", category.trim(), title.trim())
+    };
+    client.fork_thread(thread_id, name, last_turn_id).await
+}
+
+#[tauri::command]
 async fn load_thread(
     client: tauri::State<'_, Arc<CodexClient>>,
     thread_id: String,
@@ -231,6 +247,7 @@ pub fn run() {
             list_threads,
             rename_thread,
             create_thread,
+            fork_thread,
             load_thread,
             send_message,
             message_queues,

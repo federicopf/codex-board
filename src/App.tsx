@@ -11,7 +11,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { asCodexError, clearNotifications, createThread, drainCodexEvents, getBoardConfig, getMessageQueues, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameThread, sendMessage, setBoardConfig } from "./api";
+import { asCodexError, clearNotifications, createThread, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameThread, sendMessage, setBoardConfig } from "./api";
 import type { BoardNotification } from "@codex-board/protocol";
 import "./App.css";
 import { CategoryDialog } from "./CategoryDialog";
@@ -19,6 +19,7 @@ import { ChatPanel } from "./ChatPanel";
 import { RemoteDialog } from "./RemoteDialog";
 import { AutomationsDialog } from "./AutomationsDialog";
 import { NewTaskDialog } from "./NewTaskDialog";
+import { ForkThreadDialog } from "./ForkThreadDialog";
 import { ProductTour } from "./ProductTour";
 import { InboxDialog } from "./InboxDialog";
 import { MoveThreadDialog } from "./MoveThreadDialog";
@@ -73,6 +74,8 @@ function App() {
   const [categoryManager, setCategoryManager] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [movingThreadId, setMovingThreadId] = useState<string | null>(null);
+  const [forkingThreadId, setForkingThreadId] = useState<string | null>(null);
+  const [forkBusy, setForkBusy] = useState(false);
   const [remoteDialog, setRemoteDialog] = useState(false);
   const [automationsDialog, setAutomationsDialog] = useState(false);
   const [newTaskDialog, setNewTaskDialog] = useState(false);
@@ -325,6 +328,20 @@ function App() {
   const activeThread = threads.find((thread) => thread.id === activeId) ?? null;
   const chatThread = threads.find((thread) => thread.id === chatThreadId) ?? null;
   const movingThread = threads.find((thread) => thread.id === movingThreadId) ?? null;
+  const forkingThread = threads.find((thread) => thread.id === forkingThreadId) ?? null;
+
+  async function createFork(category: string, title: string, lastTurnId: string | null) {
+    if (!forkingThread) return;
+    setForkBusy(true);
+    try {
+      const created = await forkThread(forkingThread.id, category, title, lastTurnId);
+      setForkingThreadId(null);
+      setChatThreadId(created.id);
+      await refresh(true);
+    } finally {
+      setForkBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (statusFilter !== ALL_STATUSES && !populatedCategories.includes(statusFilter)) setStatusFilter(ALL_STATUSES);
@@ -533,6 +550,7 @@ function App() {
           onRemote={() => setRemoteDialog(true)}
           onOpen={setChatThreadId}
           onMove={setMovingThreadId}
+          onFork={setForkingThreadId}
           onRename={(category) => setCategoryDialog({ mode: "rename", category })}
         />
       </SortableContext>
@@ -547,6 +565,7 @@ function App() {
           onSend={sendOrQueue}
           onRemoveQueued={removeQueuedMessage}
           onSessionState={updateSessionState}
+          onFork={setForkingThreadId}
           onClose={() => {
             setChatThreadId(null);
             void refresh(true);
@@ -566,6 +585,7 @@ function App() {
       )}
       {categoryManager && <CategoryManagerDialog categories={categories} threads={threads} onClose={() => setCategoryManager(false)} onCreate={() => { setCategoryManager(false); setCategoryDialog({ mode: "create" }); }} onRename={(category) => { setCategoryManager(false); setCategoryDialog({ mode: "rename", category }); }} onDelete={deleteEmptyCategory} onPosition={setCategoryPosition} />}
       {movingThread && <MoveThreadDialog thread={movingThread} categories={categories} busy={pendingIds.has(movingThread.id)} onClose={() => setMovingThreadId(null)} onMove={(category, create) => void moveBoardThread(movingThread.id, category, create)} />}
+      {forkingThread && <ForkThreadDialog thread={forkingThread} categories={categories} busy={forkBusy} onClose={() => { if (!forkBusy) setForkingThreadId(null); }} onFork={createFork} />}
       {settingsOpen && <BoardSettingsDialog approvalMode={approvalMode} onApprovalMode={setApprovalMode} onClose={() => setSettingsOpen(false)} />}
       {remoteDialog && <RemoteDialog onClose={() => setRemoteDialog(false)} />}
       {automationsDialog && <AutomationsDialog threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}

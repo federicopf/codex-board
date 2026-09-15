@@ -30,7 +30,7 @@ function updatedLabel(updatedAt: number | null): string {
   return `Updated ${days}d ago`;
 }
 
-function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen, onMove, overlay = false }: {
+function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen, onMove, onFork, overlay = false }: {
   thread: BoardThread;
   pending: boolean;
   working: boolean;
@@ -38,6 +38,7 @@ function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen
   showProject: boolean;
   onOpen?: (threadId: string) => void;
   onMove?: (threadId: string) => void;
+  onFork?: (threadId: string) => void;
   overlay?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
@@ -52,6 +53,7 @@ function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen
     <article ref={setNodeRef} style={style} className={`thread-card${isDragging ? " is-dragging" : ""}${working ? " is-working" : ""}${overlay ? " overlay" : ""}`} {...listeners} {...attributes} aria-busy={pending}>
       <div className="card-topline">
         {showProject && <span className="project-chip">{thread.projectLabel}</span>}
+        {thread.forkedFromId && <span className="fork-chip"><Icon name="fork" /> Fork</span>}
         {working && <span className="card-working"><i />Working</span>}
         {!working && queuedCount > 0 && <span className="queue-count">{queuedCount} queued</span>}
       </div>
@@ -59,6 +61,7 @@ function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen
       {thread.preview && thread.preview.trim() !== thread.displayTitle && <div className="card-preview">{thread.preview}</div>}
       <footer>
         {pending ? <span className="saving">Saving changes…</span> : <span className="card-updated">{updatedLabel(thread.updatedAt)}</span>}
+        {!overlay && <button className="card-icon-action" type="button" aria-label={`Fork ${thread.displayTitle}`} title={working ? "Wait for the active turn to finish" : "Fork conversation"} disabled={working || pending} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onFork?.(thread.id); }}><Icon name="fork" /></button>}
         {!overlay && <button className="card-icon-action" type="button" aria-label={`Move ${thread.displayTitle}`} title="Move task" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onMove?.(thread.id); }}><Icon name="move" /></button>}
         {!overlay && <button className="open-thread" type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onOpen?.(thread.id); }}><Icon name="message" /> Open</button>}
       </footer>
@@ -66,7 +69,7 @@ function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen
   );
 }
 
-function BoardColumn({ category, threads, pendingIds, workingIds, queues, showProject, onOpen, onMove, onRename }: {
+function BoardColumn({ category, threads, pendingIds, workingIds, queues, showProject, onOpen, onMove, onFork, onRename }: {
   category: string;
   threads: BoardThread[];
   pendingIds: Set<string>;
@@ -75,6 +78,7 @@ function BoardColumn({ category, threads, pendingIds, workingIds, queues, showPr
   showProject: boolean;
   onOpen: (threadId: string) => void;
   onMove: (threadId: string) => void;
+  onFork: (threadId: string) => void;
   onRename: (category: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } = useSortable({ id: categoryDragId(category) });
@@ -90,7 +94,7 @@ function BoardColumn({ category, threads, pendingIds, workingIds, queues, showPr
         <button className="column-rename" type="button" aria-label={`Rename ${category}`} title="Rename category" onClick={() => onRename(category)}><Icon name="edit" /></button>
       </header>
       <div className="column-body">
-        {threads.map((thread) => <ThreadCard key={thread.id} thread={thread} pending={pendingIds.has(thread.id)} working={workingIds.has(thread.id)} queuedCount={queues[thread.id]?.length || 0} showProject={showProject} onOpen={onOpen} onMove={onMove} />)}
+        {threads.map((thread) => <ThreadCard key={thread.id} thread={thread} pending={pendingIds.has(thread.id)} working={workingIds.has(thread.id)} queuedCount={queues[thread.id]?.length || 0} showProject={showProject} onOpen={onOpen} onMove={onMove} onFork={onFork} />)}
       </div>
     </section>
   );
@@ -125,6 +129,7 @@ export interface BoardWorkspaceProps {
   onRemote: () => void;
   onOpen: (threadId: string) => void;
   onMove: (threadId: string) => void;
+  onFork: (threadId: string) => void;
   onRename: (category: string) => void;
 }
 
@@ -181,7 +186,7 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
           <div className="empty-board"><div className="empty-illustration"><Icon name="search" /></div><h2>No tasks match this board</h2><p>Change the status or search to see more work in this project.</p>{(props.search || props.statusFilter !== ALL_STATUSES) && <button className="button secondary" onClick={() => { props.onSearchChange(""); props.onStatusChange(ALL_STATUSES); }}>Clear filters</button>}</div>
         ) : (
           <div className="board" aria-label="Task board">
-            {props.displayedCategories.map((category) => <BoardColumn key={category} category={category} threads={props.filteredThreads.filter((thread) => thread.category === category)} pendingIds={props.pendingIds} workingIds={props.workingIds} queues={props.queues} showProject={props.project === ALL_PROJECTS} onOpen={props.onOpen} onMove={props.onMove} onRename={props.onRename} />)}
+            {props.displayedCategories.map((category) => <BoardColumn key={category} category={category} threads={props.filteredThreads.filter((thread) => thread.category === category)} pendingIds={props.pendingIds} workingIds={props.workingIds} queues={props.queues} showProject={props.project === ALL_PROJECTS} onOpen={props.onOpen} onMove={props.onMove} onFork={props.onFork} onRename={props.onRename} />)}
           </div>
         )}
       </section>
