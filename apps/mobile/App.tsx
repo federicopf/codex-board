@@ -8,7 +8,7 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import Markdown from "react-native-markdown-display";
 import {
-  categoryFromTitle, displayTitle, formatCodexDirectives, parsePairingPayload,
+  categoryFromTitle, displayTitle, formatCodexDirectives, parsePairingPayload, threadNameWithTitle,
   type Automation, type BoardConfig, type BoardNotification, type CreateAutomationInput, type JsonValue, type PairingCredential,
   type PendingRemoteRequest, type QueuedMessage, type ThreadDto,
 } from "@codex-board/protocol";
@@ -237,7 +237,7 @@ function MobileChatComposer({ threadId, api, working, onChanged }: { threadId: s
   return <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}><View style={styles.composer}><TextInput value={draft} onChangeText={setDraft} style={styles.composerInput} placeholder={working ? "Add to queue…" : "Message Codex…"} multiline /><Pressable disabled={!draft.trim() || busy} style={[styles.send, (!draft.trim() || busy) && styles.disabled]} onPress={() => void send()}><Text style={styles.primaryButtonText}>{working ? "Queue" : "Send"}</Text></Pressable></View></KeyboardAvoidingView>;
 }
 
-function Chat({ thread, api, queue, requests, eventRevision, onClose, onChanged, onFork }: { thread: ThreadDto; api: BoardApi; queue: QueuedMessage[]; requests: PendingRemoteRequest[]; eventRevision: number; onClose: () => void; onChanged: () => void; onFork: () => void }) {
+function Chat({ thread, api, queue, requests, eventRevision, onClose, onChanged, onFork, onRename }: { thread: ThreadDto; api: BoardApi; queue: QueuedMessage[]; requests: PendingRemoteRequest[]; eventRevision: number; onClose: () => void; onChanged: () => void; onFork: () => void; onRename: () => void }) {
   const [loaded, setLoaded] = useState<JsonObject | null>(() => threadCache.get(thread.id) || null);
   const lines = useMemo(() => conversation(loaded), [loaded]);
   const timeline = useMemo(() => [...lines].reverse(), [lines]);
@@ -247,7 +247,14 @@ function Chat({ thread, api, queue, requests, eventRevision, onClose, onChanged,
 
   const turnId = activeTurnId(loaded);
   return <Modal animationType="slide"><SafeAreaView style={styles.page}>
-    <View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Back to board" style={styles.chatBackButton} onPress={onClose}><Text style={styles.back}>←</Text></Pressable><View style={styles.headerCopy}><View style={styles.chatTitleRow}><Text style={styles.headerTitle} numberOfLines={1}>{displayTitle(thread.name, thread.preview)}</Text><View style={[styles.chatState, turnId && styles.chatStateLive]}><Text style={[styles.chatStateText, turnId && styles.chatStateTextLive]}>{turnId ? "Working" : "Ready"}</Text></View></View><Text style={styles.headerMeta} numberOfLines={1}>{projectLabel(thread.cwd)}{thread.forkedFromId?" · Forked conversation":""}</Text></View><View style={styles.topbarActions}><Pressable disabled={Boolean(turnId)} accessibilityRole="button" accessibilityLabel="Fork conversation" style={[styles.topbarIconButton,turnId&&styles.disabled]} onPress={onFork}><Text style={styles.topbarForkIcon}>⑂</Text></Pressable>{turnId && <Pressable accessibilityRole="button" accessibilityLabel="Stop Codex" style={[styles.topbarIconButton, styles.topbarIconDanger]} onPress={() => void api.interrupt(thread.id, turnId)}><Text style={styles.stopIcon}>■</Text></Pressable>}</View></View>
+    <View style={styles.header}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Back to board" style={styles.chatBackButton} onPress={onClose}><Text style={styles.back}>←</Text></Pressable>
+      <View style={styles.headerCopy}><View style={styles.chatTitleRow}><Text style={styles.headerTitle} numberOfLines={1}>{displayTitle(thread.name, thread.preview)}</Text><View style={[styles.chatState, turnId && styles.chatStateLive]}><Text style={[styles.chatStateText, turnId && styles.chatStateTextLive]}>{turnId ? "Working" : "Ready"}</Text></View></View><Text style={styles.headerMeta} numberOfLines={1}>{projectLabel(thread.cwd)}{thread.forkedFromId?" · Forked conversation":""}</Text></View>
+      <View style={styles.topbarActions}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Rename conversation" style={styles.topbarIconButton} onPress={onRename}><Text style={styles.topbarForkIcon}>✎</Text></Pressable>
+        {turnId?<Pressable accessibilityRole="button" accessibilityLabel="Stop Codex" style={[styles.topbarIconButton, styles.topbarIconDanger]} onPress={() => void api.interrupt(thread.id, turnId)}><Text style={styles.stopIcon}>■</Text></Pressable>:<Pressable accessibilityRole="button" accessibilityLabel="Fork conversation" style={styles.topbarIconButton} onPress={onFork}><Text style={styles.topbarForkIcon}>⑂</Text></Pressable>}
+      </View>
+    </View>
     <FlatList inverted style={styles.chat} contentContainerStyle={styles.chatContent} data={timeline} keyExtractor={(item) => item.id} maintainVisibleContentPosition={{ minIndexForVisible: 0 }} ListEmptyComponent={<Text style={styles.empty}>No messages yet.</Text>} renderItem={({ item }) => <View style={[styles.bubble, styles[`bubble_${item.role}`]]}>{item.role !== "user" && <View style={styles.activityHeading}><Text style={styles.bubbleLabel}>{item.role === "assistant" ? "CODEX" : item.title || "ACTIVITY"}</Text>{item.status&&<Text style={styles.activityStatus}>{item.status}</Text>}</View>}{item.role === "assistant" ? <Markdown style={markdownStyles}>{formatCodexDirectives(item.text || "…")}</Markdown> : item.role === "activity" ? <Markdown style={markdownStyles}>{formatCodexDirectives(item.text || "…")}</Markdown> : <Text style={[styles.bubbleText, styles.userText]}>{item.text || "…"}</Text>}</View>} ListHeaderComponent={<>
       {queue.length > 0 && <View style={styles.queueBox}><Text style={styles.requestTitle}>{queue.length} queued</Text>{queue.map((message, index) => <View key={message.id} style={styles.queueRow}><Text style={styles.queueIndex}>{index + 1}</Text><Text style={styles.queueText}>{message.text}</Text><Pressable onPress={() => void api.removeQueued(thread.id, message.id).then(onChanged)}><Text style={styles.remove}>×</Text></Pressable></View>)}</View>}
       {requests.map((request) => <RequestCard key={JSON.stringify(request.requestId)} request={request} api={api} onDone={onChanged} />)}
@@ -324,6 +331,29 @@ function NewTaskModal({ api, threads, categories, defaultProjectKey, onClose, on
   const [cwd, setCwd] = useState(projects.find((project) => project.key === defaultProjectKey)?.cwd || projects[0]?.cwd || ""); const [category, setCategory] = useState(categories[0] || "Uncategorized"); const [title, setTitle] = useState(""); const [prompt, setPrompt] = useState(""); const [busy, setBusy] = useState(false);
   async function create() { setBusy(true); try { const created = await api.createThread({ cwd, category, title: title.trim(), prompt: prompt.trim() }); onCreated(created); } catch (error) { Alert.alert("Could not create task", error instanceof Error ? error.message : String(error)); } finally { setBusy(false); } }
   return <Modal animationType="slide"><SafeAreaView style={styles.page}><View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Cancel new task" style={styles.chatBackButton} onPress={onClose}><Text style={styles.closeIcon}>×</Text></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>New Codex task</Text><Text style={styles.headerMeta}>Create and start directly from mobile</Text></View></View><ScrollView contentContainerStyle={styles.newTaskMobile}><Text style={styles.fieldLabel}>PROJECT</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.miniChoices}>{projects.map((project) => <Pressable key={project.cwd} style={[styles.miniChoice, project.cwd === cwd && styles.miniChoiceActive]} onPress={() => setCwd(project.cwd)}><Text style={[styles.miniChoiceText, project.cwd === cwd && styles.miniChoiceTextActive]}>{project.label}</Text></Pressable>)}</ScrollView><Text style={styles.fieldLabel}>CATEGORY</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.miniChoices}>{categories.map((item) => <Pressable key={item} style={[styles.miniChoice, item === category && styles.miniChoiceActive]} onPress={() => setCategory(item)}><Text style={[styles.miniChoiceText, item === category && styles.miniChoiceTextActive]}>{item}</Text></Pressable>)}</ScrollView><Text style={styles.fieldLabel}>TITLE</Text><TextInput style={styles.smallInput} value={title} onChangeText={setTitle} placeholder="What are we building?" /><Text style={styles.fieldLabel}>FIRST MESSAGE</Text><TextInput style={[styles.smallInput, styles.newTaskPrompt]} value={prompt} onChangeText={setPrompt} multiline placeholder="Describe what Codex should do…" /><Pressable disabled={busy || !cwd || !title.trim() || !prompt.trim()} style={[styles.primaryButton, (busy || !cwd || !title.trim() || !prompt.trim()) && styles.disabled]} onPress={() => void create()}>{busy ? <ActivityIndicator color="white" /> : <Text style={styles.primaryButtonText}>Create and start</Text>}</Pressable></ScrollView></SafeAreaView></Modal>;
+}
+
+function RenameThreadModal({ api, thread, onClose, onSaved }: { api: BoardApi; thread: ThreadDto; onClose: () => void; onSaved: (thread: ThreadDto) => void }) {
+  const [title,setTitle] = useState(displayTitle(thread.name,thread.preview));
+  const [busy,setBusy] = useState(false);
+  const [error,setError] = useState<string|null>(null);
+  async function save() {
+    if(busy||!title.trim())return;
+    setBusy(true);setError(null);
+    try {
+      const latest = await api.thread(thread.id);
+      const saved = await api.rename(thread.id,threadNameWithTitle(string(latest.name)||null,string(latest.preview)||null,title));
+      onSaved(saved);
+    } catch(cause) {setError(cause instanceof Error?cause.message:String(cause))}
+    finally {setBusy(false)}
+  }
+  return <Modal transparent animationType="fade" onRequestClose={()=>{if(!busy)onClose()}}><KeyboardAvoidingView behavior={Platform.OS==="ios"?"padding":undefined} style={styles.modalBackdrop}><View style={styles.choiceDialog}>
+    <Text style={styles.moveTitle}>Rename conversation</Text><Text style={styles.moveSubtitle}>Category, project and history stay the same.</Text>
+    <TextInput autoFocus style={styles.smallInput} value={title} editable={!busy} onChangeText={setTitle} onSubmitEditing={()=>void save()} returnKeyType="done"/>
+    {error&&<Text style={styles.automationError}>{error}</Text>}
+    <Pressable disabled={busy||!title.trim()} style={[styles.primaryButton,(busy||!title.trim())&&styles.disabled]} onPress={()=>void save()}>{busy?<ActivityIndicator color="white"/>:<Text style={styles.primaryButtonText}>Save title</Text>}</Pressable>
+    <Pressable disabled={busy} style={styles.moveCancel} onPress={onClose}><Text style={styles.moveCancelText}>Cancel</Text></Pressable>
+  </View></KeyboardAvoidingView></Modal>;
 }
 
 function ForkThreadModal({ api, thread, categories, onClose, onCreated }: { api: BoardApi; thread: ThreadDto; categories: string[]; onClose: () => void; onCreated: (thread: ThreadDto) => void }) {
@@ -434,6 +464,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   const [managing, setManaging] = useState(false);
   const [moving, setMoving] = useState<ThreadDto | null>(null);
   const [forking, setForking] = useState<ThreadDto | null>(null);
+  const [renaming, setRenaming] = useState<ThreadDto | null>(null);
   const [automating, setAutomating] = useState(false);
   const [choosingProject, setChoosingProject] = useState(false);
   const [creatingTask, setCreatingTask] = useState(false);
@@ -526,13 +557,14 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
       onOpen={setSelected}
       onMove={setMoving}
       onFork={setForking}
+      onRename={setRenaming}
       onNewTask={()=>setCreatingTask(true)}
       onInbox={()=>setInboxOpen(true)}
       onAutomations={()=>setAutomating(true)}
       onSettings={()=>setManaging(true)}
     />
     {automationAlert&&<Pressable style={styles.mobileAutomationAlert} onPress={()=>{setAutomationAlert(null);setResultNotification(automationAlert);void api.markNotificationsRead(automationAlert.id)}}><View style={styles.mobileAutomationAlertIcon}><Text>⚡</Text></View><View style={styles.categoryCopy}><Text style={styles.automationName}>Automation completed</Text><Text style={styles.automationDescription}>{automationAlert.automation?.name}</Text></View><Text style={styles.openArrow}>→</Text></Pressable>}
-    {selected && <Chat thread={selected} api={api} queue={queues[selected.id] || []} requests={requests.filter((request) => requestThreadId(request) === selected.id)} eventRevision={eventRevision} onClose={() => setSelected(null)} onChanged={refresh} onFork={() => setForking(selected)} />}
+    {selected && <Chat thread={selected} api={api} queue={queues[selected.id] || []} requests={requests.filter((request) => requestThreadId(request) === selected.id)} eventRevision={eventRevision} onClose={() => setSelected(null)} onChanged={refresh} onFork={() => setForking(selected)} onRename={()=>setRenaming(selected)} />}
     {managing && config && <CategoryManager config={config} threads={threads} api={api} onClose={() => setManaging(false)} onSaved={refresh} onOpenTour={onOpenTour} onDisconnect={() => void onDisconnect()} />}
     {automating && <AutomationManager api={api} automations={automations} threads={threads} categories={categories} onClose={() => setAutomating(false)} onChanged={refresh} />}
     {choosingProject && <ChoiceModal title="Choose a board" subtitle="Open a project dashboard or the complete overview." options={[{ key: ALL_PROJECTS, label: "All projects", meta: `${threads.length} tasks · overview` }, ...projects.map((project) => ({ key: project.key, label: project.label, meta: `${project.count} ${project.count === 1 ? "task" : "tasks"}` }))]} selected={selectedProject} onSelect={selectProjectBoard} onClose={() => setChoosingProject(false)} />}
@@ -540,6 +572,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     {inboxOpen && <InboxModal api={api} items={notifications} onClose={()=>setInboxOpen(false)} onChanged={refresh} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item)}} onOpen={(id)=>{const thread=threads.find(item=>item.id===id);if(thread){setInboxOpen(false);setSelected(thread)}}}/>}
     {moving && <MoveDialog thread={moving} categories={categories} api={api} onClose={() => setMoving(null)} onMoved={refresh} />}
     {forking && <ForkThreadModal api={api} thread={forking} categories={categories} onClose={()=>setForking(null)} onCreated={(thread)=>{setForking(null);setSelected(thread);void refresh()}}/>}
+    {renaming&&<RenameThreadModal key={renaming.id} api={api} thread={renaming} onClose={()=>setRenaming(null)} onSaved={(saved)=>{setThreads(current=>current.map(item=>item.id===saved.id?saved:item));setSelected(current=>current?.id===saved.id?saved:current);setRenaming(null);void refresh()}}/>}
     {resultNotification&&<AutomationResultModal notification={resultNotification} onClose={()=>setResultNotification(null)} onOpenThread={(id)=>{const thread=threads.find(item=>item.id===id);setResultNotification(null);if(thread)setSelected(thread)}}/>}
   </SafeAreaView>;
 }

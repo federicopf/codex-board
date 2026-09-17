@@ -29,6 +29,7 @@ interface MobileBoardHomeProps {
   onOpen: (thread: ThreadDto) => void;
   onMove: (thread: ThreadDto) => void;
   onFork: (thread: ThreadDto) => void;
+  onRename: (thread: ThreadDto) => void;
   onNewTask: () => void;
   onInbox: () => void;
   onAutomations: () => void;
@@ -39,12 +40,12 @@ function Logo() {
   return <View style={styles.logo}><View style={[styles.logoBar,{height:8}]} /><View style={[styles.logoBar,{height:17}]} /><View style={[styles.logoBar,{height:12}]} /></View>;
 }
 
-function TaskCard({ thread, queueCount, working, title, project, showProject, onOpen, onMove, onFork }: { thread: ThreadDto; queueCount: number; working: boolean; title: string; project: string; showProject: boolean; onOpen: () => void; onMove: () => void; onFork: () => void }) {
+function TaskCard({ thread, queueCount, working, title, project, showProject, onOpen, onMove, onFork, onRename }: { thread: ThreadDto; queueCount: number; working: boolean; title: string; project: string; showProject: boolean; onOpen: () => void; onMove: () => void; onFork: () => void; onRename: () => void }) {
   return (
     <View style={[styles.card,working&&styles.workingCard]}>
       <Pressable onPress={onOpen} accessibilityRole="button" accessibilityLabel={`Open ${title}`}>
         <View style={styles.cardTop}><View style={styles.cardBadges}>{showProject?<Text style={styles.projectPill} numberOfLines={1}>{project}</Text>:null}{thread.forkedFromId?<Text style={styles.forkPill}>⑂ Fork</Text>:null}</View>{working&&<View style={styles.workingPill}><View style={styles.liveDot}/><Text style={styles.workingPillText}>Working</Text></View>}</View>
-        <Text style={styles.cardTitle}>{title}</Text>
+        <View style={styles.cardTitleRow}><Text style={[styles.cardTitle,{flex:1}]}>{title}</Text><Pressable style={styles.cardIconButton} onPress={onRename} accessibilityRole="button" accessibilityLabel={`Rename ${title}`}><Text style={styles.forkIcon}>✎</Text></Pressable></View>
         {thread.preview ? <Text style={styles.cardPreview} numberOfLines={2}>{thread.preview}</Text> : null}
       </Pressable>
       <View style={styles.cardFooter}>
@@ -84,7 +85,7 @@ export function MobileBoardHome(props: MobileBoardHomeProps) {
         keyExtractor={thread=>thread.id}
         ListHeaderComponent={<View style={styles.listHeader}><View><Text style={styles.listTitle}>{props.activeCategory||"Tasks"}</Text><Text style={styles.listSubtitle}>{props.search?`Results for “${props.search}”`:"Your current stage"}</Text></View><Text style={styles.listCount}>{props.threads.length}</Text></View>}
         ListEmptyComponent={<View style={styles.empty}>{props.loading?<><ActivityIndicator color={colors.primary}/><Text style={styles.emptyText}>Loading your workspace…</Text></>:<><View style={styles.emptyIcon}><Text>⌕</Text></View><Text style={styles.emptyTitle}>No tasks found</Text><Text style={styles.emptyText}>{props.search?"Try a different search.":"This stage has no tasks for the selected project."}</Text></>}</View>}
-        renderItem={({item})=><TaskCard thread={item} queueCount={props.queues[item.id]?.length||0} working={props.isWorking(item)} title={props.titleFor(item)} project={props.projectFor(item)} showProject={props.showProject} onOpen={()=>props.onOpen(item)} onMove={()=>props.onMove(item)} onFork={()=>props.onFork(item)}/>} />
+        renderItem={({item})=><TaskCard thread={item} queueCount={props.queues[item.id]?.length||0} working={props.isWorking(item)} title={props.titleFor(item)} project={props.projectFor(item)} showProject={props.showProject} onOpen={()=>props.onOpen(item)} onMove={()=>props.onMove(item)} onFork={()=>props.onFork(item)} onRename={()=>props.onRename(item)}/>} />
 
       <View style={styles.bottomNav}>
         <Pressable style={styles.navItem} accessibilityRole="button" accessibilityState={{selected:true}}><Text style={[styles.navIcon,styles.navIconActive]}>⌂</Text><Text style={[styles.navLabel,styles.navLabelActive]}>Board</Text></Pressable>
@@ -97,6 +98,7 @@ export function MobileBoardHome(props: MobileBoardHomeProps) {
 }
 
 const styles=StyleSheet.create({
+  cardTitleRow:{flexDirection:"row",alignItems:"flex-start",justifyContent:"space-between",gap:8},
   page:{flex:1,backgroundColor:colors.background},
   header:{minHeight:70,paddingHorizontal:spacing.lg,flexDirection:"row",alignItems:"center",justifyContent:"space-between",borderBottomWidth:StyleSheet.hairlineWidth,borderColor:colors.border,backgroundColor:colors.surface},
   brand:{flexDirection:"row",alignItems:"center",gap:10},logo:{width:36,height:36,padding:8,borderRadius:11,flexDirection:"row",alignItems:"flex-end",gap:3,backgroundColor:colors.ink},logoBar:{flex:1,borderRadius:2,backgroundColor:"white"},brandTitle:{color:colors.text,fontSize:16,fontWeight:"800",letterSpacing:-.4},connection:{marginTop:3,flexDirection:"row",alignItems:"center",gap:5},connectionDot:{width:6,height:6,borderRadius:3},connectionText:{color:colors.textMuted,fontSize:9,fontWeight:"600"},newButton:{width:40,height:40,alignItems:"center",justifyContent:"center",borderRadius:12,backgroundColor:colors.ink},newButtonIcon:{color:"white",fontSize:20,lineHeight:22},

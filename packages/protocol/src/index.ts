@@ -104,6 +104,17 @@ export function displayTitle(name: string | null, preview: string | null): strin
   return separator > 0 ? name.slice(separator + 3).trim() || preview || name : name;
 }
 
+export function threadNameWithTitle(name: string | null, preview: string | null, title: string): string {
+  const next = title.trim();
+  if (!next) throw new Error("Title cannot be empty");
+  const category = categoryFromTitle(name || preview);
+  if (category === "Uncategorized") {
+    if (next.includes(" - ")) throw new Error("Use Move to change the category. An uncategorized title cannot contain ' - '.");
+    return next;
+  }
+  return `${category} - ${next}`;
+}
+
 export function parsePairingPayload(value: string): PairingCredential {
   const parsed = value.trim().startsWith("{")
     ? JSON.parse(value) as Partial<PairingCredential>

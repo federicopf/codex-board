@@ -12,6 +12,7 @@ Codex Board is an unofficial, open-source board and chat client for local Codex 
 - Dragging cards between columns renames the real Codex task and verifies that Codex persisted the title.
 - Internal chat with persisted history, streamed responses, Markdown, collapsible technical activity and turn interruption.
 - Native conversation forks from cards or chat, copying the complete history or branching from any completed turn on desktop and mobile.
+- Rename conversations from cards or chat on desktop and mobile while preserving their category, project and history.
 - New Codex tasks can be created from desktop or mobile, with project, category, title and first message.
 - Backend-owned FIFO follow-up queue shared by desktop and mobile and persisted across restarts.
 - Automatic or manual command, file-change and permission approvals.

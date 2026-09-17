@@ -20,6 +20,9 @@ import { RemoteDialog } from "./RemoteDialog";
 import { AutomationsDialog } from "./AutomationsDialog";
 import { NewTaskDialog } from "./NewTaskDialog";
 import { ForkThreadDialog } from "./ForkThreadDialog";
+import { RenameThreadDialog } from "./RenameThreadDialog";
+import { loadThread } from "./api";
+import { threadNameWithTitle } from "@codex-board/protocol";
 import { ProductTour } from "./ProductTour";
 import { InboxDialog } from "./InboxDialog";
 import { MoveThreadDialog } from "./MoveThreadDialog";
@@ -76,6 +79,7 @@ function App() {
   const [movingThreadId, setMovingThreadId] = useState<string | null>(null);
   const [forkingThreadId, setForkingThreadId] = useState<string | null>(null);
   const [forkBusy, setForkBusy] = useState(false);
+  const [renamingThreadId, setRenamingThreadId] = useState<string | null>(null);
   const [remoteDialog, setRemoteDialog] = useState(false);
   const [automationsDialog, setAutomationsDialog] = useState(false);
   const [newTaskDialog, setNewTaskDialog] = useState(false);
@@ -329,6 +333,13 @@ function App() {
   const chatThread = threads.find((thread) => thread.id === chatThreadId) ?? null;
   const movingThread = threads.find((thread) => thread.id === movingThreadId) ?? null;
   const forkingThread = threads.find((thread) => thread.id === forkingThreadId) ?? null;
+  const renamingThread = threads.find((thread) => thread.id === renamingThreadId) ?? null;
+  async function renameConversation(title: string) {
+    if (!renamingThread) return;
+    const latest = await loadThread(renamingThread.id);
+    const confirmed = await renameThread(renamingThread.id, threadNameWithTitle(latest.name || null, latest.preview || null, title));
+    setThreads((current) => toBoardThreads(current.map((thread) => thread.id === confirmed.id ? confirmed : thread)));
+  }
 
   async function createFork(category: string, title: string, lastTurnId: string | null) {
     if (!forkingThread) return;
@@ -551,6 +562,7 @@ function App() {
           onOpen={setChatThreadId}
           onMove={setMovingThreadId}
           onFork={setForkingThreadId}
+          onRenameThread={setRenamingThreadId}
           onRename={(category) => setCategoryDialog({ mode: "rename", category })}
         />
       </SortableContext>
@@ -566,6 +578,7 @@ function App() {
           onRemoveQueued={removeQueuedMessage}
           onSessionState={updateSessionState}
           onFork={setForkingThreadId}
+          onRename={setRenamingThreadId}
           onClose={() => {
             setChatThreadId(null);
             void refresh(true);
@@ -586,6 +599,7 @@ function App() {
       {categoryManager && <CategoryManagerDialog categories={categories} threads={threads} onClose={() => setCategoryManager(false)} onCreate={() => { setCategoryManager(false); setCategoryDialog({ mode: "create" }); }} onRename={(category) => { setCategoryManager(false); setCategoryDialog({ mode: "rename", category }); }} onDelete={deleteEmptyCategory} onPosition={setCategoryPosition} />}
       {movingThread && <MoveThreadDialog thread={movingThread} categories={categories} busy={pendingIds.has(movingThread.id)} onClose={() => setMovingThreadId(null)} onMove={(category, create) => void moveBoardThread(movingThread.id, category, create)} />}
       {forkingThread && <ForkThreadDialog thread={forkingThread} categories={categories} busy={forkBusy} onClose={() => { if (!forkBusy) setForkingThreadId(null); }} onFork={createFork} />}
+      {renamingThread && <RenameThreadDialog key={renamingThread.id} thread={renamingThread} onClose={()=>setRenamingThreadId(null)} onRename={renameConversation}/>}
       {settingsOpen && <BoardSettingsDialog approvalMode={approvalMode} onApprovalMode={setApprovalMode} onClose={() => setSettingsOpen(false)} />}
       {remoteDialog && <RemoteDialog onClose={() => setRemoteDialog(false)} />}
       {automationsDialog && <AutomationsDialog threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}
