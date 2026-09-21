@@ -5,8 +5,10 @@ export type IconName =
   | "bell"
   | "board"
   | "categories"
+  | "check"
   | "chevronLeft"
   | "chevronDown"
+  | "copy"
   | "edit"
   | "fork"
   | "grip"
@@ -24,8 +26,10 @@ const paths: Record<IconName, ReactNode> = {
   bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" /><path d="M10 21h4" /></>,
   board: <><rect x="3" y="3" width="7" height="18" rx="2" /><rect x="14" y="3" width="7" height="11" rx="2" /></>,
   categories: <><rect x="3" y="4" width="18" height="6" rx="2" /><rect x="3" y="14" width="18" height="6" rx="2" /></>,
+  check: <path d="m20 6-11 11-5-5" />,
   chevronLeft: <path d="m15 18-6-6 6-6" />,
   chevronDown: <path d="m7 10 5 5 5-5" />,
+  copy: <><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></>,
   edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" /></>,
   fork: <><circle cx="7" cy="5" r="2" /><circle cx="17" cy="7" r="2" /><circle cx="17" cy="17" r="2" /><path d="M9 5h1a4 4 0 0 1 4 4v4a4 4 0 0 0 1 2.7M9 5a6 6 0 0 1 6 2" /><path d="M7 7v12" /></>,
   grip: <><circle cx="9" cy="6" r="1" fill="currentColor" stroke="none" /><circle cx="15" cy="6" r="1" fill="currentColor" stroke="none" /><circle cx="9" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="9" cy="18" r="1" fill="currentColor" stroke="none" /><circle cx="15" cy="18" r="1" fill="currentColor" stroke="none" /></>,

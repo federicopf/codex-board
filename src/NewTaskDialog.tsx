@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { asCodexError } from "./api";
 import type { BoardThread } from "./types";
 
 export function NewTaskDialog({ threads, categories, defaultProjectKey, onClose, onCreate }: { threads: BoardThread[]; categories: string[]; defaultProjectKey?: string; onClose: () => void; onCreate: (cwd: string, category: string, title: string, prompt: string) => Promise<void> }) {
@@ -12,7 +13,7 @@ export function NewTaskDialog({ threads, categories, defaultProjectKey, onClose,
   async function submit(event: React.FormEvent) {
     event.preventDefault(); setBusy(true); setError(null);
     try { await onCreate(cwd, category, title.trim(), prompt.trim()); onClose(); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    catch (cause) { setError(asCodexError(cause).message); }
     finally { setBusy(false); }
   }
   return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><form className="new-task-dialog" onSubmit={(event) => void submit(event)}>

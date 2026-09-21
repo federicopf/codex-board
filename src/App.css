@@ -93,8 +93,17 @@ select { min-width: 180px; padding: 0 32px 0 11px; }
 .chat-empty h3 { margin: 0; color: var(--text); font-size: 16px; }.chat-empty p { margin: 7px 0; font-size: 12px; }
 .chat-error { max-width: 820px; margin: 0 auto 16px; padding: 10px 12px; display: flex; justify-content: space-between; gap: 12px; border: 1px solid #efc1ba; border-radius: 8px; background: #fff0ed; color: #8d2f22; font-size: 11px; }
 .chat-error button { border: 0; background: transparent; color: inherit; font-size: 16px; }
-.chat-item { max-width: 820px; margin: 0 auto 14px; }
+.chat-item { position: relative; max-width: 820px; margin: 0 auto 14px; }
+.chat-item.has-copy:not(.user) .chat-item-text, .chat-item.has-copy .chat-item-title { padding-right: 38px; }
+.chat-item-copy { position: absolute; top: 6px; right: 6px; z-index: 1; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 7px; color: var(--muted); background: var(--panel); opacity: 0; cursor: pointer; transition: opacity .15s ease, color .15s ease, background .15s ease; }
+.chat-item:hover .chat-item-copy, .chat-item:focus-within .chat-item-copy { opacity: 1; }
+.chat-item-copy:hover:not(:disabled) { color: var(--accent); background: var(--panel); }
+.chat-item-copy:disabled { cursor: default; opacity: 0; }
+.chat-item-copy svg { width: 15px; height: 15px; }
 .chat-item.user { width: fit-content; max-width: min(680px, 82%); margin-right: 0; padding: 10px 13px; border-radius: 12px 12px 3px 12px; background: var(--accent); color: white; }
+.chat-item.user.has-copy { padding-right: 46px; }
+.chat-item.user .chat-item-copy { border-color: rgba(255,255,255,.25); color: rgba(255,255,255,.8); background: rgba(255,255,255,.12); }
+.chat-item.user .chat-item-copy:hover:not(:disabled) { color: white; background: rgba(255,255,255,.22); }
 .chat-item.assistant { padding: 2px 4px 6px; color: var(--text); }
 .chat-item.reasoning, .chat-item.plan, .chat-item.notice, .chat-item.activity { padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 .chat-item.reasoning { border-style: dashed; color: var(--muted); }

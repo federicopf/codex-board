@@ -97,6 +97,7 @@ function ChatComposer({ threadId, working, activeTurnId, loading, onSend, onStop
 }
 
 export function ChatPanel({ thread, events, queuedMessages, working, activeTurnId, onSend, onRemoveQueued, onSessionState, onFork, onRename, onClose }: ChatPanelProps) {
+  const AUTO_FOLLOW_THRESHOLD = 12;
   const [session, setSession] = useState<ChatSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [approvalBusy, setApprovalBusy] = useState(false);
@@ -104,11 +105,18 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
   const [error, setError] = useState<string | null>(null);
   const lastSequence = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const followOutput = useRef(true);
+  const initialScrollPending = useRef(false);
+  const copyResetTimer = useRef<number | null>(null);
+  const [copiedItemId, setCopiedItemId] = useState<string | null>(null);
   const request = requests[0] ?? null;
 
   useEffect(() => {
     let cancelled = false;
     lastSequence.current = events.at(-1)?.sequence || 0;
+    initialScrollPending.current = true;
+    followOutput.current = true;
     setLoading(true); setSession(null); setRequests([]); setError(null);
     void loadThread(thread.id).then((loaded) => {
       if (cancelled) return;
@@ -135,7 +143,51 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
     }
   }, [events, session === null, thread.id]);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [session?.items, queuedMessages, request]);
+  useEffect(() => {
+    if (!session || (!followOutput.current && !initialScrollPending.current)) return;
+    bottomRef.current?.scrollIntoView({ behavior: initialScrollPending.current ? "auto" : "smooth", block: "end" });
+    initialScrollPending.current = false;
+  }, [session?.items, queuedMessages, request]);
+
+  useEffect(() => () => {
+    if (copyResetTimer.current !== null) window.clearTimeout(copyResetTimer.current);
+  }, []);
+
+  function updateFollowOutput() {
+    const body = bodyRef.current;
+    if (!body) return;
+    const distanceFromBottom = body.scrollHeight - body.scrollTop - body.clientHeight;
+    followOutput.current = distanceFromBottom <= AUTO_FOLLOW_THRESHOLD;
+  }
+
+  async function copyMessage(itemId: string, value: string) {
+    if (!value.trim()) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = value;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        textarea.remove();
+      }
+      setCopiedItemId(itemId);
+      if (copyResetTimer.current !== null) window.clearTimeout(copyResetTimer.current);
+      copyResetTimer.current = window.setTimeout(() => setCopiedItemId(null), 1400);
+    } catch (cause) {
+      setError(asCodexError(cause).message);
+    }
+  }
+
+  function copyButton(item: ChatSession["items"][number]) {
+    const copied = copiedItemId === item.id;
+    return <button className="chat-item-copy" type="button" disabled={!item.text?.trim()} onClick={() => void copyMessage(item.id, item.text)} aria-label={copied ? "Message copied" : "Copy message"} title={copied ? "Copied" : "Copy message"}><Icon name={copied ? "check" : "copy"} /></button>;
+  }
   const title = useMemo(() => thread.displayTitle || thread.effectiveTitle || "Untitled thread", [thread]);
 
   async function stop() {
@@ -154,11 +206,11 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
 
   return <div className="chat-overlay"><section className="chat-panel" aria-label={`Chat: ${title}`}>
     <header className="chat-header"><button className="icon-button chat-back-button" onClick={onClose} aria-label="Back to board"><Icon name="chevronLeft" /></button><div className="chat-heading"><div className="chat-title-row"><h2>{title}</h2><span className={working ? "chat-state live" : "chat-state"}><i />{working ? "Working" : "Ready"}</span></div><p>{thread.cwd || "Local Codex thread"}{thread.forkedFromId ? " · Forked conversation" : ""}</p></div><button className="icon-button chat-fork-button" onClick={()=>onRename(thread.id)} aria-label="Rename conversation" title="Rename conversation"><Icon name="edit"/></button><button className="icon-button chat-fork-button" disabled={working || loading} onClick={() => onFork(thread.id)} aria-label="Fork conversation" title={working ? "Wait for the active turn to finish" : "Fork conversation"}><Icon name="fork" /></button></header>
-    <div className="chat-body">
+    <div className="chat-body" ref={bodyRef} onScroll={updateFollowOutput}>
       {loading && <div className="chat-loading"><div className="spinner" /><span>Loading conversation…</span></div>}
       {!loading && error && <div className="chat-error" role="alert">{error}<button onClick={() => setError(null)}>×</button></div>}
       {!loading && session?.items.length === 0 && <div className="chat-empty"><h3>Continue this thread</h3><p>Send a message below. Codex will work in the thread&apos;s existing project.</p></div>}
-      {session?.items.map((item) => item.kind === "activity" ? <details key={item.id} className="chat-item activity"><summary><span>{item.title || "Activity"}</span>{item.status && <small>{item.status}</small>}</summary><div className="chat-item-text">{item.text || "Working…"}</div></details> : <article key={item.id} className={`chat-item ${item.kind}`}>{item.title && <div className="chat-item-title"><span>{item.title}</span>{item.status && <small>{item.status}</small>}</div>}<div className="chat-item-text"><MarkdownContent>{item.text || (item.kind === "assistant" ? "Thinking…" : "Working…")}</MarkdownContent></div></article>)}
+      {session?.items.map((item) => item.kind === "activity" ? <details key={item.id} className="chat-item activity has-copy">{copyButton(item)}<summary><span>{item.title || "Activity"}</span>{item.status && <small>{item.status}</small>}</summary><div className="chat-item-text">{item.text || "Working…"}</div></details> : <article key={item.id} className={`chat-item ${item.kind} has-copy`}>{copyButton(item)}{item.title && <div className="chat-item-title"><span>{item.title}</span>{item.status && <small>{item.status}</small>}</div>}<div className="chat-item-text"><MarkdownContent>{item.text || (item.kind === "assistant" ? "Thinking…" : "Working…")}</MarkdownContent></div></article>)}
       {working && <div className="working-indicator"><span /><span /><span /><em>Codex is working</em></div>}
       {queuedMessages.length > 0 && <section className="message-queue"><div className="queue-heading"><strong>Message queue</strong><span>{queuedMessages.length} waiting</span></div>{queuedMessages.map((message, index) => <div className="queued-message" key={message.id}><span>{index + 1}</span><p>{message.text}</p><button aria-label="Remove queued message" onClick={() => onRemoveQueued(thread.id, message.id)}>×</button></div>)}</section>}
       {request && <ApprovalPrompt request={request} busy={approvalBusy} onResolve={(result) => void resolveRequest(result)} />}
