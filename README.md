@@ -162,6 +162,31 @@ npm run mobile:apk
 
 The `preview` profile in `apps/mobile/eas.json` creates an APK for direct installation. A distributable iOS build additionally requires an Apple developer account and iOS signing through EAS.
 
+Codex Board Mobile is linked to the EAS project [`@f.germani06/codex-board-mobile`](https://expo.dev/accounts/f.germani06/projects/codex-board-mobile). Run EAS commands from `apps/mobile` with Node 22.22.2 or newer. Useful operational commands:
+
+```powershell
+cd .\apps\mobile
+npx eas-cli@latest whoami
+npx eas-cli@latest project:info
+npx eas-cli@latest build:list --platform android --limit 10
+npx eas-cli@latest build:view <build-id>
+npx eas-cli@latest build:download --build-id <build-id>
+npx eas-cli@latest update:list --all --limit 10
+npx eas-cli@latest channel:list
+npx eas-cli@latest branch:list
+npx eas-cli@latest browse builds
+npx eas-cli@latest browse updates
+```
+
+The installed preview and production binaries use separate EAS Update channels. Publish only after testing the matching binary:
+
+```powershell
+npx eas-cli@latest update --channel preview --message "Describe the update" --environment preview
+npx eas-cli@latest update --channel production --message "Describe the update" --environment production
+```
+
+EAS Update can deliver compatible JavaScript, styling and asset changes. Native dependency, permission, Expo SDK or runtime changes still require a new APK/build. A device must first install an OTA-enabled binary; release builds normally download a compatible update on launch and apply it after a subsequent restart. Publishing an OTA update is always an explicit operation and is not performed by ordinary Git pushes.
+
 Pushing a version tag such as `v0.2.0` runs `.github/workflows/android-apk.yml`, builds a standalone signed APK and attaches it to the corresponding GitHub release.
 
 ## Security notes

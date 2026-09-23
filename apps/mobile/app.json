@@ -45,10 +45,25 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.federicogermani.codexboard.mobile"
+      "package": "com.federicogermani.codexboard.mobile",
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "897b2e51-d912-454a-b9df-c63eb3543072"
+      }
+    },
+    "owner": "f.germani06",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/897b2e51-d912-454a-b9df-c63eb3543072"
     }
   }
 }

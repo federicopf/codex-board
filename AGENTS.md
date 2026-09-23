@@ -163,6 +163,6 @@ For mobile bundle verification, run `npx expo export --platform android` inside 
 
 ## EAS Update / OTA status
 
-OTA updates have been discussed but are not configured at the time of writing. `apps/mobile/eas.json` contains preview APK and production build profiles; it does not yet establish update channels. Verify `expo-updates`, `updates.url`, `runtimeVersion`, EAS project linkage and authenticated Expo account before claiming OTA support.
+EAS Update is configured for `@f.germani06/codex-board-mobile`: `expo-updates`, the EAS project ID, update URL, `appVersion` runtime policy and separate `preview`/`production` channels are present. Run EAS commands from `apps/mobile` with Node 22.22.2 or newer; see the README for build/update inspection and publication commands.
 
-The agreed direction is preview/production update channels, compatible-runtime targeting and an unobtrusive “update available / restart” UI. A first OTA-enabled binary must be installed; later compatible JS/asset changes can be delivered OTA. Native dependencies, permissions and runtime changes still require a new binary. OTA does not update the Windows Rust backend. Never publish an OTA update as a side effect of unrelated work.
+A first OTA-enabled binary must be installed before a device can receive updates. Later compatible JavaScript and asset changes can be delivered OTA. Native dependencies, permissions, Expo SDK/runtime changes and the Windows Rust backend still require new native builds. The app currently relies on the standard background download/restart behavior; an explicit in-app “update available / restart” UI remains optional future work. Never publish an OTA update as a side effect of unrelated work.

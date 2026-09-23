@@ -45,7 +45,7 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 - Entry point: `apps/mobile/App.tsx`, `apps/mobile/src/MobileBoardHome.tsx`, `apps/mobile/src/api.ts`, `apps/mobile/src/connection.ts`.
 - Manifest: `apps/mobile/package.json`, `apps/mobile/app.json`, `apps/mobile/eas.json`.
 - Test/verifiche: `npm run mobile:typecheck`; per bundle Android usare `npx expo export --platform android` da `apps/mobile` quando serve.
-- Pattern: Expo Go QR e Board pairing QR sono cose diverse; non promettere OTA finche `expo-updates`, runtime e EAS project non sono configurati.
+- Pattern: Expo Go QR e Board pairing QR sono cose diverse. EAS Update usa il progetto `@f.germani06/codex-board-mobile`, runtime `appVersion` e canali `preview`/`production`; una nuova build nativa resta necessaria quando cambia il runtime.
 
 ### Shared protocol
 
