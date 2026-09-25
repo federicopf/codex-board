@@ -131,6 +131,17 @@ impl CodexClient {
         Ok(ThreadDto::from(read.thread))
     }
 
+    pub async fn archive_thread(&self, thread_id: String) -> Result<(), CodexErrorDto> {
+        if thread_id.trim().is_empty() {
+            return Err(CodexErrorDto::new(CodexErrorCode::RequestFailed, "Thread id is required"));
+        }
+        let client = self.ensure_running().await?;
+        let result = client.request("thread/archive", json!({ "threadId": thread_id })).await?;
+        if result != json!({}) && result != Value::Null {
+            return Err(CodexErrorDto::new(CodexErrorCode::ProtocolError, "Unexpected thread/archive response").with_details(result.to_string()));
+        }
+        Ok(())
+    }
     pub async fn create_thread(
         &self,
         cwd: String,

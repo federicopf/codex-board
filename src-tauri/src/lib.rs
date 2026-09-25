@@ -32,6 +32,14 @@ async fn rename_thread(
 }
 
 #[tauri::command]
+async fn archive_thread(
+    client: tauri::State<'_, Arc<CodexClient>>,
+    thread_id: String,
+) -> Result<(), CodexErrorDto> {
+    client.archive_thread(thread_id).await
+}
+
+#[tauri::command]
 async fn create_thread(
     client: tauri::State<'_, Arc<CodexClient>>,
     cwd: String,
@@ -247,6 +255,7 @@ pub fn run() {
             list_threads,
             rename_thread,
             create_thread,
+            archive_thread,
             fork_thread,
             load_thread,
             send_message,

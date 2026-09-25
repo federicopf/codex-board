@@ -476,3 +476,7 @@ body { min-width: 980px; }
   :root { --sidebar:#0d0f14; --canvas:#14161c; --surface-raised:#1d2028; }
   .workspace-titlebar { background: rgba(29,32,40,.86); }.workspace-commandbar { background: var(--surface-raised); }.board-column { border-color:#292d36;background:#191c23; }.column-header { background:rgba(34,37,46,.75); }.thread-card footer { border-color:#2c3038; }.workspace-metrics .live { background:#183429; }.workspace-metrics .live strong { color:#55d79b; }.button.primary { border-color:#777af2;background:#686bea; }
 }
+
+.button.danger { color: #b42318; border-color: #f0b8b2; background: #fff7f6; }
+.button.danger:hover { background: #feeceb; border-color: #d92d20; }
+.card-icon-action:has(svg) { flex: 0 0 auto; }

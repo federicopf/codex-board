@@ -11,7 +11,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { asCodexError, clearNotifications, createThread, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameThread, sendMessage, setBoardConfig } from "./api";
+import { asCodexError, clearNotifications, createThread, archiveThread, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameThread, sendMessage, setBoardConfig } from "./api";
 import type { BoardNotification } from "@codex-board/protocol";
 import "./App.css";
 import { CategoryDialog } from "./CategoryDialog";
@@ -334,6 +334,28 @@ function App() {
   const movingThread = threads.find((thread) => thread.id === movingThreadId) ?? null;
   const forkingThread = threads.find((thread) => thread.id === forkingThreadId) ?? null;
   const renamingThread = threads.find((thread) => thread.id === renamingThreadId) ?? null;
+  async function archiveConversation(threadId: string) {
+    const thread = threadsRef.current.find((item) => item.id === threadId);
+    if (!thread || !window.confirm(`Archive "${thread.displayTitle}"? This removes the conversation from the active board but keeps its history in Codex.`)) return;
+    try {
+      await archiveThread(threadId);
+      setChatThreadId((current) => current === threadId ? null : current);
+      setThreads((current) => current.filter((item) => item.id !== threadId));
+      await refresh(true);
+    } catch (cause) { setError(asCodexError(cause)); }
+  }
+
+  async function archiveCurrentProject() {
+    if (project === ALL_PROJECTS) return;
+    const projectThreads = threadsRef.current.filter((item) => item.projectKey === project);
+    const label = projects.find((item) => item.key === project)?.label || project;
+    if (!projectThreads.length || !window.confirm(`Archive project "${label}" and its ${projectThreads.length} Codex conversation${projectThreads.length === 1 ? "" : "s"}? The conversations remain available in Codex archives.`)) return;
+    try {
+      for (const thread of projectThreads) await archiveThread(thread.id);
+      setChatThreadId(null);
+      await refresh(true);
+    } catch (cause) { setError(asCodexError(cause)); }
+  }
   async function renameConversation(title: string) {
     if (!renamingThread) return;
     const latest = await loadThread(renamingThread.id);
@@ -563,6 +585,8 @@ function App() {
           onMove={setMovingThreadId}
           onFork={setForkingThreadId}
           onRenameThread={setRenamingThreadId}
+          onDelete={archiveConversation}
+          onDeleteProject={() => void archiveCurrentProject()}
           onRename={(category) => setCategoryDialog({ mode: "rename", category })}
         />
       </SortableContext>

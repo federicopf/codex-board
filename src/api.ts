@@ -14,6 +14,9 @@ export async function listThreads(): Promise<ThreadDto[]> {
 export async function renameThread(threadId: string, newName: string): Promise<ThreadDto> {
   return invoke<ThreadDto>("rename_thread", { threadId, newName });
 }
+export async function archiveThread(threadId: string): Promise<void> {
+  return invoke("archive_thread", { threadId });
+}
 export async function createThread(cwd: string, category: string, title: string, prompt: string): Promise<ThreadDto> {
   return invoke<ThreadDto>("create_thread", { cwd, category, title, prompt });
 }
