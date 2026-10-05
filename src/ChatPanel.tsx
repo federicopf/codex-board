@@ -162,6 +162,14 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
   const [error, setError] = useState<string | null>(null);
   const [openComposerTool, setOpenComposerTool] = useState<"model" | "attachment" | null>(null);
   const [imageAttachments, setImageAttachments] = useState<ImageAttachmentDraft[]>([]);
+  useEffect(() => {
+    if (!openComposerTool) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest(".composer-tools")) setOpenComposerTool(null);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [openComposerTool]);
   const lastSequence = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);

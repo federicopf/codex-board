@@ -15,6 +15,7 @@ export function AutomationResultModal({ notification, onClose, onOpenThread }: {
   return (
     <Modal transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close automation result" />
         <View style={styles.dialog}>
           <View style={styles.header}>
             <View style={[styles.statusIcon,failed&&styles.statusIconFailed]}><Text style={[styles.statusSymbol,failed&&styles.statusSymbolFailed]}>{failed?"!":"✓"}</Text></View>
