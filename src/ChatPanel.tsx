@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { asCodexError, interruptTurn, loadThread, respondToCodexRequest } from "./api";
+import { asCodexError, compactThread, getModels, interruptTurn, loadThread, respondToCodexRequest } from "./api";
 import { applyCodexEvent, createChatSession, eventRequest } from "./lib/chat";
 import { denialResult } from "./lib/approvals";
 import { MarkdownContent } from "./MarkdownContent";
 import { Icon } from "./ui/Icon";
-import type { BoardThread, ChatSession, JsonValue, PendingCodexRequest, QueuedMessage, SequencedCodexEvent } from "./types";
+import type { BoardThread, ChatSession, JsonValue, PendingCodexRequest, QueuedMessage, SequencedCodexEvent, TurnSettings } from "./types";
 
 type JsonObject = Record<string, JsonValue>;
 const record = (value: JsonValue | undefined): JsonObject => value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
@@ -17,7 +17,7 @@ interface ChatPanelProps {
   queuedMessages: QueuedMessage[];
   working: boolean;
   activeTurnId: string | null;
-  onSend: (threadId: string, message: string) => Promise<void>;
+  onSend: (threadId: string, message: string, imageUrl?: string, settings?: TurnSettings) => Promise<void>;
   onRemoveQueued: (threadId: string, messageId: string) => void;
   onSessionState: (threadId: string, running: boolean, turnId: string | null) => void;
   onFork: (threadId: string) => void;
@@ -73,18 +73,20 @@ function ChatComposer({ threadId, working, activeTurnId, loading, onSend, onStop
   working: boolean;
   activeTurnId: string | null;
   loading: boolean;
-  onSend: (threadId: string, message: string) => Promise<void>;
+  onSend: (threadId: string, message: string, imageUrl?: string, settings?: TurnSettings) => Promise<void>;
   onStop: () => Promise<void>;
   onError: (message: string | null) => void;
 }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
 
   async function submit() {
     const message = draft.trim();
-    if (!message || sending) return;
+    if ((!message && !imageUrl) || sending) return;
+    if (!localStorage.getItem("codex-board.model")) { onError("Choose a Codex model before sending."); return; }
     setSending(true); onError(null);
-    try { await onSend(threadId, message); setDraft(""); }
+    try { await onSend(threadId, message, imageUrl || undefined); setDraft(""); setImageUrl(null); }
     catch (cause) { onError(asCodexError(cause).message); }
     finally { setSending(false); }
   }
@@ -94,6 +96,43 @@ function ChatComposer({ threadId, working, activeTurnId, loading, onSend, onStop
   }
 
   return <footer className="composer-wrap"><div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} placeholder={working ? "Add another message to the queue…" : "Message Codex…"} disabled={loading} rows={2} />{working ? <><button className="stop-button" disabled={!activeTurnId} onClick={() => void onStop()}>Stop</button><button className="send-button" disabled={!draft.trim() || sending || loading} onClick={() => void submit()}>{sending ? "Adding…" : "Queue"}</button></> : <button className="send-button" disabled={!draft.trim() || sending || loading} onClick={() => void submit()}>{sending ? "Sending…" : "Send"}</button>}</div><small>Enter to send · Shift+Enter for a new line</small></footer>;
+}
+
+function ImageAttachmentButton({ threadId, onSend, onError, disabled }: { threadId: string; onSend: (threadId: string, message: string, imageUrl?: string) => Promise<void>; onError: (message: string | null) => void; disabled: boolean }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  return <div className="attachment-picker"><input ref={inputRef} hidden type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; const reader = new FileReader(); reader.onload = () => { if (typeof reader.result !== "string") return; setBusy(true); onError(null); void onSend(threadId, "", reader.result).catch((cause) => onError(asCodexError(cause).message)).finally(() => setBusy(false)); }; reader.readAsDataURL(file); }} /><button type="button" className="side-tool-button attachment-trigger" disabled={disabled || busy} onClick={() => setOpen((value) => !value)} aria-label="Attachments"><span>Attachments</span><strong>{busy ? "Uploading…" : "Add image"}</strong><Icon name="chevronDown" /></button>{open && <div className="attachment-popover"><strong>Attach to message</strong><button type="button" onClick={() => { setOpen(false); inputRef.current?.click(); }}><Icon name="paperclip" /><span>Choose an image</span></button><small>Images are sent to Codex immediately.</small></div>}</div>;
+}
+
+function TurnSettingsBar({ threadId, working }: { threadId: string; working: boolean }) {
+  const [model, setModel] = useState(() => localStorage.getItem("codex-board.model") || "");
+  const [effort, setEffort] = useState(() => localStorage.getItem("codex-board.effort") || "");
+  const [summary, setSummary] = useState(() => localStorage.getItem("codex-board.summary") || "auto");
+  const [tier, setTier] = useState(() => localStorage.getItem("codex-board.serviceTier") || "");
+  const [models, setModels] = useState<Array<{ id: string; name: string; efforts: string[]; tiers: string[] }>>([]);
+  const [compacting, setCompacting] = useState(false);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void getModels().then((value) => {
+      const data = record(value).data;
+      if (!alive || !Array.isArray(data)) return;
+      const next = data.map((item) => {
+        const row = record(item);
+        return { id: text(row.model) || text(row.id), name: text(row.displayName) || text(row.model) || text(row.id), efforts: Array.isArray(row.supportedReasoningEfforts) ? row.supportedReasoningEfforts.map((entry) => text(record(entry).reasoningEffort)).filter(Boolean) : [], tiers: Array.isArray(row.serviceTiers) ? row.serviceTiers.map((entry) => text(record(entry).id)).filter(Boolean) : [] };
+      }).filter((item) => item.id);
+      setModels(next);
+      if (next.length && !next.some((item) => item.id === model)) { setModel(""); localStorage.removeItem("codex-board.model"); }
+    }).catch(() => { /* keep Default when Codex catalog is unavailable */ });
+    return () => { alive = false; };
+  }, []);
+  const selected = models.find((item) => item.id === model);
+  const efforts = selected?.efforts.length ? selected.efforts : ["low", "medium", "high", "xhigh"];
+  const tiers = selected?.tiers.length ? selected.tiers : ["priority"];
+  function save(key: string, value: string, setter: (value: string) => void) { setter(value); localStorage.setItem(key, value); }
+  async function compact() { setCompacting(true); try { await compactThread(threadId); } finally { setCompacting(false); } }
+  return <section className="model-picker"><button type="button" className="side-tool-button" onClick={() => setOpen((value) => !value)}><span>Model</span><strong>{models.find((item) => item.id === model)?.name || "Select model"}</strong><Icon name="chevronDown" /></button>{open && <div className="model-picker-popover"><div className="picker-heading"><strong>Model &amp; turn settings</strong><small>{models.length ? `${models.length} available in Codex` : "Loading model catalog…"}</small></div><div className="model-list" role="listbox" aria-label="Choose model">{models.map((item) => <button type="button" role="option" aria-selected={item.id === model} className={item.id === model ? "model-choice selected" : "model-choice"} key={item.id} onClick={() => save("codex-board.model", item.id, setModel)}><span>{item.name}</span>{item.id === model && <Icon name="check" />}</button>)}</div>{!model && <small className="model-required">Choose a model before sending.</small>}<div className="picker-fields"><label>Effort<select value={effort} onChange={(event) => save("codex-board.effort", event.target.value, setEffort)}><option value="">Model default</option>{efforts.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label>Summary<select value={summary} onChange={(event) => save("codex-board.summary", event.target.value, setSummary)}><option value="auto">Auto</option><option value="concise">Concise</option><option value="detailed">Detailed</option><option value="none">Off</option></select></label><label>Service tier<select value={tier} onChange={(event) => save("codex-board.serviceTier", event.target.value, setTier)}><option value="">Codex automatic</option>{tiers.map((item) => <option key={item} value={item}>{item}</option>)}</select></label></div><button className="compact-button" type="button" disabled={working || compacting} onClick={() => void compact()}>{compacting ? "Compacting…" : "Compact conversation"}</button></div>}</section>;
 }
 
 export function ChatPanel({ thread, events, queuedMessages, working, activeTurnId, onSend, onRemoveQueued, onSessionState, onFork, onRename, onClose }: ChatPanelProps) {
@@ -216,6 +255,6 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
       {request && <ApprovalPrompt request={request} busy={approvalBusy} onResolve={(result) => void resolveRequest(result)} />}
       <div ref={bottomRef} />
     </div>
-    <ChatComposer key={thread.id} threadId={thread.id} working={working} activeTurnId={activeTurnId} loading={loading} onSend={onSend} onStop={stop} onError={setError} />
+    <aside className="chat-side-rail"><TurnSettingsBar threadId={thread.id} working={working} /><ImageAttachmentButton threadId={thread.id} onSend={onSend} onError={setError} disabled={loading} /></aside><ChatComposer key={thread.id} threadId={thread.id} working={working} activeTurnId={activeTurnId} loading={loading} onSend={onSend} onStop={stop} onError={setError} />
   </section></div>;
 }

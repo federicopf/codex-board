@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast};
 
-pub use coordinator::{QueuedMessage, SendOutcome, TurnCoordinator};
+pub use coordinator::{QueuedMessage, SendOutcome, TurnCoordinator, TurnSettings};
 use process::RunningClient;
 use protocol::EventQueue;
 use types::{CodexErrorCode, ThreadListResponse, ThreadReadResponse};
@@ -25,6 +25,13 @@ fn fork_params(thread_id: &str, last_turn_id: Option<&str>) -> Value {
         params["lastTurnId"] = json!(last_turn_id);
     }
     params
+}
+
+fn is_empty_rollout_error(error: &CodexErrorDto) -> bool {
+    let message = error.message.to_ascii_lowercase();
+    let details = error.details.as_deref().unwrap_or("").to_ascii_lowercase();
+    (message.contains("rollout") && message.contains("is empty"))
+        || (details.contains("rollout") && details.contains("is empty"))
 }
 
 impl CodexClient {
@@ -56,19 +63,33 @@ impl CodexClient {
         let mut threads = Vec::new();
 
         loop {
-            let result = client
-                .request(
-                    "thread/list",
-                    json!({
-                        "cursor": cursor,
-                        "limit": 100,
-                        "sortKey": "recency_at",
-                        "sortDirection": "desc",
-                        "sourceKinds": ["cli", "vscode", "appServer"],
-                        "archived": false
-                    }),
-                )
-                .await?;
+            let mut attempt = 0_u32;
+            let result = loop {
+                let request = client
+                    .request(
+                        "thread/list",
+                        json!({
+                            "cursor": cursor.clone(),
+                            "limit": 100,
+                            "sortKey": "recency_at",
+                            "sortDirection": "desc",
+                            "sourceKinds": ["cli", "vscode", "appServer"],
+                            "archived": false
+                        }),
+                    )
+                    .await;
+                match request {
+                    Ok(result) => break result,
+                    Err(error) if attempt < 8 && is_empty_rollout_error(&error) => {
+                        attempt += 1;
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            150 * u64::from(attempt),
+                        ))
+                        .await;
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
             let page: ThreadListResponse = serde_json::from_value(result).map_err(|error| {
                 CodexErrorDto::new(
                     CodexErrorCode::ProtocolError,
@@ -83,6 +104,11 @@ impl CodexClient {
             }
         }
         Ok(threads)
+    }
+
+    pub async fn rate_limits(&self) -> Result<Value, CodexErrorDto> {
+        let client = self.ensure_running().await?;
+        client.request("account/rateLimits/read", json!({})).await
     }
 
     pub async fn rename_thread(
@@ -133,12 +159,21 @@ impl CodexClient {
 
     pub async fn archive_thread(&self, thread_id: String) -> Result<(), CodexErrorDto> {
         if thread_id.trim().is_empty() {
-            return Err(CodexErrorDto::new(CodexErrorCode::RequestFailed, "Thread id is required"));
+            return Err(CodexErrorDto::new(
+                CodexErrorCode::RequestFailed,
+                "Thread id is required",
+            ));
         }
         let client = self.ensure_running().await?;
-        let result = client.request("thread/archive", json!({ "threadId": thread_id })).await?;
+        let result = client
+            .request("thread/archive", json!({ "threadId": thread_id }))
+            .await?;
         if result != json!({}) && result != Value::Null {
-            return Err(CodexErrorDto::new(CodexErrorCode::ProtocolError, "Unexpected thread/archive response").with_details(result.to_string()));
+            return Err(CodexErrorDto::new(
+                CodexErrorCode::ProtocolError,
+                "Unexpected thread/archive response",
+            )
+            .with_details(result.to_string()));
         }
         Ok(())
     }
@@ -184,12 +219,29 @@ impl CodexClient {
                 }),
             )
             .await?;
-        let read = client
-            .request(
-                "thread/read",
-                json!({ "threadId": thread_id, "includeTurns": false }),
-            )
-            .await?;
+        // Codex can acknowledge `turn/start` before the rollout JSONL has
+        // received its first record. Wait for the session metadata to become
+        // readable instead of surfacing the transient "rollout is empty" error.
+        let mut attempt = 0_u32;
+        let read = loop {
+            match client
+                .request(
+                    "thread/read",
+                    json!({ "threadId": thread_id, "includeTurns": false }),
+                )
+                .await
+            {
+                Ok(read) => break read,
+                Err(error) if attempt < 10 && is_empty_rollout_error(&error) => {
+                    attempt += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        200 * u64::from(attempt),
+                    ))
+                    .await;
+                }
+                Err(error) => return Err(error),
+            }
+        };
         let parsed: ThreadReadResponse = serde_json::from_value(read.clone()).map_err(|error| {
             CodexErrorDto::new(
                 CodexErrorCode::ProtocolError,
@@ -231,12 +283,26 @@ impl CodexClient {
 
     pub async fn load_thread(&self, thread_id: String) -> Result<Value, CodexErrorDto> {
         let client = self.ensure_running().await?;
-        let result = client
-            .request(
-                "thread/read",
-                json!({ "threadId": thread_id, "includeTurns": true }),
-            )
-            .await?;
+        let mut attempt = 0_u32;
+        let result = loop {
+            match client
+                .request(
+                    "thread/read",
+                    json!({ "threadId": thread_id, "includeTurns": true }),
+                )
+                .await
+            {
+                Ok(result) => break result,
+                Err(error) if attempt < 8 && is_empty_rollout_error(&error) => {
+                    attempt += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        200 * u64::from(attempt),
+                    ))
+                    .await;
+                }
+                Err(error) => return Err(error),
+            }
+        };
         result.get("thread").cloned().ok_or_else(|| {
             CodexErrorDto::new(
                 CodexErrorCode::ProtocolError,
@@ -246,12 +312,19 @@ impl CodexClient {
         })
     }
 
+    pub async fn list_models(&self) -> Result<Value, CodexErrorDto> {
+        let client = self.ensure_running().await?;
+        client.request("model/list", json!({ "includeHidden": false })).await
+    }
+
     pub async fn send_message(
         &self,
         thread_id: String,
         text: String,
+        image_url: Option<String>,
+        settings: Option<TurnSettings>,
     ) -> Result<Value, CodexErrorDto> {
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && image_url.is_none() {
             return Err(CodexErrorDto::new(
                 CodexErrorCode::RequestFailed,
                 "Message cannot be empty",
@@ -276,14 +349,19 @@ impl CodexClient {
             }
             return Err(error);
         }
-        client
-            .request(
-                "turn/start",
-                json!({
-                    "threadId": thread_id,
-                    "input": [{ "type": "text", "text": text }]
-                }),
-            )
+        let mut input = Vec::new();
+        if !text.trim().is_empty() { input.push(json!({ "type": "text", "text": text })); }
+        if let Some(url) = image_url { input.push(json!({ "type": "image", "image": { "url": url } })); }
+        let mut params = json!({ "threadId": thread_id, "input": input });
+        if let Some(settings) = settings {
+            if let Some(object) = params.as_object_mut() {
+                if let Some(model) = settings.model.filter(|value| !value.trim().is_empty()) { object.insert("model".into(), json!(model)); }
+                if let Some(effort) = settings.effort.filter(|value| !value.trim().is_empty()) { object.insert("effort".into(), json!(effort)); }
+                if let Some(summary) = settings.summary.filter(|value| !value.trim().is_empty()) { object.insert("summary".into(), json!(summary)); }
+                if let Some(service_tier) = settings.service_tier.filter(|value| !value.trim().is_empty()) { object.insert("serviceTier".into(), json!(service_tier)); }
+            }
+        }
+        client.request("turn/start", params)
             .await
     }
 
@@ -300,6 +378,11 @@ impl CodexClient {
             )
             .await?;
         Ok(())
+    }
+
+    pub async fn compact_thread(&self, thread_id: String) -> Result<Value, CodexErrorDto> {
+        let client = self.ensure_running().await?;
+        client.request("thread/compact/start", json!({ "threadId": thread_id })).await
     }
 
     pub async fn drain_events(&self) -> Vec<CodexEventDto> {
@@ -364,6 +447,18 @@ mod tests {
         assert_eq!(page.data.len(), 1);
         assert_eq!(page.next_cursor.as_deref(), Some("next"));
         assert_eq!(page.data[0].forked_from_id.as_deref(), Some("thr_parent"));
+    }
+
+    #[test]
+    fn detects_transient_empty_rollout_errors() {
+        let matching = CodexErrorDto::new(
+            CodexErrorCode::RequestFailed,
+            "failed to read session metadata: rollout at C:\\sessions\\new.jsonl is empty",
+        );
+        assert!(is_empty_rollout_error(&matching));
+
+        let unrelated = CodexErrorDto::new(CodexErrorCode::RequestFailed, "permission denied");
+        assert!(!is_empty_rollout_error(&unrelated));
     }
 
     #[test]

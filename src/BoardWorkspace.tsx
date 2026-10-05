@@ -5,7 +5,7 @@ import type { CSSProperties } from "react";
 import type { BoardNotification } from "@codex-board/protocol";
 import type { ProjectInfo } from "./lib/projects";
 import { ALL_PROJECTS } from "./lib/projects";
-import type { BoardThread, QueuedMessage } from "./types";
+import type { BoardThread, JsonValue, QueuedMessage } from "./types";
 import { Icon } from "./ui/Icon";
 
 export const THREAD_DRAG_PREFIX = "thread:";
@@ -30,7 +30,7 @@ function updatedLabel(updatedAt: number | null): string {
   return `Updated ${days}d ago`;
 }
 
-function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen, onMove, onFork, onRenameThread, onDelete, overlay = false }: {
+function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen, onMove, onFork, onRenameThread, onDelete, onStop, overlay = false }: {
   thread: BoardThread;
   pending: boolean;
   working: boolean;
@@ -41,6 +41,7 @@ function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen
   onFork?: (threadId: string) => void;
   onRenameThread?: (threadId: string) => void;
   onDelete?: (threadId: string) => void;
+  onStop?: (threadId: string) => void;
   overlay?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
@@ -65,6 +66,7 @@ function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen
         {pending ? <span className="saving">Saving changes…</span> : <span className="card-updated">{updatedLabel(thread.updatedAt)}</span>}
         {!overlay && <button className="card-icon-action" type="button" aria-label={`Fork ${thread.displayTitle}`} title={working ? "Wait for the active turn to finish" : "Fork conversation"} disabled={working || pending} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onFork?.(thread.id); }}><Icon name="fork" /></button>}
         {!overlay && <button className="card-icon-action" type="button" aria-label={`Archive ${thread.displayTitle}`} title="Archive conversation" disabled={pending || working} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onDelete?.(thread.id); }}><Icon name="trash" /></button>}
+        {!overlay && working && <button className="card-icon-action danger" type="button" aria-label={`Stop ${thread.displayTitle}`} title="Stop active turn" disabled={pending} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onStop?.(thread.id); }}><Icon name="stop" /></button>}
         {!overlay && <button className="card-icon-action" type="button" aria-label={`Move ${thread.displayTitle}`} title="Move task" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onMove?.(thread.id); }}><Icon name="move" /></button>}
         {!overlay && <button className="open-thread" type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onOpen?.(thread.id); }}><Icon name="message" /> Open</button>}
       </footer>
@@ -72,7 +74,7 @@ function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen
   );
 }
 
-function BoardColumn({ category, threads, pendingIds, workingIds, queues, showProject, onOpen, onMove, onFork, onRename, onRenameThread, onDelete }: {
+function BoardColumn({ category, threads, pendingIds, workingIds, queues, showProject, onOpen, onMove, onFork, onRename, onRenameThread, onDelete, onStop }: {
   category: string;
   threads: BoardThread[];
   pendingIds: Set<string>;
@@ -84,6 +86,7 @@ function BoardColumn({ category, threads, pendingIds, workingIds, queues, showPr
   onFork: (threadId: string) => void;
   onRenameThread: (threadId: string) => void;
   onDelete: (threadId: string) => void;
+  onStop: (threadId: string) => void;
 
   onRename: (category: string) => void;
 }) {
@@ -100,7 +103,7 @@ function BoardColumn({ category, threads, pendingIds, workingIds, queues, showPr
         <button className="column-rename" type="button" aria-label={`Rename ${category}`} title="Rename category" onClick={() => onRename(category)}><Icon name="edit" /></button>
       </header>
       <div className="column-body">
-        {threads.map((thread) => <ThreadCard key={thread.id} thread={thread} pending={pendingIds.has(thread.id)} working={workingIds.has(thread.id)} queuedCount={queues[thread.id]?.length || 0} showProject={showProject} onOpen={onOpen} onMove={onMove} onFork={onFork} onRenameThread={onRenameThread} onDelete={onDelete} />)}
+        {threads.map((thread) => <ThreadCard key={thread.id} thread={thread} pending={pendingIds.has(thread.id)} working={workingIds.has(thread.id)} queuedCount={queues[thread.id]?.length || 0} showProject={showProject} onOpen={onOpen} onMove={onMove} onFork={onFork} onRenameThread={onRenameThread} onDelete={onDelete} onStop={onStop} />)}
       </div>
     </section>
   );
@@ -139,13 +142,28 @@ export interface BoardWorkspaceProps {
   onRename: (category: string) => void;
   onRenameThread: (threadId: string) => void;
   onDelete: (threadId: string) => void;
+  onStop: (threadId: string) => void;
 
-  onDeleteProject: () => void;
+  onDeleteProject: (projectKey: string) => void;
+  rateLimits: JsonValue | null;
+}
+
+function usageDetails(value: JsonValue | null): { used: number | null; resetsAt: number | null; plan: string | null } {
+  const root = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, JsonValue> : {};
+  const limits = root.rateLimits && typeof root.rateLimits === "object" && !Array.isArray(root.rateLimits) ? root.rateLimits as Record<string, JsonValue> : root;
+  const primary = limits.primary && typeof limits.primary === "object" && !Array.isArray(limits.primary) ? limits.primary as Record<string, JsonValue> : {};
+  return {
+    used: typeof primary.usedPercent === "number" ? primary.usedPercent : null,
+    resetsAt: typeof primary.resetsAt === "number" ? primary.resetsAt : null,
+    plan: typeof limits.planType === "string" ? limits.planType : null,
+  };
 }
 
 export function BoardWorkspace(props: BoardWorkspaceProps) {
   const projectLabel = props.project === ALL_PROJECTS ? "All projects" : props.projects.find((item) => item.key === props.project)?.label || "Project";
   const unread = props.notifications.filter((item) => !item.read).length;
+  const usage = usageDetails(props.rateLimits);
+  const resetLabel = usage.resetsAt ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(usage.resetsAt * 1000)) : "Reset unavailable";
 
   return (
     <main className="app-shell">
@@ -160,11 +178,14 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
         <div className="sidebar-project-list" role="navigation" aria-label="Project boards">
           {[{ key: ALL_PROJECTS, label: "All projects" }, ...props.projects].map((item) => {
             const stats = props.projectStats[item.key] || { tasks: 0, working: 0 };
-            return <button key={item.key} type="button" className={`sidebar-project${props.project === item.key ? " active" : ""}`} aria-current={props.project === item.key ? "page" : undefined} onClick={() => props.onProjectChange(item.key)}>
-              <span>{item.key === ALL_PROJECTS ? "ALL" : item.label.slice(0, 2).toUpperCase()}</span>
-              <div><strong>{item.label}</strong><small>{stats.tasks} {stats.tasks === 1 ? "task" : "tasks"}{stats.working > 0 ? ` · ${stats.working} working` : ""}</small></div>
-              {stats.working > 0 && <i className="project-live-dot" aria-label={`${stats.working} working`} />}
-            </button>;
+            return <div key={item.key} className="sidebar-project-row">
+              <button type="button" className={`sidebar-project${props.project === item.key ? " active" : ""}`} aria-current={props.project === item.key ? "page" : undefined} onClick={() => props.onProjectChange(item.key)}>
+                <span>{item.key === ALL_PROJECTS ? "ALL" : item.label.slice(0, 2).toUpperCase()}</span>
+                <div><strong>{item.label}</strong><small>{stats.tasks} {stats.tasks === 1 ? "task" : "tasks"}{stats.working > 0 ? ` · ${stats.working} working` : ""}</small></div>
+                {stats.working > 0 && <i className="project-live-dot" aria-label={`${stats.working} working`} />}
+              </button>
+              {item.key !== ALL_PROJECTS && <button type="button" className="sidebar-project-archive" aria-label={`Archive project ${item.label}`} title="Archive project" onClick={(event) => { event.stopPropagation(); props.onDeleteProject(item.key); }}><Icon name="trash" /></button>}
+            </div>;
           })}
         </div>
         <div className="sidebar-footer">
@@ -181,7 +202,6 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
             <button className="button secondary" disabled={props.refreshing} onClick={props.onRefresh}><Icon name="refresh" className={props.refreshing ? "spin" : ""} /> Refresh</button>
             <button className="button secondary" onClick={props.onCategories}><Icon name="categories" /> Categories</button>
             <button className="button primary" onClick={props.onNewTask}><Icon name="plus" /> New task</button>
-            {props.project !== ALL_PROJECTS && <button className="button danger" onClick={props.onDeleteProject} title="Archive project"><Icon name="trash" /> Archive project</button>}
           </div>
         </header>
 
@@ -190,14 +210,14 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
             <label className="select-control"><span>Status</span><select value={props.statusFilter} onChange={(event) => props.onStatusChange(event.target.value)}><option value={ALL_STATUSES}>All statuses</option>{props.populatedCategories.map((category) => <option key={category} value={category}>{category}</option>)}</select><Icon name="chevronDown" /></label>
           </div>
           <label className="search-control"><Icon name="search" /><input value={props.search} onChange={(event) => props.onSearchChange(event.target.value)} placeholder="Search tasks…" />{props.search && <button type="button" aria-label="Clear search" onClick={() => props.onSearchChange("")}>×</button>}</label>
-          <div className="workspace-metrics"><span><strong>{props.visibleThreadCount}</strong> tasks</span><span className={props.workingCount ? "live" : ""}><i /><strong>{props.workingCount}</strong> working</span></div>
+          <div className="workspace-metrics"><span><strong>{props.visibleThreadCount}</strong> tasks</span><span className={props.workingCount ? "live" : ""}><i /><strong>{props.workingCount}</strong> working</span><span className="usage-summary" title={usage.plan ? `Plan: ${usage.plan}` : "Codex account usage"}><strong>{usage.used === null ? "—" : `${usage.used}%`}</strong> used<small>{resetLabel}</small></span></div>
         </div>
 
         {props.displayedCategories.length === 0 ? (
           <div className="empty-board"><div className="empty-illustration"><Icon name="search" /></div><h2>No tasks match this board</h2><p>Change the status or search to see more work in this project.</p>{(props.search || props.statusFilter !== ALL_STATUSES) && <button className="button secondary" onClick={() => { props.onSearchChange(""); props.onStatusChange(ALL_STATUSES); }}>Clear filters</button>}</div>
         ) : (
           <div className="board" aria-label="Task board">
-            {props.displayedCategories.map((category) => <BoardColumn key={category} category={category} threads={props.filteredThreads.filter((thread) => thread.category === category)} pendingIds={props.pendingIds} workingIds={props.workingIds} queues={props.queues} showProject={props.project === ALL_PROJECTS} onOpen={props.onOpen} onMove={props.onMove} onFork={props.onFork} onRename={props.onRename} onRenameThread={props.onRenameThread} onDelete={props.onDelete} />)}
+            {props.displayedCategories.map((category) => <BoardColumn key={category} category={category} threads={props.filteredThreads.filter((thread) => thread.category === category)} pendingIds={props.pendingIds} workingIds={props.workingIds} queues={props.queues} showProject={props.project === ALL_PROJECTS} onOpen={props.onOpen} onMove={props.onMove} onFork={props.onFork} onRename={props.onRename} onRenameThread={props.onRenameThread} onDelete={props.onDelete} onStop={props.onStop} />)}
           </div>
         )}
       </section>

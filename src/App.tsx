@@ -11,7 +11,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { asCodexError, clearNotifications, createThread, archiveThread, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameThread, sendMessage, setBoardConfig } from "./api";
+import { asCodexError, clearNotifications, createThread, archiveThread, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, getRateLimits, interruptTurn, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameThread, sendMessage, setBoardConfig } from "./api";
 import type { BoardNotification } from "@codex-board/protocol";
 import "./App.css";
 import { CategoryDialog } from "./CategoryDialog";
@@ -29,6 +29,7 @@ import { MoveThreadDialog } from "./MoveThreadDialog";
 import { CategoryManagerDialog } from "./CategoryManagerDialog";
 import { BoardSettingsDialog } from "./BoardSettingsDialog";
 import { AutomationResultDialog } from "./AutomationResultDialog";
+import { ConfirmArchiveDialog } from "./ConfirmArchiveDialog";
 import {
   ALL_STATUSES,
   BoardWorkspace,
@@ -51,12 +52,13 @@ import {
 } from "./lib/categoryOrder";
 import { ALL_PROJECTS, projectOptions, buildProjectMap } from "./lib/projects";
 import { buildThreadTitle, threadCategories, UNCATEGORIZED } from "./lib/threadStatus";
-import type { BoardThread, CodexError, CodexEvent, JsonValue, QueuedMessage, SequencedCodexEvent } from "./types";
+import type { BoardThread, CodexError, CodexEvent, JsonValue, QueuedMessage, SequencedCodexEvent, ThreadDto, TurnSettings } from "./types";
 type JsonObject = Record<string, JsonValue>;
 const record = (value: JsonValue | undefined): JsonObject => value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
 const text = (value: JsonValue | undefined): string => typeof value === "string" ? value : "";
 const eventThreadId = (event: CodexEvent): string => text(record(event.params).threadId);
 type CategoryDialogState = { mode: "create" } | { mode: "rename"; category: string };
+type ArchiveDialogState = { kind: "thread"; threadId: string; title: string } | { kind: "project"; projectKey: string; title: string; threadIds: string[] };
 interface Toast { id: number; threadId: string; title: string; message: string; kind: "done" | "error"; }
 const PROJECT_BOARD_KEY = "codex-board.project-board.v1";
 
@@ -89,12 +91,15 @@ function App() {
   const [resultNotification, setResultNotification] = useState<BoardNotification | null>(null);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [categoryBusy, setCategoryBusy] = useState(false);
+  const [archiveDialog, setArchiveDialog] = useState<ArchiveDialogState | null>(null);
+  const [archiveBusy, setArchiveBusy] = useState(false);
   const [events, setEvents] = useState<SequencedCodexEvent[]>([]);
   const [workingIds, setWorkingIds] = useState<Set<string>>(new Set());
   const [activeTurns, setActiveTurns] = useState<Record<string, string>>({});
   const [queues, setQueues] = useState<Record<string, QueuedMessage[]>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>(loadApprovalMode);
+  const [rateLimits, setRateLimits] = useState<JsonValue | null>(null);
   const workingIdsRef = useRef(workingIds);
   const queuesRef = useRef(queues);
   const threadsRef = useRef(threads);
@@ -104,6 +109,7 @@ function App() {
   const boardConfigReady = useRef(false);
   const notificationIdsRef = useRef<Set<string> | null>(null);
   const automationTurnIdsRef = useRef(new Set<string>());
+  const pendingThreadIdsRef = useRef(new Map<string, BoardThread>());
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -113,7 +119,13 @@ function App() {
     background ? setRefreshing(true) : setLoading(true);
     try {
       const [result, serverQueues] = await Promise.all([listThreads(), getMessageQueues()]);
-      setThreads(toBoardThreads(result));
+      const fetchedThreads = toBoardThreads(result);
+      const fetchedIds = new Set(fetchedThreads.map((thread) => thread.id));
+      for (const [id, thread] of pendingThreadIdsRef.current) {
+        if (fetchedIds.has(id)) pendingThreadIdsRef.current.delete(id);
+        else fetchedThreads.push(thread);
+      }
+      setThreads(fetchedThreads);
       queuesRef.current = serverQueues;
       setQueues(serverQueues);
       const active = new Set(result.filter((thread) => text(record(thread.status).type) === "active").map((thread) => thread.id));
@@ -131,6 +143,14 @@ function App() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => void getRateLimits().then((value) => { if (!cancelled) setRateLimits(value); }).catch(() => undefined);
+    load();
+    const timer = window.setInterval(load, 60_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -155,9 +175,16 @@ function App() {
   useEffect(() => { queuesRef.current = queues; }, [queues]);
   useEffect(() => {
     const load = () => void listNotifications().then((items) => {
+      const activeThreadNotifications = items.filter((item) => item.threadId === chatThreadId && !item.read);
+      if (activeThreadNotifications.length) {
+        for (const item of activeThreadNotifications) void markNotificationsRead(item.id);
+      }
+      const normalizedItems = activeThreadNotifications.length
+        ? items.map((item) => activeThreadNotifications.some((active) => active.id === item.id) ? { ...item, read: true } : item)
+        : items;
       const previous = notificationIdsRef.current;
       if (previous) {
-        const fresh = items.filter((item) => item.automation && !previous.has(item.id));
+        const fresh = normalizedItems.filter((item) => item.automation && !previous.has(item.id) && item.threadId !== chatThreadId);
         if (fresh.length) {
           setAutomationAlerts((current) => [...fresh, ...current].slice(0, 3));
           for (const item of fresh) {
@@ -165,13 +192,13 @@ function App() {
           }
         }
       }
-      notificationIdsRef.current = new Set(items.map((item) => item.id));
-      setNotifications(items);
+      notificationIdsRef.current = new Set(normalizedItems.map((item) => item.id));
+      setNotifications(normalizedItems);
     });
     load();
     const timer = window.setInterval(load, 2000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [chatThreadId]);
   const persistBoardConfig = useCallback((categories: string[], mode: ApprovalMode) => {
     saveCategoryOrder(categories);
     saveApprovalMode(mode);
@@ -197,7 +224,7 @@ function App() {
     const toast: Toast = {
       id: ++toastSequence.current,
       threadId,
-      title: thread?.displayTitle || thread?.effectiveTitle || "Codex",
+      title: thread ? `${thread.projectLabel} · ${thread.displayTitle || thread.effectiveTitle || "Untitled thread"}` : "Codex",
       message,
       kind,
     };
@@ -334,27 +361,43 @@ function App() {
   const movingThread = threads.find((thread) => thread.id === movingThreadId) ?? null;
   const forkingThread = threads.find((thread) => thread.id === forkingThreadId) ?? null;
   const renamingThread = threads.find((thread) => thread.id === renamingThreadId) ?? null;
-  async function archiveConversation(threadId: string) {
+
+  function retainCreatedThread(created: ThreadDto) {
+    const retained = toBoardThreads([...threadsRef.current.filter((thread) => thread.id !== created.id), created]).find((thread) => thread.id === created.id);
+    if (!retained) return;
+    pendingThreadIdsRef.current.set(created.id, retained);
+    setThreads((current) => toBoardThreads([...current.filter((thread) => thread.id !== created.id), created]));
+    setChatThreadId(created.id);
+  }
+  function archiveConversation(threadId: string) {
     const thread = threadsRef.current.find((item) => item.id === threadId);
-    if (!thread || !window.confirm(`Archive "${thread.displayTitle}"? This removes the conversation from the active board but keeps its history in Codex.`)) return;
-    try {
-      await archiveThread(threadId);
-      setChatThreadId((current) => current === threadId ? null : current);
-      setThreads((current) => current.filter((item) => item.id !== threadId));
-      await refresh(true);
-    } catch (cause) { setError(asCodexError(cause)); }
+    if (thread) setArchiveDialog({ kind: "thread", threadId, title: thread.displayTitle });
   }
 
-  async function archiveCurrentProject() {
-    if (project === ALL_PROJECTS) return;
-    const projectThreads = threadsRef.current.filter((item) => item.projectKey === project);
-    const label = projects.find((item) => item.key === project)?.label || project;
-    if (!projectThreads.length || !window.confirm(`Archive project "${label}" and its ${projectThreads.length} Codex conversation${projectThreads.length === 1 ? "" : "s"}? The conversations remain available in Codex archives.`)) return;
+  function archiveCurrentProject(projectKey = project) {
+    if (projectKey === ALL_PROJECTS) return;
+    const projectThreads = threadsRef.current.filter((item) => item.projectKey === projectKey);
+    if (!projectThreads.length) return;
+    const label = projects.find((item) => item.key === projectKey)?.label || projectKey;
+    setArchiveDialog({ kind: "project", projectKey, title: label, threadIds: projectThreads.map((thread) => thread.id) });
+  }
+
+  async function confirmArchive() {
+    if (!archiveDialog) return;
+    setArchiveBusy(true);
     try {
-      for (const thread of projectThreads) await archiveThread(thread.id);
-      setChatThreadId(null);
+      if (archiveDialog.kind === "thread") {
+        await archiveThread(archiveDialog.threadId);
+        setChatThreadId((current) => current === archiveDialog.threadId ? null : current);
+        setThreads((current) => current.filter((item) => item.id !== archiveDialog.threadId));
+      } else {
+        for (const threadId of archiveDialog.threadIds) await archiveThread(threadId);
+        setChatThreadId(null);
+      }
+      setArchiveDialog(null);
       await refresh(true);
     } catch (cause) { setError(asCodexError(cause)); }
+    finally { setArchiveBusy(false); }
   }
   async function renameConversation(title: string) {
     if (!renamingThread) return;
@@ -476,11 +519,13 @@ function App() {
     }
   }
 
-  async function sendOrQueue(threadId: string, message: string) {
+  async function sendOrQueue(threadId: string, message: string, _imageUrl?: string, settings?: TurnSettings) {
     const wasWorking = workingIdsRef.current.has(threadId);
     if (!wasWorking) setThreadWorking(threadId, true);
     try {
-      const response = await sendMessage(threadId, message);
+      const selected: TurnSettings = { ...settings, model: localStorage.getItem("codex-board.model") || settings?.model, effort: localStorage.getItem("codex-board.effort") || settings?.effort, summary: localStorage.getItem("codex-board.summary") || settings?.summary, serviceTier: localStorage.getItem("codex-board.serviceTier") || settings?.serviceTier };
+      if (!selected.model) throw new Error("Select a Codex model before sending a message.");
+      const response = await sendMessage(threadId, message, _imageUrl, selected);
       const turnId = text(record(response.turn).id);
       if (turnId) setActiveTurns((current) => ({ ...current, [threadId]: turnId }));
     } catch (cause) {
@@ -491,6 +536,16 @@ function App() {
 
   function removeQueuedMessage(threadId: string, messageId: string) {
     void removeQueuedMessageApi(threadId, messageId).catch((cause) => setError(asCodexError(cause)));
+  }
+
+  async function stopThread(threadId: string) {
+    const turnId = activeTurns[threadId];
+    if (!turnId) return;
+    try {
+      await interruptTurn(threadId, turnId);
+    } catch (cause) {
+      setError(asCodexError(cause));
+    }
   }
 
   function updateSessionState(threadId: string, running: boolean, turnId: string | null) {
@@ -570,6 +625,7 @@ function App() {
           queues={queues}
           notifications={notifications}
           refreshing={refreshing}
+          rateLimits={rateLimits}
           onProjectChange={selectProjectBoard}
           onStatusChange={setStatusFilter}
           onSearchChange={setSearch}
@@ -586,7 +642,8 @@ function App() {
           onFork={setForkingThreadId}
           onRenameThread={setRenamingThreadId}
           onDelete={archiveConversation}
-          onDeleteProject={() => void archiveCurrentProject()}
+          onStop={(threadId) => void stopThread(threadId)}
+          onDeleteProject={(projectKey) => archiveCurrentProject(projectKey)}
           onRename={(category) => setCategoryDialog({ mode: "rename", category })}
         />
       </SortableContext>
@@ -627,12 +684,13 @@ function App() {
       {settingsOpen && <BoardSettingsDialog approvalMode={approvalMode} onApprovalMode={setApprovalMode} onClose={() => setSettingsOpen(false)} />}
       {remoteDialog && <RemoteDialog onClose={() => setRemoteDialog(false)} />}
       {automationsDialog && <AutomationsDialog threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}
-      {newTaskDialog && <NewTaskDialog threads={threads} categories={categories} defaultProjectKey={project === ALL_PROJECTS ? undefined : project} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt) => { const created = await createThread(cwd, category, title, prompt); await refresh(true); setChatThreadId(created.id); }} />}
+      {newTaskDialog && <NewTaskDialog threads={threads} categories={categories} defaultProjectKey={project === ALL_PROJECTS ? undefined : project} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt) => { const created = await createThread(cwd, category, title, prompt); retainCreatedThread(created); setNewTaskDialog(false); void refresh(true); }} />}
       {productTour && <ProductTour onClose={() => { localStorage.setItem("codex-board.tour.v1", "done"); setProductTour(false); }} />}
       {inboxOpen && <InboxDialog items={notifications} onClose={()=>setInboxOpen(false)} onReadAll={()=>void markNotificationsRead().then(()=>listNotifications().then(setNotifications))} onClear={()=>void clearNotifications().then(()=>setNotifications([]))} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item);if(!item.read)void markNotificationsRead(item.id);}} onOpen={(threadId)=>{setInboxOpen(false);setChatThreadId(threadId);const item=notifications.find(entry=>entry.threadId===threadId&&!entry.read);if(item)void markNotificationsRead(item.id);}} />}
       {resultNotification && <AutomationResultDialog notification={resultNotification} onClose={()=>setResultNotification(null)} onOpenThread={(threadId)=>{setResultNotification(null);setChatThreadId(threadId);}} />}
+      {archiveDialog && <ConfirmArchiveDialog title={archiveDialog.kind === "thread" ? "Archive “" + archiveDialog.title + "”?" : "Archive project “" + archiveDialog.title + "”?"} description={archiveDialog.kind === "thread" ? "This removes the conversation from the active board while keeping its history safely in Codex archives." : "This archives " + archiveDialog.threadIds.length + " Codex conversation" + (archiveDialog.threadIds.length === 1 ? "" : "s") + ". Their history remains available in Codex archives."} confirmLabel={archiveDialog.kind === "thread" ? "Archive conversation" : "Archive project"} busy={archiveBusy} onCancel={() => { if (!archiveBusy) setArchiveDialog(null); }} onConfirm={() => void confirmArchive()} />}
       <aside className="toast-stack" aria-live="polite">
-        {automationAlerts.map((item) => <button className="completion-toast automation-alert" key={item.id} onClick={()=>{setResultNotification(item);setAutomationAlerts((current)=>current.filter((entry)=>entry.id!==item.id));if(!item.read)void markNotificationsRead(item.id);}}><span className="toast-icon">⚡</span><span><strong>Automation completed</strong><small>{item.automation?.name}</small></span><i onClick={(event)=>{event.stopPropagation();setAutomationAlerts((current)=>current.filter((entry)=>entry.id!==item.id));}}>×</i></button>)}
+        {automationAlerts.map((item) => { const thread = item.threadId ? threadsRef.current.find((candidate) => candidate.id === item.threadId) : undefined; const projectLabel = thread?.projectLabel || "Codex Board"; return <button className="completion-toast automation-alert" key={item.id} onClick={()=>{setResultNotification(item);setAutomationAlerts((current)=>current.filter((entry)=>entry.id!==item.id));if(!item.read)void markNotificationsRead(item.id);}}><span className="toast-icon">⚡</span><span><strong>{projectLabel} · Automation completed</strong><small>{item.automation?.name}</small></span><i onClick={(event)=>{event.stopPropagation();setAutomationAlerts((current)=>current.filter((entry)=>entry.id!==item.id));}}>×</i></button>; })}
         {toasts.map((toast) => (
           <button className={`completion-toast ${toast.kind}`} key={toast.id} onClick={() => {
             setChatThreadId(toast.threadId);

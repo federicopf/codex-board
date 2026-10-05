@@ -11,7 +11,14 @@ export function NewTaskDialog({ threads, categories, defaultProjectKey, onClose,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function submit(event: React.FormEvent) {
-    event.preventDefault(); setBusy(true); setError(null);
+    event.preventDefault(); setError(null);
+    const normalizedTitle = title.trim().toLocaleLowerCase();
+    const duplicate = threads.some((thread) => thread.cwd === cwd && thread.displayTitle.trim().toLocaleLowerCase() === normalizedTitle);
+    if (duplicate) {
+      setError("A task with this title already exists in the selected project.");
+      return;
+    }
+    setBusy(true);
     try { await onCreate(cwd, category, title.trim(), prompt.trim()); onClose(); }
     catch (cause) { setError(asCodexError(cause).message); }
     finally { setBusy(false); }
@@ -19,7 +26,7 @@ export function NewTaskDialog({ threads, categories, defaultProjectKey, onClose,
   return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><form className="new-task-dialog" onSubmit={(event) => void submit(event)}>
     <header><div><span className="eyebrow">New work</span><h2>Create a Codex task</h2><p>Start a real Codex thread and place it on the board immediately.</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></header>
     <div className="new-task-grid"><label><span>Project</span><select value={cwd} onChange={(event) => setCwd(event.target.value)}>{projects.map((project) => <option key={project.cwd} value={project.cwd}>{project.label}</option>)}</select></label><label><span>Category</span><select value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <option key={item}>{item}</option>)}</select></label></div>
-    <label><span>Task title</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Implement onboarding" autoFocus /></label><label><span>First message</span><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe what Codex should do…" /></label>
+    <label><span>Task title</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Implement onboarding" autoFocus /></label><label><span>First message</span><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!busy && cwd && title.trim() && prompt.trim()) void submit(event as unknown as React.FormEvent); } }} placeholder="Describe what Codex should do…" /></label>
     {error && <p className="automation-form-error">{error}</p>}<footer><button type="button" onClick={onClose}>Cancel</button><button className="new-task-submit" disabled={busy || !cwd || !title.trim() || !prompt.trim()}>{busy ? "Creating…" : "Create and start"}</button></footer>
   </form></div>;
 }

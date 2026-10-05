@@ -1,0 +1,15 @@
+# Dependencies are installed by EAS during the native build.
+node_modules/
+**/node_modules/
+
+# Local build and bundler output.
+dist/
+.expo/
+android/.gradle/
+android/build/
+android/app/build/
+coverage/
+
+# Repository metadata and local logs.
+.git/
+*.log

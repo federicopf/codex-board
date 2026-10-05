@@ -1,0 +1,19 @@
+# Keep EAS archives small in the monorepo.
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.expo/
+**/.expo/
+android/.gradle/
+**/android/.gradle/
+android/build/
+**/android/build/
+android/app/build/
+**/android/app/build/
+target/
+**/target/
+coverage/
+**/coverage/
+.git/
+*.log

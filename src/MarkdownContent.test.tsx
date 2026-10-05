@@ -30,4 +30,11 @@ describe("MarkdownContent", () => {
     expect(html).toContain("<li>");
     expect(html).toContain("Push changes");
   });
+
+  it("makes local Windows paths clickable without changing fenced code", () => {
+    const html = renderToStaticMarkup(<MarkdownContent>{"Installer: C:\\Builds\\Codex Board\\setup.exe"}</MarkdownContent>);
+    expect(html).toContain('href="file:///C:/Builds/Codex%20Board/setup.exe"');
+    const code = renderToStaticMarkup(<MarkdownContent>{"```\nC:\\Builds\\setup.exe\n```"}</MarkdownContent>);
+    expect(code).not.toContain("file:///C:/Builds");
+  });
 });

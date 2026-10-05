@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { CodexError, CodexEvent, CodexThread, JsonValue, QueuedMessage, SendOutcome, ThreadDto } from "./types";
+import type { CodexError, CodexEvent, CodexThread, JsonValue, QueuedMessage, SendOutcome, ThreadDto, TurnSettings } from "./types";
 import type { Automation, CreateAutomationInput } from "@codex-board/protocol";
 import type { BoardNotification } from "@codex-board/protocol";
 
@@ -9,6 +9,12 @@ export interface BoardConfig { categories: string[]; approvalMode: "auto" | "ask
 
 export async function listThreads(): Promise<ThreadDto[]> {
   return invoke<ThreadDto[]>("list_threads");
+}
+export async function getRateLimits(): Promise<JsonValue> {
+  return invoke<JsonValue>("get_rate_limits");
+}
+export async function getModels(): Promise<JsonValue> {
+  return invoke<JsonValue>("get_models");
 }
 
 export async function renameThread(threadId: string, newName: string): Promise<ThreadDto> {
@@ -28,8 +34,8 @@ export async function loadThread(threadId: string): Promise<CodexThread> {
   return invoke<CodexThread>("load_thread", { threadId });
 }
 
-export async function sendMessage(threadId: string, text: string): Promise<SendOutcome> {
-  return invoke<SendOutcome>("send_message", { threadId, text });
+export async function sendMessage(threadId: string, text: string, imageUrl?: string, settings?: TurnSettings): Promise<SendOutcome> {
+  return invoke<SendOutcome>("send_message", { threadId, text, imageUrl: imageUrl || null, settings: settings || null });
 }
 
 export async function getMessageQueues(): Promise<Record<string, QueuedMessage[]>> { return invoke("message_queues"); }
@@ -37,6 +43,9 @@ export async function removeQueuedMessage(threadId: string, messageId: string): 
 
 export async function interruptTurn(threadId: string, turnId: string): Promise<void> {
   return invoke("interrupt_turn", { threadId, turnId });
+}
+export async function compactThread(threadId: string): Promise<JsonValue> {
+  return invoke<JsonValue>("compact_thread", { threadId });
 }
 
 export async function drainCodexEvents(): Promise<CodexEvent[]> {

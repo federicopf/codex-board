@@ -7,7 +7,7 @@ mod remote;
 use automations::{Automation, AutomationEnabledInput, AutomationStore, CreateAutomationInput};
 use codex::{
     CodexClient, CodexErrorDto, CodexEventDto, QueuedMessage, SendOutcome, ThreadDto,
-    TurnCoordinator,
+    TurnCoordinator, TurnSettings,
 };
 use notifications::{BoardNotification, NotificationStore};
 use remote::{BoardConfig, GatewayInfo, RemoteGateway, TailscaleInfo};
@@ -16,10 +16,42 @@ use std::sync::Arc;
 use tauri::Manager;
 
 #[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") && !url.starts_with("file:///") {
+        return Err("Only http(s) and local file links can be opened".into());
+    }
+    opener::open(url).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_local_path(path: String) -> Result<(), String> {
+    let path = if let Some(rest) = path.strip_prefix("/") {
+        #[cfg(windows)]
+        { rest.to_owned() }
+        #[cfg(not(windows))]
+        { format!("/{rest}") }
+    } else {
+        path
+    };
+    let path = std::path::PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err("Only absolute local paths can be opened".into());
+    }
+    opener::open(path).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn list_threads(
     client: tauri::State<'_, Arc<CodexClient>>,
 ) -> Result<Vec<ThreadDto>, CodexErrorDto> {
     client.list_threads().await
+}
+
+#[tauri::command]
+async fn get_rate_limits(
+    client: tauri::State<'_, Arc<CodexClient>>,
+) -> Result<Value, CodexErrorDto> {
+    client.rate_limits().await
 }
 
 #[tauri::command]
@@ -80,12 +112,21 @@ async fn load_thread(
 }
 
 #[tauri::command]
+async fn get_models(
+    client: tauri::State<'_, Arc<CodexClient>>,
+) -> Result<Value, CodexErrorDto> {
+    client.list_models().await
+}
+
+#[tauri::command]
 async fn send_message(
     coordinator: tauri::State<'_, Arc<TurnCoordinator>>,
     thread_id: String,
     text: String,
+    image_url: Option<String>,
+    settings: Option<TurnSettings>,
 ) -> Result<SendOutcome, CodexErrorDto> {
-    coordinator.send(thread_id, text).await
+    coordinator.send_with_image(thread_id, text, image_url, settings).await
 }
 
 #[tauri::command]
@@ -111,6 +152,14 @@ async fn interrupt_turn(
     turn_id: String,
 ) -> Result<(), CodexErrorDto> {
     client.interrupt_turn(thread_id, turn_id).await
+}
+
+#[tauri::command]
+async fn compact_thread(
+    client: tauri::State<'_, Arc<CodexClient>>,
+    thread_id: String,
+) -> Result<Value, CodexErrorDto> {
+    client.compact_thread(thread_id).await
 }
 
 #[tauri::command]
@@ -253,15 +302,18 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_threads,
+            get_rate_limits,
             rename_thread,
             create_thread,
             archive_thread,
             fork_thread,
             load_thread,
+            get_models,
             send_message,
             message_queues,
             remove_queued_message,
             interrupt_turn,
+            compact_thread,
             drain_codex_events,
             respond_to_codex_request,
             gateway_info,
@@ -275,7 +327,9 @@ pub fn run() {
             delete_automation,
             list_notifications,
             mark_notifications_read,
-            clear_notifications
+            clear_notifications,
+            open_external_url
+            ,open_local_path
         ])
         .build(tauri::generate_context!())
         .expect("error while building Codex Board");

@@ -17,7 +17,24 @@ pub struct QueuedMessage {
     pub id: String,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<TurnSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     automation: Option<AutomationContext>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,7 +147,23 @@ impl TurnCoordinator {
         thread_id: String,
         text: String,
     ) -> Result<SendOutcome, CodexErrorDto> {
-        self.send_with_context(thread_id, text, None).await
+        self.send_with_context(thread_id, text, None, None, None).await
+    }
+
+    pub async fn send_with_image(
+        self: &Arc<Self>,
+        thread_id: String,
+        text: String,
+        image_url: Option<String>,
+        settings: Option<TurnSettings>,
+    ) -> Result<SendOutcome, CodexErrorDto> {
+        if settings.as_ref().and_then(|value| value.model.as_deref()).map(str::trim).filter(|value| !value.is_empty()).is_none() {
+            return Err(CodexErrorDto::new(
+                CodexErrorCode::RequestFailed,
+                "Select a Codex model before sending a message",
+            ));
+        }
+        self.send_with_context(thread_id, text, image_url, settings, None).await
     }
 
     pub async fn send_automation(
@@ -143,6 +176,8 @@ impl TurnCoordinator {
         self.send_with_context(
             thread_id,
             text,
+            None,
+            None,
             Some(AutomationContext {
                 id: automation_id,
                 name: automation_name,
@@ -155,10 +190,12 @@ impl TurnCoordinator {
         self: &Arc<Self>,
         thread_id: String,
         text: String,
+        image_url: Option<String>,
+        settings: Option<TurnSettings>,
         automation: Option<AutomationContext>,
     ) -> Result<SendOutcome, CodexErrorDto> {
         let text = text.trim().to_owned();
-        if text.is_empty() {
+        if text.is_empty() && image_url.is_none() {
             return Err(CodexErrorDto::new(
                 CodexErrorCode::RequestFailed,
                 "Message cannot be empty",
@@ -192,6 +229,8 @@ impl TurnCoordinator {
             let message = QueuedMessage {
                 id: random_id(),
                 text,
+                image_url,
+                settings,
                 automation,
             };
             state.queue.push_back(message.clone());
@@ -218,7 +257,7 @@ impl TurnCoordinator {
         let submitted_text = automation_text(&text, automation.as_ref());
         match self
             .client
-            .send_message(thread_id.clone(), submitted_text)
+            .send_message(thread_id.clone(), submitted_text, image_url, settings)
             .await
         {
             Ok(response) => {
@@ -289,7 +328,7 @@ impl TurnCoordinator {
             let submitted_text = automation_text(&message.text, message.automation.as_ref());
             match self
                 .client
-                .send_message(thread_id.clone(), submitted_text)
+                .send_message(thread_id.clone(), submitted_text, message.image_url.clone(), message.settings.clone())
                 .await
             {
                 Ok(response) => {

@@ -60,6 +60,15 @@ export interface SequencedCodexEvent {
 export interface QueuedMessage {
   id: string;
   text: string;
+  imageUrl?: string;
+  settings?: TurnSettings;
+}
+
+export interface TurnSettings {
+  model?: string;
+  effort?: string;
+  summary?: string;
+  serviceTier?: string;
 }
 
 export interface SendOutcome {

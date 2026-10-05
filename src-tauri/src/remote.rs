@@ -24,7 +24,7 @@ use tokio::sync::{Mutex, broadcast};
 
 use crate::{
     automations::{AutomationEnabledInput, AutomationStore, CreateAutomationInput},
-    codex::{CodexClient, CodexErrorDto, TurnCoordinator},
+    codex::{CodexClient, CodexErrorDto, TurnCoordinator, TurnSettings},
     notifications::NotificationStore,
 };
 
@@ -141,8 +141,11 @@ struct ForkThreadBody {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct MessageBody {
     text: String,
+    image_url: Option<String>,
+    settings: Option<TurnSettings>,
 }
 
 #[derive(Deserialize)]
@@ -241,9 +244,12 @@ impl RemoteGateway {
             }
             let app = Router::new()
                 .route("/v1/health", get(health))
+                .route("/v1/rate-limits", get(rate_limits))
+                .route("/v1/models", get(models))
                 .route("/v1/threads", get(list_threads))
                 .route("/v1/threads/new", post(create_thread))
                 .route("/v1/threads/{id}", get(load_thread))
+                .route("/v1/threads/{id}/archive", axum::routing::post(archive_thread))
                 .route("/v1/threads/{id}/fork", post(fork_thread))
                 .route("/v1/threads/{id}/name", put(rename_thread))
                 .route("/v1/threads/{id}/messages", post(send_message))
@@ -253,6 +259,7 @@ impl RemoteGateway {
                     axum::routing::delete(remove_queued_message),
                 )
                 .route("/v1/threads/{id}/interrupt", post(interrupt_turn))
+                .route("/v1/threads/{id}/compact", post(compact_thread))
                 .route("/v1/requests/respond", post(respond_to_request))
                 .route("/v1/requests", get(pending_requests))
                 .route("/v1/board", get(get_board).put(put_board))
@@ -282,10 +289,10 @@ impl RemoteGateway {
 
 pub async fn tailscale_status() -> TailscaleInfo {
     let executable = tailscale_executable();
-    let output = match tokio::process::Command::new(&executable)
-        .args(["status", "--json"])
-        .output()
-        .await
+    let mut status_command = tokio::process::Command::new(&executable);
+    status_command.args(["status", "--json"]);
+    hide_console_window(&mut status_command);
+    let output = match status_command.output().await
     {
         Ok(output) => output,
         Err(error) => {
@@ -328,10 +335,10 @@ pub async fn tailscale_status() -> TailscaleInfo {
         .pointer("/Self/Online")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let serve_output = tokio::process::Command::new(&executable)
-        .args(["serve", "status", "--json"])
-        .output()
-        .await
+    let mut serve_command = tokio::process::Command::new(&executable);
+    serve_command.args(["serve", "status", "--json"]);
+    hide_console_window(&mut serve_command);
+    let serve_output = serve_command.output().await
         .ok();
     let serve_status: Value = serve_output
         .filter(|result| result.status.success())
@@ -360,15 +367,16 @@ pub async fn tailscale_status() -> TailscaleInfo {
 pub async fn configure_tailscale_serve() -> Result<TailscaleInfo, String> {
     let target = GATEWAY_PORT.to_string();
     let http_port = format!("--http={TAILSCALE_SERVE_PORT}");
-    let output = tokio::process::Command::new(tailscale_executable())
-        .args([
+    let mut command = tokio::process::Command::new(tailscale_executable());
+    command.args([
             "serve",
             "--bg",
             "--yes",
             http_port.as_str(),
             target.as_str(),
-        ])
-        .output()
+        ]);
+    hide_console_window(&mut command);
+    let output = command.output()
         .await
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
@@ -376,6 +384,14 @@ pub async fn configure_tailscale_serve() -> Result<TailscaleInfo, String> {
     }
     Ok(tailscale_status().await)
 }
+
+#[cfg(windows)]
+fn hide_console_window(command: &mut tokio::process::Command) {
+    command.creation_flags(0x0800_0000);
+}
+
+#[cfg(not(windows))]
+fn hide_console_window(_command: &mut tokio::process::Command) {}
 
 fn tailscale_executable() -> PathBuf {
     if let Some(program_files) = env::var_os("ProgramFiles") {
@@ -535,6 +551,32 @@ async fn load_thread(
     Ok(Json(state.client.load_thread(id).await?))
 }
 
+async fn archive_thread(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, ApiError> {
+    authorized(&headers, &state)?;
+    state.client.archive_thread(id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn rate_limits(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    authorized(&headers, &state)?;
+    Ok(Json(state.client.rate_limits().await?))
+}
+
+async fn models(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    authorized(&headers, &state)?;
+    Ok(Json(state.client.list_models().await?))
+}
+
 async fn create_thread(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -597,7 +639,7 @@ async fn send_message(
 ) -> Result<Json<Value>, ApiError> {
     authorized(&headers, &state)?;
     Ok(Json(
-        serde_json::to_value(state.coordinator.send(id, body.text).await?)
+        serde_json::to_value(state.coordinator.send_with_image(id, body.text, body.image_url, body.settings).await?)
             .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
     ))
 }
@@ -638,6 +680,15 @@ async fn interrupt_turn(
     authorized(&headers, &state)?;
     state.client.interrupt_turn(id, body.turn_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn compact_thread(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    authorized(&headers, &state)?;
+    Ok(Json(state.client.compact_thread(id).await?))
 }
 
 async fn respond_to_request(

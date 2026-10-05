@@ -59,9 +59,7 @@
       }
     },
     "owner": "f.germani06",
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
+    "runtimeVersion": "0.2.2",
     "updates": {
       "url": "https://u.expo.dev/897b2e51-d912-454a-b9df-c63eb3543072"
     }

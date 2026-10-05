@@ -28,3 +28,4 @@ axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 futures-util = "0.3"
 rand = "0.9"
+opener = "0.7"
