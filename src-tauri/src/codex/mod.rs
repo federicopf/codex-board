@@ -321,10 +321,10 @@ impl CodexClient {
         &self,
         thread_id: String,
         text: String,
-        image_url: Option<String>,
+        image_urls: Vec<String>,
         settings: Option<TurnSettings>,
     ) -> Result<Value, CodexErrorDto> {
-        if text.trim().is_empty() && image_url.is_none() {
+        if text.trim().is_empty() && image_urls.is_empty() {
             return Err(CodexErrorDto::new(
                 CodexErrorCode::RequestFailed,
                 "Message cannot be empty",
@@ -351,7 +351,7 @@ impl CodexClient {
         }
         let mut input = Vec::new();
         if !text.trim().is_empty() { input.push(json!({ "type": "text", "text": text })); }
-        if let Some(url) = image_url { input.push(json!({ "type": "image", "image": { "url": url } })); }
+        for url in image_urls { input.push(json!({ "type": "image", "image": { "url": url } })); }
         let mut params = json!({ "threadId": thread_id, "input": input });
         if let Some(settings) = settings {
             if let Some(object) = params.as_object_mut() {

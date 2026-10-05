@@ -155,8 +155,11 @@ For mobile bundle verification, run `npx expo export --platform android` inside 
 
 - A current source checkout is not proof that the installed Windows app is current. Verify the installed executable separately.
 - Windows install location is normally `%LOCALAPPDATA%\Codex Board\codex-board.exe`; the NSIS installer is under `src-tauri/target/release/bundle/nsis/`. Verify actual paths before acting.
+- When sharing a local build artifact with the owner, give its full absolute Windows path as plain text on a line by itself. Do not use a Markdown/file link, label, or surrounding text on that line.
+- When the owner asks for the Windows installer, provide the NSIS `Codex Board_<version>_x64-setup.exe` path, not the app binary `codex-board.exe` path.
 - Before closing/replacing a running app, check for active turns. Do not kill active work to install an update; prefer graceful shutdown when idle.
-- Do not bump versions, create tags, publish releases, upload OTA updates or trigger external builds unless requested. The owner's default publication preference is commit/push only.
+- Before every distributable build (Windows installer or EAS), commit and push the exact source snapshot to the configured branch first; never launch EAS from an uncommitted tree or reuse a Git ref after source changes. Verify the build is tied to the newly pushed commit.
+- Version every distributable build: use the configured EAS remote `autoIncrement` for Android/iOS build numbers, and increment the app release version for Windows installer releases when requested. Do not create tags, publish store releases or upload OTA updates unless explicitly requested.
 - Git remote: `git@github.com:federicopf/codex-board.git`. Verify the configured remote and branch rather than assuming local `main`: the local branch has also been named `codex/main`, tracking remote `main`.
 - **All commits and pushes must use direct Git from WSL, not GitHub CLI (`gh`) and not Windows Git.** Inspect the WSL checkout through `/mnt/c/...`, stage only intended files, review the diff and push the verified branch to remote `main` when requested.
 - Do not amend/rewrite history, force-push, discard user changes or create a release merely because a push was requested.

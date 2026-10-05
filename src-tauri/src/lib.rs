@@ -124,9 +124,14 @@ async fn send_message(
     thread_id: String,
     text: String,
     image_url: Option<String>,
+    image_urls: Option<Vec<String>>,
     settings: Option<TurnSettings>,
 ) -> Result<SendOutcome, CodexErrorDto> {
-    coordinator.send_with_image(thread_id, text, image_url, settings).await
+    let mut urls = image_urls.unwrap_or_default();
+    if let Some(url) = image_url {
+        if !urls.contains(&url) { urls.push(url); }
+    }
+    coordinator.send_with_images(thread_id, text, urls, settings).await
 }
 
 #[tauri::command]

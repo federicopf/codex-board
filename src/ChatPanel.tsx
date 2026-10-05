@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from "react";
 import { asCodexError, compactThread, getModels, interruptTurn, loadThread, respondToCodexRequest } from "./api";
 import { applyCodexEvent, createChatSession, eventRequest } from "./lib/chat";
 import { denialResult } from "./lib/approvals";
@@ -17,13 +17,15 @@ interface ChatPanelProps {
   queuedMessages: QueuedMessage[];
   working: boolean;
   activeTurnId: string | null;
-  onSend: (threadId: string, message: string, imageUrl?: string, settings?: TurnSettings) => Promise<void>;
+  onSend: (threadId: string, message: string, imageUrls?: string[], settings?: TurnSettings) => Promise<void>;
   onRemoveQueued: (threadId: string, messageId: string) => void;
   onSessionState: (threadId: string, running: boolean, turnId: string | null) => void;
   onFork: (threadId: string) => void;
   onRename: (threadId: string) => void;
   onClose: () => void;
 }
+
+interface ImageAttachmentDraft { id: string; name: string; dataUrl: string; }
 
 function ApprovalPrompt({ request, busy, onResolve }: { request: PendingCodexRequest; busy: boolean; onResolve: (result: JsonValue) => void }) {
   const { method, params } = request;
@@ -68,25 +70,28 @@ function ApprovalPrompt({ request, busy, onResolve }: { request: PendingCodexReq
   </section>;
 }
 
-function ChatComposer({ threadId, working, activeTurnId, loading, onSend, onStop, onError }: {
+function ChatComposer({ threadId, working, activeTurnId, loading, onSend, onStop, onError, controls, attachments, onRemoveAttachment, onClearAttachments }: {
   threadId: string;
   working: boolean;
   activeTurnId: string | null;
   loading: boolean;
-  onSend: (threadId: string, message: string, imageUrl?: string, settings?: TurnSettings) => Promise<void>;
+  onSend: (threadId: string, message: string, imageUrls?: string[], settings?: TurnSettings) => Promise<void>;
   onStop: () => Promise<void>;
   onError: (message: string | null) => void;
+  controls: ReactNode;
+  attachments: ImageAttachmentDraft[];
+  onRemoveAttachment: (id: string) => void;
+  onClearAttachments: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
 
   async function submit() {
     const message = draft.trim();
-    if ((!message && !imageUrl) || sending) return;
+    if ((!message && attachments.length === 0) || sending) return;
     if (!localStorage.getItem("codex-board.model")) { onError("Choose a Codex model before sending."); return; }
     setSending(true); onError(null);
-    try { await onSend(threadId, message, imageUrl || undefined); setDraft(""); setImageUrl(null); }
+    try { await onSend(threadId, message, attachments.map((attachment) => attachment.dataUrl)); setDraft(""); onClearAttachments(); }
     catch (cause) { onError(asCodexError(cause).message); }
     finally { setSending(false); }
   }
@@ -95,24 +100,37 @@ function ChatComposer({ threadId, working, activeTurnId, loading, onSend, onStop
     if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
   }
 
-  return <footer className="composer-wrap"><div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} placeholder={working ? "Add another message to the queue…" : "Message Codex…"} disabled={loading} rows={2} />{working ? <><button className="stop-button" disabled={!activeTurnId} onClick={() => void onStop()}>Stop</button><button className="send-button" disabled={!draft.trim() || sending || loading} onClick={() => void submit()}>{sending ? "Adding…" : "Queue"}</button></> : <button className="send-button" disabled={!draft.trim() || sending || loading} onClick={() => void submit()}>{sending ? "Sending…" : "Send"}</button>}</div><small>Enter to send · Shift+Enter for a new line</small></footer>;
+  return <footer className="composer-wrap"><div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} placeholder={working ? "Add another message to the queue…" : "Message Codex…"} disabled={loading} rows={2} />{attachments.length > 0 && <div className="composer-attachments">{attachments.map((attachment) => <div className="composer-attachment" key={attachment.id}><img src={attachment.dataUrl} alt="" /><span title={attachment.name}>{attachment.name}</span><button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => onRemoveAttachment(attachment.id)}>×</button></div>)}</div>}<div className="composer-bottom"><div className="composer-tools">{controls}</div><div className="composer-actions">{working && <button className="stop-button" disabled={!activeTurnId} onClick={() => void onStop()}>Stop</button>}<button className="send-button" disabled={(!draft.trim() && attachments.length === 0) || sending || loading} onClick={() => void submit()}>{working ? (sending ? "Adding…" : "Queue") : (sending ? "Sending…" : "Send")}</button></div></div></div><small>Enter to send · Shift+Enter for a new line</small></footer>;
 }
 
-function ImageAttachmentButton({ threadId, onSend, onError, disabled }: { threadId: string; onSend: (threadId: string, message: string, imageUrl?: string) => Promise<void>; onError: (message: string | null) => void; disabled: boolean }) {
+function ImageAttachmentButton({ onSelect, onError, disabled, open, onOpenChange, selectedCount }: { onSelect: (attachments: ImageAttachmentDraft[]) => void; onError: (message: string | null) => void; disabled: boolean; open: boolean; onOpenChange: (open: boolean) => void; selectedCount: number }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
-  const [open, setOpen] = useState(false);
-  return <div className="attachment-picker"><input ref={inputRef} hidden type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; const reader = new FileReader(); reader.onload = () => { if (typeof reader.result !== "string") return; setBusy(true); onError(null); void onSend(threadId, "", reader.result).catch((cause) => onError(asCodexError(cause).message)).finally(() => setBusy(false)); }; reader.readAsDataURL(file); }} /><button type="button" className="side-tool-button attachment-trigger" disabled={disabled || busy} onClick={() => setOpen((value) => !value)} aria-label="Attachments"><span>Attachments</span><strong>{busy ? "Uploading…" : "Add image"}</strong><Icon name="chevronDown" /></button>{open && <div className="attachment-popover"><strong>Attach to message</strong><button type="button" onClick={() => { setOpen(false); inputRef.current?.click(); }}><Icon name="paperclip" /><span>Choose an image</span></button><small>Images are sent to Codex immediately.</small></div>}</div>;
+  function readFile(file: File): Promise<ImageAttachmentDraft> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => typeof reader.result === "string" ? resolve({ id: crypto.randomUUID(), name: file.name, dataUrl: reader.result }) : reject(new Error(`Could not read ${file.name}`));
+      reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}`));
+      reader.readAsDataURL(file);
+    });
+  }
+  function handleFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (!files.length) return;
+    setBusy(true); onError(null);
+    void Promise.all(files.map(readFile)).then(onSelect).catch((cause) => onError(asCodexError(cause).message)).finally(() => setBusy(false));
+  }
+  return <div className="attachment-picker"><input ref={inputRef} hidden type="file" accept="image/*" multiple onChange={handleFiles} /><button type="button" className="composer-tool-button attachment-trigger" disabled={disabled || busy} onClick={() => onOpenChange(!open)} aria-label="Attachments"><Icon name="paperclip" /><span>{busy ? "Reading…" : selectedCount ? `Attach · ${selectedCount}` : "Attach"}</span></button>{open && <div className="attachment-popover"><strong>Attach images</strong><button type="button" onClick={() => { onOpenChange(false); inputRef.current?.click(); }}><Icon name="paperclip" /><span>Choose images</span></button><small>Select one or more images; they’ll send with your next message.</small></div>}</div>;
 }
 
-function TurnSettingsBar({ threadId, working }: { threadId: string; working: boolean }) {
+function TurnSettingsBar({ threadId, working, open, onOpenChange }: { threadId: string; working: boolean; open: boolean; onOpenChange: (open: boolean) => void }) {
   const [model, setModel] = useState(() => localStorage.getItem("codex-board.model") || "");
   const [effort, setEffort] = useState(() => localStorage.getItem("codex-board.effort") || "");
   const [summary, setSummary] = useState(() => localStorage.getItem("codex-board.summary") || "auto");
   const [tier, setTier] = useState(() => localStorage.getItem("codex-board.serviceTier") || "");
   const [models, setModels] = useState<Array<{ id: string; name: string; efforts: string[]; tiers: string[] }>>([]);
   const [compacting, setCompacting] = useState(false);
-  const [open, setOpen] = useState(false);
   useEffect(() => {
     let alive = true;
     void getModels().then((value) => {
@@ -132,7 +150,7 @@ function TurnSettingsBar({ threadId, working }: { threadId: string; working: boo
   const tiers = selected?.tiers.length ? selected.tiers : ["priority"];
   function save(key: string, value: string, setter: (value: string) => void) { setter(value); localStorage.setItem(key, value); }
   async function compact() { setCompacting(true); try { await compactThread(threadId); } finally { setCompacting(false); } }
-  return <section className="model-picker"><button type="button" className="side-tool-button" onClick={() => setOpen((value) => !value)}><span>Model</span><strong>{models.find((item) => item.id === model)?.name || "Select model"}</strong><Icon name="chevronDown" /></button>{open && <div className="model-picker-popover"><div className="picker-heading"><strong>Model &amp; turn settings</strong><small>{models.length ? `${models.length} available in Codex` : "Loading model catalog…"}</small></div><div className="model-list" role="listbox" aria-label="Choose model">{models.map((item) => <button type="button" role="option" aria-selected={item.id === model} className={item.id === model ? "model-choice selected" : "model-choice"} key={item.id} onClick={() => save("codex-board.model", item.id, setModel)}><span>{item.name}</span>{item.id === model && <Icon name="check" />}</button>)}</div>{!model && <small className="model-required">Choose a model before sending.</small>}<div className="picker-fields"><label>Effort<select value={effort} onChange={(event) => save("codex-board.effort", event.target.value, setEffort)}><option value="">Model default</option>{efforts.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label>Summary<select value={summary} onChange={(event) => save("codex-board.summary", event.target.value, setSummary)}><option value="auto">Auto</option><option value="concise">Concise</option><option value="detailed">Detailed</option><option value="none">Off</option></select></label><label>Service tier<select value={tier} onChange={(event) => save("codex-board.serviceTier", event.target.value, setTier)}><option value="">Codex automatic</option>{tiers.map((item) => <option key={item} value={item}>{item}</option>)}</select></label></div><button className="compact-button" type="button" disabled={working || compacting} onClick={() => void compact()}>{compacting ? "Compacting…" : "Compact conversation"}</button></div>}</section>;
+  return <section className="model-picker"><button type="button" className="composer-tool-button model-trigger" onClick={() => onOpenChange(!open)} aria-expanded={open}><span>Model</span><strong>{models.find((item) => item.id === model)?.name || "Select model"}</strong><Icon name="chevronDown" /></button>{open && <div className="model-picker-popover"><div className="picker-heading"><strong>Model &amp; turn settings</strong><small>{models.length ? `${models.length} available in Codex` : "Loading model catalog…"}</small></div><div className="model-list" role="listbox" aria-label="Choose model">{models.map((item) => <button type="button" role="option" aria-selected={item.id === model} className={item.id === model ? "model-choice selected" : "model-choice"} key={item.id} onClick={() => save("codex-board.model", item.id, setModel)}><span>{item.name}</span>{item.id === model && <Icon name="check" />}</button>)}</div>{!model && <small className="model-required">Choose a model before sending.</small>}<div className="picker-fields"><label>Effort<select value={effort} onChange={(event) => save("codex-board.effort", event.target.value, setEffort)}><option value="">Model default</option>{efforts.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label>Summary<select value={summary} onChange={(event) => save("codex-board.summary", event.target.value, setSummary)}><option value="auto">Auto</option><option value="concise">Concise</option><option value="detailed">Detailed</option><option value="none">Off</option></select></label><label>Service tier<select value={tier} onChange={(event) => save("codex-board.serviceTier", event.target.value, setTier)}><option value="">Codex automatic</option>{tiers.map((item) => <option key={item} value={item}>{item}</option>)}</select></label></div><button className="compact-button" type="button" disabled={working || compacting} onClick={() => void compact()}>{compacting ? "Compacting…" : "Compact conversation"}</button></div>}</section>;
 }
 
 export function ChatPanel({ thread, events, queuedMessages, working, activeTurnId, onSend, onRemoveQueued, onSessionState, onFork, onRename, onClose }: ChatPanelProps) {
@@ -142,6 +160,8 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [requests, setRequests] = useState<PendingCodexRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [openComposerTool, setOpenComposerTool] = useState<"model" | "attachment" | null>(null);
+  const [imageAttachments, setImageAttachments] = useState<ImageAttachmentDraft[]>([]);
   const lastSequence = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -156,7 +176,7 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
     lastSequence.current = events.at(-1)?.sequence || 0;
     initialScrollPending.current = true;
     followOutput.current = true;
-    setLoading(true); setSession(null); setRequests([]); setError(null);
+    setLoading(true); setSession(null); setRequests([]); setError(null); setOpenComposerTool(null); setImageAttachments([]);
     void loadThread(thread.id).then((loaded) => {
       if (cancelled) return;
       const next = createChatSession(loaded);
@@ -251,10 +271,10 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
       {!loading && session?.items.length === 0 && <div className="chat-empty"><h3>Continue this thread</h3><p>Send a message below. Codex will work in the thread&apos;s existing project.</p></div>}
       {session?.items.filter((item) => item.kind !== "reasoning" && item.kind !== "plan" && item.kind !== "activity").map((item) => item.kind === "activity" ? <details key={item.id} className="chat-item activity has-copy">{copyButton(item)}<summary><span>{item.title || "Activity"}</span>{item.status && <small>{item.status}</small>}</summary><div className="chat-item-text">{item.text || "Working…"}</div></details> : <article key={item.id} className={`chat-item ${item.kind} has-copy`}>{copyButton(item)}{item.title && <div className="chat-item-title"><span>{item.title}</span>{item.status && <small>{item.status}</small>}</div>}<div className="chat-item-text"><MarkdownContent>{item.text || (item.kind === "assistant" ? "Thinking…" : "Working…")}</MarkdownContent></div></article>)}
       {working && <div className="working-indicator"><span /><span /><span /><em>Codex is working</em></div>}
-      {queuedMessages.length > 0 && <section className="message-queue"><div className="queue-heading"><strong>Message queue</strong><span>{queuedMessages.length} waiting</span></div>{queuedMessages.map((message, index) => <div className="queued-message" key={message.id}><span>{index + 1}</span><p>{message.text}</p><button aria-label="Remove queued message" onClick={() => onRemoveQueued(thread.id, message.id)}>×</button></div>)}</section>}
+      {queuedMessages.length > 0 && <section className="message-queue"><div className="queue-heading"><strong>Message queue</strong><span>{queuedMessages.length} waiting</span></div>{queuedMessages.map((message, index) => <div className="queued-message" key={message.id}><span>{index + 1}</span><p>{message.text || `${message.imageUrls?.length ?? (message.imageUrl ? 1 : 0)} images attached`}</p><button aria-label="Remove queued message" onClick={() => onRemoveQueued(thread.id, message.id)}>×</button></div>)}</section>}
       {request && <ApprovalPrompt request={request} busy={approvalBusy} onResolve={(result) => void resolveRequest(result)} />}
       <div ref={bottomRef} />
     </div>
-    <aside className="chat-side-rail"><TurnSettingsBar threadId={thread.id} working={working} /><ImageAttachmentButton threadId={thread.id} onSend={onSend} onError={setError} disabled={loading} /></aside><ChatComposer key={thread.id} threadId={thread.id} working={working} activeTurnId={activeTurnId} loading={loading} onSend={onSend} onStop={stop} onError={setError} />
+    <ChatComposer key={thread.id} threadId={thread.id} working={working} activeTurnId={activeTurnId} loading={loading} onSend={onSend} onStop={stop} onError={setError} attachments={imageAttachments} onRemoveAttachment={(id) => setImageAttachments((current) => current.filter((attachment) => attachment.id !== id))} onClearAttachments={() => setImageAttachments([])} controls={<><TurnSettingsBar threadId={thread.id} working={working} open={openComposerTool === "model"} onOpenChange={(open) => setOpenComposerTool(open ? "model" : null)} /><ImageAttachmentButton onSelect={(selected) => setImageAttachments((current) => [...current, ...selected])} onError={setError} disabled={loading} open={openComposerTool === "attachment"} onOpenChange={(open) => setOpenComposerTool(open ? "attachment" : null)} selectedCount={imageAttachments.length} /></>} />
   </section></div>;
 }

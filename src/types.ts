@@ -61,6 +61,7 @@ export interface QueuedMessage {
   id: string;
   text: string;
   imageUrl?: string;
+  imageUrls?: string[];
   settings?: TurnSettings;
 }
 

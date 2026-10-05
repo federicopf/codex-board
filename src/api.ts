@@ -34,8 +34,8 @@ export async function loadThread(threadId: string): Promise<CodexThread> {
   return invoke<CodexThread>("load_thread", { threadId });
 }
 
-export async function sendMessage(threadId: string, text: string, imageUrl?: string, settings?: TurnSettings): Promise<SendOutcome> {
-  return invoke<SendOutcome>("send_message", { threadId, text, imageUrl: imageUrl || null, settings: settings || null });
+export async function sendMessage(threadId: string, text: string, imageUrls?: string[], settings?: TurnSettings): Promise<SendOutcome> {
+  return invoke<SendOutcome>("send_message", { threadId, text, imageUrls: imageUrls?.length ? imageUrls : null, settings: settings || null });
 }
 
 export async function getMessageQueues(): Promise<Record<string, QueuedMessage[]>> { return invoke("message_queues"); }

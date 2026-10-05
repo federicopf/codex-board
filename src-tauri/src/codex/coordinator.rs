@@ -18,10 +18,22 @@ pub struct QueuedMessage {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_urls: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<TurnSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     automation: Option<AutomationContext>,
+}
+
+impl QueuedMessage {
+    fn effective_image_urls(&self) -> Vec<String> {
+        let mut urls = self.image_urls.clone();
+        if let Some(url) = &self.image_url {
+            if !urls.contains(url) { urls.push(url.clone()); }
+        }
+        urls
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -147,7 +159,7 @@ impl TurnCoordinator {
         thread_id: String,
         text: String,
     ) -> Result<SendOutcome, CodexErrorDto> {
-        self.send_with_context(thread_id, text, None, None, None).await
+        self.send_with_context(thread_id, text, Vec::new(), None, None).await
     }
 
     pub async fn send_with_image(
@@ -157,13 +169,23 @@ impl TurnCoordinator {
         image_url: Option<String>,
         settings: Option<TurnSettings>,
     ) -> Result<SendOutcome, CodexErrorDto> {
+        self.send_with_images(thread_id, text, image_url.into_iter().collect(), settings).await
+    }
+
+    pub async fn send_with_images(
+        self: &Arc<Self>,
+        thread_id: String,
+        text: String,
+        image_urls: Vec<String>,
+        settings: Option<TurnSettings>,
+    ) -> Result<SendOutcome, CodexErrorDto> {
         if settings.as_ref().and_then(|value| value.model.as_deref()).map(str::trim).filter(|value| !value.is_empty()).is_none() {
             return Err(CodexErrorDto::new(
                 CodexErrorCode::RequestFailed,
                 "Select a Codex model before sending a message",
             ));
         }
-        self.send_with_context(thread_id, text, image_url, settings, None).await
+        self.send_with_context(thread_id, text, image_urls, settings, None).await
     }
 
     pub async fn send_automation(
@@ -176,7 +198,7 @@ impl TurnCoordinator {
         self.send_with_context(
             thread_id,
             text,
-            None,
+            Vec::new(),
             None,
             Some(AutomationContext {
                 id: automation_id,
@@ -190,12 +212,12 @@ impl TurnCoordinator {
         self: &Arc<Self>,
         thread_id: String,
         text: String,
-        image_url: Option<String>,
+        image_urls: Vec<String>,
         settings: Option<TurnSettings>,
         automation: Option<AutomationContext>,
     ) -> Result<SendOutcome, CodexErrorDto> {
         let text = text.trim().to_owned();
-        if text.is_empty() && image_url.is_none() {
+        if text.is_empty() && image_urls.is_empty() {
             return Err(CodexErrorDto::new(
                 CodexErrorCode::RequestFailed,
                 "Message cannot be empty",
@@ -229,7 +251,8 @@ impl TurnCoordinator {
             let message = QueuedMessage {
                 id: random_id(),
                 text,
-                image_url,
+                image_url: None,
+                image_urls,
                 settings,
                 automation,
             };
@@ -257,7 +280,7 @@ impl TurnCoordinator {
         let submitted_text = automation_text(&text, automation.as_ref());
         match self
             .client
-            .send_message(thread_id.clone(), submitted_text, image_url, settings)
+            .send_message(thread_id.clone(), submitted_text, image_urls, settings)
             .await
         {
             Ok(response) => {
@@ -328,7 +351,7 @@ impl TurnCoordinator {
             let submitted_text = automation_text(&message.text, message.automation.as_ref());
             match self
                 .client
-                .send_message(thread_id.clone(), submitted_text, message.image_url.clone(), message.settings.clone())
+                .send_message(thread_id.clone(), submitted_text, message.effective_image_urls(), message.settings.clone())
                 .await
             {
                 Ok(response) => {
@@ -493,6 +516,8 @@ mod tests {
                 queue: VecDeque::from([QueuedMessage {
                     id: "1".into(),
                     text: "next".into(),
+                    image_url: None,
+                    image_urls: Vec::new(),
                     automation: None,
                 }]),
             },
@@ -519,11 +544,15 @@ mod tests {
         let first = QueuedMessage {
             id: "first".into(),
             text: "one".into(),
+            image_url: None,
+            image_urls: Vec::new(),
             automation: None,
         };
         let second = QueuedMessage {
             id: "second".into(),
             text: "two".into(),
+            image_url: None,
+            image_urls: Vec::new(),
             automation: None,
         };
         let mut threads = HashMap::from([(

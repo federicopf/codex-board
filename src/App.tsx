@@ -519,13 +519,13 @@ function App() {
     }
   }
 
-  async function sendOrQueue(threadId: string, message: string, _imageUrl?: string, settings?: TurnSettings) {
+  async function sendOrQueue(threadId: string, message: string, _imageUrls?: string[], settings?: TurnSettings) {
     const wasWorking = workingIdsRef.current.has(threadId);
     if (!wasWorking) setThreadWorking(threadId, true);
     try {
       const selected: TurnSettings = { ...settings, model: localStorage.getItem("codex-board.model") || settings?.model, effort: localStorage.getItem("codex-board.effort") || settings?.effort, summary: localStorage.getItem("codex-board.summary") || settings?.summary, serviceTier: localStorage.getItem("codex-board.serviceTier") || settings?.serviceTier };
       if (!selected.model) throw new Error("Select a Codex model before sending a message.");
-      const response = await sendMessage(threadId, message, _imageUrl, selected);
+      const response = await sendMessage(threadId, message, _imageUrls, selected);
       const turnId = text(record(response.turn).id);
       if (turnId) setActiveTurns((current) => ({ ...current, [threadId]: turnId }));
     } catch (cause) {

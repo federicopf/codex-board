@@ -32,7 +32,7 @@ export class BoardApi {
   thread(id: string) { return this.request<Record<string, JsonValue>>(`/v1/threads/${encodeURIComponent(id)}`); }
   archive(id: string) { return this.request<void>(`/v1/threads/${encodeURIComponent(id)}/archive`, { method: "POST" }); }
   rename(id: string, newName: string) { return this.request<ThreadDto>(`/v1/threads/${encodeURIComponent(id)}/name`, { method: "PUT", body: JSON.stringify({ newName }) }); }
-  send(id: string, text: string, imageUrl?: string, settings?: { model?: string; effort?: string; summary?: string; serviceTier?: string }) { return this.request<SendOutcome>(`/v1/threads/${encodeURIComponent(id)}/messages`, { method: "POST", body: JSON.stringify({ text, imageUrl: imageUrl || null, settings: settings || null }) }); }
+  send(id: string, text: string, imageUrls?: string[], settings?: { model?: string; effort?: string; summary?: string; serviceTier?: string }) { return this.request<SendOutcome>(`/v1/threads/${encodeURIComponent(id)}/messages`, { method: "POST", body: JSON.stringify({ text, imageUrls: imageUrls?.length ? imageUrls : null, settings: settings || null }) }); }
   interrupt(id: string, turnId: string) { return this.request<void>(`/v1/threads/${encodeURIComponent(id)}/interrupt`, { method: "POST", body: JSON.stringify({ turnId }) }); }
   compact(id: string) { return this.request<JsonValue>(`/v1/threads/${encodeURIComponent(id)}/compact`, { method: "POST" }); }
   queues() { return this.request<Record<string, QueuedMessage[]>>("/v1/queues"); }

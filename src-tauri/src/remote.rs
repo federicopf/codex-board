@@ -145,6 +145,7 @@ struct ForkThreadBody {
 struct MessageBody {
     text: String,
     image_url: Option<String>,
+    image_urls: Option<Vec<String>>,
     settings: Option<TurnSettings>,
 }
 
@@ -638,8 +639,10 @@ async fn send_message(
     Json(body): Json<MessageBody>,
 ) -> Result<Json<Value>, ApiError> {
     authorized(&headers, &state)?;
+    let mut image_urls = body.image_urls.unwrap_or_default();
+    if let Some(image_url) = body.image_url { image_urls.insert(0, image_url); }
     Ok(Json(
-        serde_json::to_value(state.coordinator.send_with_image(id, body.text, body.image_url, body.settings).await?)
+        serde_json::to_value(state.coordinator.send_with_images(id, body.text, image_urls, body.settings).await?)
             .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
     ))
 }
