@@ -533,3 +533,4 @@ body { min-width: 980px; }
   width: 14px;
   height: 14px;
 }
+.number-field .automation-interval-unit { width: 130px; height: 42px; padding: 0 10px; }

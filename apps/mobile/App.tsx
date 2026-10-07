@@ -9,7 +9,7 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import Markdown from "react-native-markdown-display";
 import {
-  categoryFromTitle, displayTitle, formatCodexDirectives, parsePairingPayload, threadNameWithTitle,
+  automationIntervalMinutes, categoryFromTitle, displayTitle, formatAutomationInterval, formatCodexDirectives, parsePairingPayload, threadNameWithTitle,
   type Automation, type BoardConfig, type BoardNotification, type CreateAutomationInput, type JsonValue, type PairingCredential,
   type PendingRemoteRequest, type QueuedMessage, type ThreadDto,
 } from "@codex-board/protocol";
@@ -124,7 +124,7 @@ function automationDescription(automation: Automation, threads: ThreadDto[]): st
   const action = automation.action;
   if (action.kind === "recurringMessage") {
     const thread = threads.find((item) => item.id === action.threadId);
-    return `Every ${action.everyMinutes} min · ${displayTitle(thread?.name || null, thread?.preview || null)}`;
+    return `Every ${formatAutomationInterval(action.everyMinutes)} · ${displayTitle(thread?.name || null, thread?.preview || null)}`;
   }
   if (action.kind === "scheduledMessage") return `Once · ${new Date(action.runAt).toLocaleString()}`;
   if (action.kind === "calendarMessage") {
@@ -461,6 +461,9 @@ function AutomationManager({ api, automations, threads, categories, onClose, onC
   const [threadId, setThreadId] = useState(threads[0]?.id || "");
   const [prompt, setPrompt] = useState("");
   const [minutes, setMinutes] = useState("60");
+  const [intervalValue, setIntervalValue] = useState("1");
+  const [intervalUnit, setIntervalUnit] = useState<"minutes" | "hours" | "days">("hours");
+  const recurringMinutes = automationIntervalMinutes(Number.parseInt(intervalValue, 10), intervalUnit);
   const [runAt, setRunAt] = useState("");
   const [time, setTime] = useState("09:00");
   const [weekdays, setWeekdays] = useState<number[]>([1, 2, 3, 4, 5]);
@@ -474,7 +477,7 @@ function AutomationManager({ api, automations, threads, categories, onClose, onC
     if (view === "createPipeline") input = pipelineTiming === "delay"
       ? { name: name.trim(), action: { kind: "categoryPipeline", fromCategory, toCategory, afterMinutes: interval } }
       : { name: name.trim(), action: { kind: "scheduledCategoryPipeline", fromCategory, toCategory, runAt: parseLocalDateTime(runAt) } };
-    else if (kind === "recurringMessage") input = { name: name.trim(), action: { kind, threadId, prompt: prompt.trim(), everyMinutes: interval, startInMinutes: interval } };
+    else if (kind === "recurringMessage") input = { name: name.trim(), action: { kind, threadId, prompt: prompt.trim(), everyMinutes: recurringMinutes, startInMinutes: recurringMinutes } };
     else if (kind === "scheduledMessage") input = { name: name.trim(), action: { kind, threadId, prompt: prompt.trim(), runAt: parseLocalDateTime(runAt) } };
     else { const [hour, minute] = time.split(":").map(Number); input = { name: name.trim(), action: { kind, threadId, prompt: prompt.trim(), weekdays, minuteOfDay: hour * 60 + minute, timezoneOffsetMinutes: new Date().getTimezoneOffset() } }; }
     setBusy(true);
@@ -488,7 +491,7 @@ function AutomationManager({ api, automations, threads, categories, onClose, onC
     : kind === "scheduledMessage" ? parseLocalDateTime(runAt) > Date.now() : kind !== "calendarMessage" || weekdays.length > 0;
   const valid = name.trim() && validSchedule && (creatingPipeline
     ? fromCategory && toCategory && fromCategory !== toCategory
-    : threadId && prompt.trim() && (kind !== "recurringMessage" || Number(minutes) >= 1));
+    : threadId && prompt.trim() && (kind !== "recurringMessage" || Number.isInteger(Number(intervalValue)) && Number(intervalValue) >= 1 && Number.isSafeInteger(recurringMinutes) && recurringMinutes <= 525_600));
   return <Modal animationType="slide"><SafeAreaView style={styles.page}>
     <View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel={view === "overview" ? "Close workflows" : "Back to workflows"} style={styles.chatBackButton} onPress={view === "overview" ? onClose : () => setView("overview")}><Text style={view === "overview" ? styles.closeIcon : styles.back}>{view === "overview" ? "×" : "‹"}</Text></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>{view === "overview" ? "Workflows" : creatingPipeline ? "New pipeline" : "New automation"}</Text><Text style={styles.headerMeta}>{view === "overview" ? "Schedules running on your PC" : creatingPipeline ? "Schedule category movement" : "Schedule a Codex prompt"}</Text></View></View>
     {view === "overview" ? <ScrollView contentContainerStyle={styles.manager}>
@@ -501,7 +504,8 @@ function AutomationManager({ api, automations, threads, categories, onClose, onC
       <View style={styles.automationComposer}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.automationModes}>{(creatingPipeline ? [["delay","After time"],["scheduled","Specific date"]] : [["recurringMessage","Interval"],["scheduledMessage","Once"],["calendarMessage","Calendar"]]).map(([value,label])=><Pressable key={value} style={[styles.automationMode,(creatingPipeline ? pipelineTiming===value : kind===value)&&styles.automationModeActive]} onPress={()=>creatingPipeline?setPipelineTiming(value as typeof pipelineTiming):setKind(value as typeof kind)}><Text style={[styles.segmentText,(creatingPipeline ? pipelineTiming===value : kind===value)&&styles.segmentTextActive]}>{label}</Text></Pressable>)}</ScrollView>
         <TextInput style={styles.smallInput} value={name} onChangeText={setName} placeholder={creatingPipeline ? "Pipeline name" : "Automation name"} />
         {!creatingPipeline ? <><Text style={styles.fieldLabel}>TASK</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.miniChoices}>{threads.map((thread) => <Pressable key={thread.id} style={[styles.miniChoice, thread.id === threadId && styles.miniChoiceActive]} onPress={() => setThreadId(thread.id)}><Text numberOfLines={1} style={[styles.miniChoiceText, thread.id === threadId && styles.miniChoiceTextActive]}>{displayTitle(thread.name, thread.preview)}</Text></Pressable>)}</ScrollView><TextInput style={[styles.smallInput, styles.promptInput]} value={prompt} onChangeText={setPrompt} multiline placeholder="What should Codex do?" /></> : <><Text style={styles.fieldLabel}>FROM CATEGORY</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.miniChoices}>{categories.map((category) => <Pressable key={category} style={[styles.miniChoice, category === fromCategory && styles.miniChoiceActive]} onPress={() => setFromCategory(category)}><Text style={[styles.miniChoiceText, category === fromCategory && styles.miniChoiceTextActive]}>{category}</Text></Pressable>)}</ScrollView><Text style={styles.fieldLabel}>TO CATEGORY</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.miniChoices}>{categories.map((category) => <Pressable key={category} style={[styles.miniChoice, category === toCategory && styles.miniChoiceActive]} onPress={() => setToCategory(category)}><Text style={[styles.miniChoiceText, category === toCategory && styles.miniChoiceTextActive]}>{category}</Text></Pressable>)}</ScrollView></>}
-        {((!creatingPipeline && kind === "recurringMessage") || (creatingPipeline && pipelineTiming === "delay")) && <><Text style={styles.fieldLabel}>{creatingPipeline ? "MOVE AFTER (MINUTES)" : "REPEAT EVERY (MINUTES)"}</Text><TextInput style={styles.smallInput} value={minutes} onChangeText={setMinutes} keyboardType="number-pad" /></>}
+        {creatingPipeline && pipelineTiming === "delay" && <><Text style={styles.fieldLabel}>MOVE AFTER (MINUTES)</Text><TextInput style={styles.smallInput} value={minutes} onChangeText={setMinutes} keyboardType="number-pad" /></>}
+        {!creatingPipeline && kind === "recurringMessage" && <><Text style={styles.fieldLabel}>REPEAT EVERY</Text><TextInput style={styles.smallInput} value={intervalValue} onChangeText={setIntervalValue} keyboardType="number-pad" /><View style={styles.automationModes}>{([["minutes", "min"], ["hours", "hours"], ["days", "days"]] as const).map(([value, label]) => <Pressable key={value} style={[styles.automationMode, intervalUnit === value && styles.automationModeActive]} onPress={() => setIntervalUnit(value)}><Text style={[styles.segmentText, intervalUnit === value && styles.segmentTextActive]}>{label}</Text></Pressable>)}</View></>}
         {creatingPipeline && pipelineTiming === "scheduled" && <><Text style={styles.fieldLabel}>MOVE ON (YYYY-MM-DD HH:MM)</Text><TextInput style={styles.smallInput} value={runAt} onChangeText={setRunAt} placeholder="2026-08-14 09:30" /></>}
         {!creatingPipeline && kind === "scheduledMessage" && <><Text style={styles.fieldLabel}>RUN ONCE (YYYY-MM-DD HH:MM)</Text><TextInput style={styles.smallInput} value={runAt} onChangeText={setRunAt} placeholder="2026-08-14 09:30" /></>}
         {!creatingPipeline && kind === "calendarMessage" && <><Text style={styles.fieldLabel}>TIME (HH:MM)</Text><TextInput style={styles.smallInput} value={time} onChangeText={setTime} placeholder="09:00" keyboardType="numbers-and-punctuation" /><View style={styles.mobileWeekdays}>{[[1,"M"],[2,"T"],[3,"W"],[4,"T"],[5,"F"],[6,"S"],[0,"S"]].map(([day,label])=><Pressable key={day} style={[styles.mobileWeekday,weekdays.includes(day as number)&&styles.miniChoiceActive]} onPress={()=>setWeekdays(current=>current.includes(day as number)?current.filter(value=>value!==day):[...current,day as number])}><Text style={styles.miniChoiceText}>{label}</Text></Pressable>)}</View></>}

@@ -92,6 +92,25 @@ export type CreateAutomationInput =
     | { name: string; action: { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number } }
     | { name: string; action: { kind: "scheduledCategoryPipeline"; fromCategory: string; toCategory: string; runAt: number } };
 
+export type AutomationIntervalUnit = "minutes" | "hours" | "days";
+
+export function automationIntervalMinutes(value: number, unit: AutomationIntervalUnit): number {
+  const multiplier = unit === "days" ? 1_440 : unit === "hours" ? 60 : 1;
+  return Math.trunc(value) * multiplier;
+}
+
+export function formatAutomationInterval(minutes: number): string {
+  if (minutes % 1_440 === 0) {
+    const days = minutes / 1_440;
+    return `${days} day${days === 1 ? "" : "s"}`;
+  }
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  return `${minutes} min`;
+}
+
 export function categoryFromTitle(name: string | null): string {
   if (!name) return "Uncategorized";
   const separator = name.indexOf(" - ");

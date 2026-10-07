@@ -38,6 +38,7 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 - Manifest: `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`.
 - Test/verifiche: `cargo test --manifest-path .\src-tauri\Cargo.toml`; build release con `npm run tauri build` solo quando serve l'installer.
 - Pattern: una sola coda/coordinatore backend per desktop, mobile e automazioni; evitare writer concorrenti.
+- Automations: `src-tauri/src/automations.rs` runs the periodic scheduler and persists next-run timestamps; missed interval/calendar slots collapse into one catch-up, while the coordinator coalesces duplicate pending messages by automation ID.
 
 ### Mobile Expo
 

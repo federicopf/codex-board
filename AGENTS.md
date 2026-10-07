@@ -96,6 +96,9 @@ This is an npm-workspaces monorepo, not two independent apps.
 - Scheduling runs on the PC while Board is running, not on the phone and not while the PC is off.
 - Keep automation listing/orchestration separate from creation. Separate recurring task creation from category pipeline creation.
 - Preserve supported interval, precise-date and weekly-calendar schedules. Consult the current action types before extending schedule behavior.
+- If interval or calendar occurrences were missed while Board/PC was unavailable, execute one immediate catch-up for the latest missed slot and advance to the next future slot; never replay every missed occurrence.
+- Keep at most one queued occurrence per automation. Coalesce a newer occurrence into that pending entry and use the shared turn coordinator so automation turns on a task never overlap.
+- Recurring intervals are stored in minutes for compatibility, while both clients let the user enter minutes, hours or days. Calendar remains the option for a chosen time of day.
 - Automations must use the normal coordinator/queue when a task is already running.
 - Completion notifications for automations open a quick, concise result modal. Preserve the implicit result-only/succinct instruction without adding it to the visible editable user prompt.
 - In-app notifications/Inbox are wanted; OS/mobile push notifications are not currently requested.

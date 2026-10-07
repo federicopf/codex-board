@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Automation, CreateAutomationInput } from "@codex-board/protocol";
+import { automationIntervalMinutes, formatAutomationInterval } from "@codex-board/protocol";
+import type { Automation, AutomationIntervalUnit, CreateAutomationInput } from "@codex-board/protocol";
 import { createAutomation, deleteAutomation, listAutomations, setAutomationEnabled } from "./api";
 import type { BoardThread } from "./types";
 
@@ -14,7 +15,7 @@ type PipelineAction = Extract<Automation["action"], { kind: "categoryPipeline" }
 
 function automationCopy(automation: Automation, names: Map<string, string>): string {
   const action = automation.action;
-  if (action.kind === "recurringMessage") return `Every ${action.everyMinutes} min · ${names.get(action.threadId) || "Task"}`;
+  if (action.kind === "recurringMessage") return `Every ${formatAutomationInterval(action.everyMinutes)} · ${names.get(action.threadId) || "Task"}`;
   if (action.kind === "scheduledMessage") return `Once · ${new Date(action.runAt).toLocaleString()}`;
   if (action.kind === "calendarMessage") return `${action.weekdays.length === 7 ? "Every day" : action.weekdays.map((day) => DAYS.find(([value]) => value === day)?.[1]).join(", ")} · ${String(Math.floor(action.minuteOfDay / 60)).padStart(2, "0")}:${String(action.minuteOfDay % 60).padStart(2, "0")}`;
   if (action.kind === "categoryPipeline") return `${action.fromCategory} → ${action.toCategory} after ${action.afterMinutes} min`;
@@ -51,6 +52,8 @@ export function AutomationsDialog({ threads, categories, onClose }: { threads: B
   const [threadId, setThreadId] = useState(threads[0]?.id || "");
   const [prompt, setPrompt] = useState("");
   const [minutes, setMinutes] = useState("60");
+  const [intervalValue, setIntervalValue] = useState("1");
+  const [intervalUnit, setIntervalUnit] = useState<AutomationIntervalUnit>("hours");
   const [runAt, setRunAt] = useState("");
   const [time, setTime] = useState("09:00");
   const [weekdays, setWeekdays] = useState<number[]>([1, 2, 3, 4, 5]);
@@ -60,6 +63,7 @@ export function AutomationsDialog({ threads, categories, onClose }: { threads: B
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [projectFilter, setProjectFilter] = useState(ALL_PROJECTS);
+  const recurringMinutes = automationIntervalMinutes(Number.parseInt(intervalValue, 10), intervalUnit);
   const threadNames = useMemo(() => new Map(threads.map((thread) => [thread.id, thread.displayTitle])), [threads]);
   const threadsById = useMemo(() => new Map(threads.map((thread) => [thread.id, thread])), [threads]);
   const groups = useMemo<AutomationGroup[]>(() => {
@@ -109,7 +113,7 @@ export function AutomationsDialog({ threads, categories, onClose }: { threads: B
     if (view === "createPipeline") input = pipelineTiming === "delay"
       ? { name, action: { kind: "categoryPipeline", fromCategory, toCategory, afterMinutes: interval } }
       : { name, action: { kind: "scheduledCategoryPipeline", fromCategory, toCategory, runAt: new Date(runAt).getTime() } };
-    else if (kind === "recurringMessage") input = { name, action: { kind, threadId, prompt, everyMinutes: interval, startInMinutes: interval } };
+    else if (kind === "recurringMessage") input = { name, action: { kind, threadId, prompt, everyMinutes: recurringMinutes, startInMinutes: recurringMinutes } };
     else if (kind === "scheduledMessage") input = { name, action: { kind, threadId, prompt, runAt: new Date(runAt).getTime() } };
     else input = { name, action: { kind, threadId, prompt, weekdays, minuteOfDay: hour * 60 + minute, timezoneOffsetMinutes: new Date().getTimezoneOffset() } };
     setBusy(true); setError(null);
@@ -124,7 +128,7 @@ export function AutomationsDialog({ threads, categories, onClose }: { threads: B
     : kind === "scheduledMessage" ? new Date(runAt).getTime() > Date.now() : kind !== "calendarMessage" || weekdays.length > 0;
   const valid = name.trim() && validSchedule && (creatingPipeline
     ? fromCategory && toCategory && fromCategory !== toCategory
-    : threadId && prompt.trim() && (kind !== "recurringMessage" || Number(minutes) >= 1));
+    : threadId && prompt.trim() && (kind !== "recurringMessage" || Number.isInteger(Number(intervalValue)) && Number(intervalValue) >= 1 && Number.isSafeInteger(recurringMinutes) && recurringMinutes <= 525_600));
 
   return <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="automations-dialog" role="dialog" aria-modal="true" aria-label="Automations">
     <header><div>{view !== "overview" && <button className="automation-back" onClick={() => setView("overview")}>← All workflows</button>}<span className="eyebrow">Workflows</span><h2>{view === "overview" ? "Automations & pipelines" : creatingPipeline ? "New pipeline" : "New automation"}</h2><p>{view === "overview" ? "Review schedules by project and coordinate upcoming work." : creatingPipeline ? "Move tasks between categories after a delay or at a specific date." : "Schedule a prompt for a Codex task."}</p></div><button className="icon-button" onClick={onClose}>×</button></header>
@@ -132,7 +136,7 @@ export function AutomationsDialog({ threads, categories, onClose }: { threads: B
       {creatingPipeline ? <div className="automation-tabs"><button type="button" className={pipelineTiming === "delay" ? "active" : ""} onClick={() => setPipelineTiming("delay")}>After time</button><button type="button" className={pipelineTiming === "scheduled" ? "active" : ""} onClick={() => setPipelineTiming("scheduled")}>Specific date</button></div> : <div className="automation-tabs automation-tabs-three"><button type="button" className={kind === "recurringMessage" ? "active" : ""} onClick={() => setKind("recurringMessage")}>Interval</button><button type="button" className={kind === "scheduledMessage" ? "active" : ""} onClick={() => setKind("scheduledMessage")}>Once</button><button type="button" className={kind === "calendarMessage" ? "active" : ""} onClick={() => setKind("calendarMessage")}>Calendar</button></div>}
       <label><span>Name</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Daily project check" /></label>
       {!creatingPipeline ? <><label><span>Task</span><select value={threadId} onChange={(event) => setThreadId(event.target.value)}>{threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.displayTitle}</option>)}</select></label><label><span>Prompt</span><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Review progress and continue the next useful step" /></label></> : <div className="pipeline-fields"><label><span>From</span><select value={fromCategory} onChange={(event) => setFromCategory(event.target.value)}>{categories.map((category) => <option key={category}>{category}</option>)}</select></label><b>→</b><label><span>To</span><select value={toCategory} onChange={(event) => setToCategory(event.target.value)}>{categories.map((category) => <option key={category}>{category}</option>)}</select></label></div>}
-      {!creatingPipeline && kind === "recurringMessage" && <label><span>Repeat every</span><div className="number-field"><input type="number" min="1" value={minutes} onChange={(event) => setMinutes(event.target.value)} /><small>minutes</small></div></label>}
+      {!creatingPipeline && kind === "recurringMessage" && <label><span>Repeat every</span><div className="number-field"><input type="number" min="1" max={intervalUnit === "days" ? 365 : intervalUnit === "hours" ? 8_760 : 525_600} value={intervalValue} onChange={(event) => setIntervalValue(event.target.value)} /><select className="automation-interval-unit" value={intervalUnit} onChange={(event) => setIntervalUnit(event.target.value as AutomationIntervalUnit)}><option value="minutes">minutes</option><option value="hours">hours</option><option value="days">days</option></select></div></label>}
       {!creatingPipeline && kind === "scheduledMessage" && <label><span>Run once</span><input type="datetime-local" value={runAt} onChange={(event) => setRunAt(event.target.value)} /></label>}
       {!creatingPipeline && kind === "calendarMessage" && <><label><span>Time</span><input type="time" value={time} onChange={(event) => setTime(event.target.value)} /></label><div className="weekday-picker">{DAYS.map(([day, label]) => <button type="button" key={day} className={weekdays.includes(day) ? "active" : ""} onClick={() => setWeekdays((current) => current.includes(day) ? current.filter((value) => value !== day) : [...current, day])}>{label}</button>)}</div></>}
       {creatingPipeline && pipelineTiming === "delay" && <label><span>Move after</span><div className="number-field"><input type="number" min="1" value={minutes} onChange={(event) => setMinutes(event.target.value)} /><small>minutes in category</small></div></label>}

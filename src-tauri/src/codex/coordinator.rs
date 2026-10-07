@@ -248,6 +248,32 @@ impl TurnCoordinator {
         let state = threads.entry(thread_id.clone()).or_default();
         if state.active || !state.queue.is_empty() {
             let should_drain = !state.active;
+            let coalesced_id = automation.as_ref().and_then(|context| {
+                state
+                    .queue
+                    .iter_mut()
+                    .find(|queued| queued.automation.as_ref().is_some_and(|pending| pending.id == context.id))
+                    .map(|queued| {
+                        queued.text = text.clone();
+                        queued.settings = settings.clone();
+                        queued.automation = automation.clone();
+                        queued.image_url = None;
+                        queued.image_urls.clear();
+                        queued.id.clone()
+                    })
+            });
+            if let Some(message_id) = coalesced_id {
+                let snapshot = state.queue.iter().cloned().collect::<Vec<_>>();
+                let persisted = queue_snapshot(&threads);
+                drop(threads);
+                self.persist(persisted);
+                self.emit_queue(&thread_id, snapshot).await;
+                return Ok(SendOutcome {
+                    queued: true,
+                    message_id: Some(message_id),
+                    turn: None,
+                });
+            }
             let message = QueuedMessage {
                 id: random_id(),
                 text,

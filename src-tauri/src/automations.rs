@@ -359,9 +359,7 @@ impl AutomationStore {
                         if let AutomationAction::RecurringMessage { next_run_at, .. } =
                             &mut current.action
                         {
-                            *next_run_at = now.saturating_add(
-                                minutes_ms(every_minutes, "Recurring interval").unwrap_or(i64::MAX),
-                            );
+                            *next_run_at = coalesced_next_interval_run(now_ms(), *next_run_at, every_minutes);
                         }
                     }
                     let _ = self.persist(&state);
@@ -414,6 +412,8 @@ impl AutomationStore {
                     timezone_offset_minutes,
                     next_run_at,
                 } if now >= next_run_at => {
+                    // A delayed scheduler tick sends this due occurrence once, then skips every
+                    // missed calendar slot and advances directly to the next future one.
                     let result = self
                         .coordinator
                         .send_automation(
@@ -437,7 +437,7 @@ impl AutomationStore {
                             &mut current.action
                         {
                             *next_run_at = next_calendar_run(
-                                now.saturating_add(60_000),
+                                now_ms().saturating_add(60_000),
                                 &weekdays,
                                 minute_of_day,
                                 timezone_offset_minutes,
@@ -666,6 +666,18 @@ fn minutes_ms(minutes: u64, label: &str) -> Result<i64, String> {
         .ok_or_else(|| format!("{label} is too large"))
 }
 
+fn coalesced_next_interval_run(now: i64, scheduled_at: i64, every_minutes: u64) -> i64 {
+    let interval_ms = minutes_ms(every_minutes, "Recurring interval").unwrap_or(i64::MAX);
+    if now < scheduled_at {
+        return scheduled_at;
+    }
+    let overdue_ms = now.saturating_sub(scheduled_at);
+    // Advance from the stored cadence past every missed slot; the due branch itself
+    // sends only one catch-up turn when the PC becomes available again.
+    let intervals_to_next = overdue_ms.div_euclid(interval_ms).saturating_add(1);
+    scheduled_at.saturating_add(interval_ms.saturating_mul(intervals_to_next))
+}
+
 fn valid_weekdays(mut weekdays: Vec<u8>) -> Result<Vec<u8>, String> {
     weekdays.sort_unstable();
     weekdays.dedup();
@@ -806,6 +818,17 @@ mod tests {
         assert_eq!(
             minutes_ms(u64::MAX, "Interval").unwrap_err(),
             "Interval is too large"
+        );
+    }
+
+    #[test]
+    fn missed_interval_runs_coalesce_and_keep_the_schedule_cadence() {
+        let scheduled_at = 1_000_000_i64;
+        let interval_ms = 60 * 60_000;
+        let now = scheduled_at + 3 * interval_ms + 20_000;
+        assert_eq!(
+            coalesced_next_interval_run(now, scheduled_at, 60),
+            scheduled_at + 4 * interval_ms
         );
     }
 }
