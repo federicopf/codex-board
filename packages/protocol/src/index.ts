@@ -12,6 +12,7 @@ export interface ThreadDto {
 
 export interface BoardConfig {
   categories: string[];
+  projects: string[];
   approvalMode: "auto" | "ask";
   revision: number;
 }

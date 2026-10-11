@@ -545,6 +545,7 @@ mod tests {
                     image_url: None,
                     image_urls: Vec::new(),
                     automation: None,
+                    settings: None,
                 }]),
             },
         );
@@ -573,6 +574,7 @@ mod tests {
             image_url: None,
             image_urls: Vec::new(),
             automation: None,
+            settings: None,
         };
         let second = QueuedMessage {
             id: "second".into(),
@@ -580,6 +582,7 @@ mod tests {
             image_url: None,
             image_urls: Vec::new(),
             automation: None,
+            settings: None,
         };
         let mut threads = HashMap::from([(
             "thread".into(),

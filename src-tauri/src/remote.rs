@@ -36,6 +36,8 @@ pub const TAILSCALE_SERVE_PORT: u16 = 47_822;
 pub struct BoardConfig {
     #[serde(default)]
     pub categories: Vec<String>,
+    #[serde(default)]
+    pub projects: Vec<String>,
     #[serde(default = "default_approval_mode")]
     pub approval_mode: String,
     #[serde(default)]
@@ -50,6 +52,7 @@ impl Default for BoardConfig {
     fn default() -> Self {
         Self {
             categories: Vec::new(),
+            projects: Vec::new(),
             approval_mode: default_approval_mode(),
             revision: 0,
         }
@@ -203,6 +206,7 @@ impl RemoteGateway {
 
     pub fn set_board_config(&self, mut config: BoardConfig) -> Result<BoardConfig, String> {
         config.categories = unique_categories(config.categories)?;
+        config.projects = unique_projects(config.projects)?;
         if !matches!(config.approval_mode.as_str(), "auto" | "ask") {
             return Err("approvalMode must be auto or ask".into());
         }
@@ -416,6 +420,31 @@ fn unique_categories(categories: Vec<String>) -> Result<Vec<String>, String> {
             return Err("Invalid category name".into());
         }
         if !result.contains(&value) {
+            result.push(value);
+        }
+    }
+    Ok(result)
+}
+
+fn unique_projects(projects: Vec<String>) -> Result<Vec<String>, String> {
+    let mut result = Vec::new();
+    for value in projects {
+        let mut value = value.trim().to_owned();
+        while value.ends_with(['/', '\\'])
+            && value != "/"
+            && !(value.len() == 3 && value.as_bytes().get(1) == Some(&b':'))
+        {
+            value.pop();
+        }
+        if value.is_empty() {
+            return Err("Invalid project path".into());
+        }
+        let key = value.replace('\\', "/");
+        let duplicate = result.iter().any(|current: &String| {
+            let current_key = current.replace('\\', "/");
+            if cfg!(windows) { current_key.eq_ignore_ascii_case(&key) } else { current_key == key }
+        });
+        if !duplicate {
             result.push(value);
         }
     }
@@ -749,6 +778,8 @@ async fn put_board(
     authorized(&headers, &state)?;
     config.categories = unique_categories(config.categories)
         .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error))?;
+    config.projects = unique_projects(config.projects)
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error))?;
     if !matches!(config.approval_mode.as_str(), "auto" | "ask") {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
@@ -931,6 +962,14 @@ mod tests {
     }
 
     #[test]
+    fn project_paths_are_trimmed_and_deduplicated() {
+        assert_eq!(
+            unique_projects(vec![" C:\\work\\demo\\ ".into(), "C:\\work\\demo".into()]).unwrap(),
+            vec!["C:\\work\\demo"]
+        );
+    }
+
+    #[test]
     fn new_board_defaults_to_auto_approval() {
         assert_eq!(BoardConfig::default().approval_mode, "auto");
     }
@@ -962,6 +1001,7 @@ mod tests {
                 barrier.wait();
                 gateway.set_board_config(BoardConfig {
                     categories: vec![category.into()],
+                    projects: vec!["C:\\work\\demo".into()],
                     approval_mode: "auto".into(),
                     revision: 0,
                 })

@@ -30,6 +30,7 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 - Manifest: `package.json`, `vite.config.ts`, `tsconfig*.json`.
 - Test/verifiche: `npm test`, `npm run build`; test mirati in `src/*.test.tsx` e `src/lib/*.test.ts`.
 - Pattern: mantenere composer chat isolato da render costosi; UI desktop e mobile devono restare allineate quando una capability e condivisa.
+- Progetti: le cartelle registrate persistono in `BoardConfig.projects`; `src/lib/projects.ts` unisce queste board ai progetti scoperti dalle conversazioni, così le board vuote non scompaiono.
 
 ### Tauri / Rust core
 
@@ -47,6 +48,7 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 - Manifest: `apps/mobile/package.json`, `apps/mobile/app.json`, `apps/mobile/eas.json`.
 - Test/verifiche: `npm run mobile:typecheck`; per bundle Android usare `npx expo export --platform android` da `apps/mobile` quando serve.
 - Pattern: Expo Go QR e Board pairing QR sono cose diverse. EAS Update usa il progetto `@f.germani06/codex-board-mobile`, runtime `appVersion` e canali `preview`/`production`; una nuova build nativa resta necessaria quando cambia il runtime.
+- Inbox: desktop e mobile separano le notifiche ordinarie dai risultati delle automazioni tramite due tab, mantenendo un unico store persistente backend.
 
 ### Shared protocol
 

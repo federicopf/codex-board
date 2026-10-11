@@ -6,6 +6,7 @@ export const UNKNOWN_PROJECT = "__unknown_project__";
 export interface ProjectInfo {
   key: string;
   label: string;
+  cwd: string;
 }
 
 export function normalizeProjectPath(cwd: string | null | undefined): string {
@@ -21,8 +22,11 @@ function segments(key: string): string[] {
   return key.split("/").filter(Boolean);
 }
 
-export function buildProjectMap(threads: ThreadDto[]): Map<string, ProjectInfo> {
-  const keys = [...new Set(threads.map((thread) => normalizeProjectPath(thread.cwd)))];
+export function buildProjectMap(threads: ThreadDto[], registeredProjects: string[] = []): Map<string, ProjectInfo> {
+  const paths = new Map<string, string>();
+  for (const cwd of registeredProjects) paths.set(normalizeProjectPath(cwd), cwd);
+  for (const thread of threads) paths.set(normalizeProjectPath(thread.cwd), thread.cwd || "");
+  const keys = [...paths.keys()];
   const baseCounts = new Map<string, number>();
 
   for (const key of keys) {
@@ -35,14 +39,14 @@ export function buildProjectMap(threads: ThreadDto[]): Map<string, ProjectInfo> 
   return new Map(
     keys.map((key) => {
       if (key === UNKNOWN_PROJECT) {
-        return [key, { key, label: "Unknown project" }];
+        return [key, { key, label: "Unknown project", cwd: paths.get(key) || "" }];
       }
       const parts = segments(key);
       const base = parts.at(-1) ?? key;
       const parent = parts.at(-2);
       const duplicate = (baseCounts.get(base) ?? 0) > 1;
       const label = duplicate && parent ? `${parent} / ${base}` : base;
-      return [key, { key, label }];
+      return [key, { key, label, cwd: paths.get(key) || key }];
     }),
   );
 }

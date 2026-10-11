@@ -132,6 +132,7 @@ export interface BoardWorkspaceProps {
   onCategories: () => void;
   onAutomations: () => void;
   onNewTask: () => void;
+  onNewProject: () => void;
   onSettings: () => void;
   onGuide: () => void;
   onInbox: () => void;
@@ -174,7 +175,7 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
           <button className="sidebar-link" onClick={props.onAutomations}><Icon name="automations" /><span>Automations</span></button>
           <button className="sidebar-link" onClick={props.onInbox}><Icon name="bell" /><span>Inbox</span>{unread > 0 && <b>{unread}</b>}</button>
         </nav>
-        <div className="sidebar-section-label">Project boards</div>
+        <div className="sidebar-section-label sidebar-project-heading"><span>Project boards</span><button type="button" aria-label="Create project" title="Create project" onClick={props.onNewProject}>＋</button></div>
         <div className="sidebar-project-list" role="navigation" aria-label="Project boards">
           {[{ key: ALL_PROJECTS, label: "All projects" }, ...props.projects].map((item) => {
             const stats = props.projectStats[item.key] || { tasks: 0, working: 0 };

@@ -5,7 +5,7 @@ import type { BoardNotification } from "@codex-board/protocol";
 
 export interface GatewayInfo { running: boolean; port: number; token: string; error?: string | null; }
 export interface TailscaleInfo { installed: boolean; online: boolean; dnsName?: string | null; baseUrl?: string | null; error?: string | null; }
-export interface BoardConfig { categories: string[]; approvalMode: "auto" | "ask"; revision: number; }
+export interface BoardConfig { categories: string[]; projects: string[]; approvalMode: "auto" | "ask"; revision: number; }
 
 export async function listThreads(): Promise<ThreadDto[]> {
   return invoke<ThreadDto[]>("list_threads");

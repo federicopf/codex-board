@@ -32,4 +32,9 @@ describe("projects", () => {
     const selected = ALL_PROJECTS;
     expect(selected === ALL_PROJECTS ? board : board.filter((item) => item.projectKey === selected)).toHaveLength(2);
   });
+
+  it("keeps registered projects even when they have no threads", () => {
+    const map = buildProjectMap([], ["C:\\work\\empty"]);
+    expect(map.get("c:/work/empty")).toEqual({ key: "c:/work/empty", label: "empty", cwd: "C:\\work\\empty" });
+  });
 });

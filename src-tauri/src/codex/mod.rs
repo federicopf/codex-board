@@ -34,6 +34,29 @@ fn is_empty_rollout_error(error: &CodexErrorDto) -> bool {
         || (details.contains("rollout") && details.contains("is empty"))
 }
 
+fn windows_cwd_from_wsl(cwd: &str) -> Option<String> {
+    let normalized = cwd.replace('\\', "/");
+    let mounted = normalized.strip_prefix("/mnt/")?;
+    let (drive, path) = mounted.split_once('/').unwrap_or((mounted, ""));
+    if drive.len() != 1 || !drive.as_bytes()[0].is_ascii_alphabetic() {
+        return None;
+    }
+    let separator = if path.is_empty() { "" } else { "\\" };
+    Some(format!(
+        "{}:{separator}{}",
+        drive.to_ascii_uppercase(),
+        path.replace('/', "\\")
+    ))
+}
+
+fn native_cwd(cwd: &str) -> String {
+    #[cfg(windows)]
+    if let Some(converted) = windows_cwd_from_wsl(cwd) {
+        return converted;
+    }
+    cwd.to_owned()
+}
+
 impl CodexClient {
     pub fn new() -> Self {
         Self {
@@ -190,6 +213,7 @@ impl CodexClient {
             ));
         }
         let client = self.ensure_running().await?;
+        let cwd = native_cwd(&cwd);
         let result = client
             .request("thread/start", json!({ "cwd": cwd }))
             .await?;
@@ -331,8 +355,18 @@ impl CodexClient {
             ));
         }
         let client = self.ensure_running().await?;
+        let thread = client
+            .request(
+                "thread/read",
+                json!({ "threadId": thread_id, "includeTurns": false }),
+            )
+            .await?;
+        let mut resume_params = json!({ "threadId": thread_id });
+        if let Some(cwd) = thread.pointer("/thread/cwd").and_then(Value::as_str) {
+            resume_params["cwd"] = json!(native_cwd(cwd));
+        }
         if let Err(error) = client
-            .request("thread/resume", json!({ "threadId": thread_id }))
+            .request("thread/resume", resume_params)
             .await
         {
             let technical = format!(
@@ -472,5 +506,16 @@ mod tests {
             fork_params("thr_1", Some("  ")),
             json!({ "threadId": "thr_1" })
         );
+    }
+
+
+    #[test]
+    fn converts_wsl_mount_paths_for_the_windows_runner() {
+        assert_eq!(
+            windows_cwd_from_wsl("/mnt/c/Users/Asus/Desktop/codex-board"),
+            Some("C:\\Users\\Asus\\Desktop\\codex-board".into())
+        );
+        assert_eq!(windows_cwd_from_wsl("C:\\work\\project"), None);
+        assert_eq!(windows_cwd_from_wsl("/home/user/project"), None);
     }
 }

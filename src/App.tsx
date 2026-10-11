@@ -19,6 +19,7 @@ import { ChatPanel } from "./ChatPanel";
 import { RemoteDialog } from "./RemoteDialog";
 import { AutomationsDialog } from "./AutomationsDialog";
 import { NewTaskDialog } from "./NewTaskDialog";
+import { NewProjectDialog } from "./NewProjectDialog";
 import { ForkThreadDialog } from "./ForkThreadDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { loadThread } from "./api";
@@ -85,6 +86,8 @@ function App() {
   const [remoteDialog, setRemoteDialog] = useState(false);
   const [automationsDialog, setAutomationsDialog] = useState(false);
   const [newTaskDialog, setNewTaskDialog] = useState(false);
+  const [newProjectDialog, setNewProjectDialog] = useState(false);
+  const [projectPaths, setProjectPaths] = useState<string[]>([]);
   const [productTour, setProductTour] = useState(() => localStorage.getItem("codex-board.tour.v1") !== "done");
   const [notifications, setNotifications] = useState<BoardNotification[]>([]);
   const [automationAlerts, setAutomationAlerts] = useState<BoardNotification[]>([]);
@@ -106,6 +109,7 @@ function App() {
   const eventSequence = useRef(0);
   const toastSequence = useRef(0);
   const approvalModeRef = useRef(approvalMode);
+  const projectPathsRef = useRef(projectPaths);
   const boardConfigReady = useRef(false);
   const notificationIdsRef = useRef<Set<string> | null>(null);
   const automationTurnIdsRef = useRef(new Set<string>());
@@ -158,12 +162,16 @@ function App() {
       if (cancelled) return;
       const localCategories = loadCategoryOrder();
       const categories = config.categories.length ? config.categories : localCategories;
+      const projects = [...(config.projects || [])];
+      for (const thread of threadsRef.current) if (thread.cwd && !projects.some((cwd) => cwd.toLocaleLowerCase() === thread.cwd!.toLocaleLowerCase())) projects.push(thread.cwd);
       const mode = config.revision > 0 ? config.approvalMode : loadApprovalMode();
-      if (config.revision === 0 && (categories.length > 0 || mode !== config.approvalMode)) {
-        await setBoardConfig({ categories, approvalMode: mode, revision: config.revision });
+      if (config.revision === 0 || projects.length !== (config.projects || []).length) {
+        await setBoardConfig({ categories, projects, approvalMode: mode, revision: config.revision });
       }
       if (cancelled) return;
       setCategoryOrder(categories);
+      projectPathsRef.current = projects;
+      setProjectPaths(projects);
       setApprovalMode(mode);
       boardConfigReady.current = true;
     }).catch((cause) => { if (!cancelled) setError(asCodexError(cause)); });
@@ -199,10 +207,11 @@ function App() {
     const timer = window.setInterval(load, 2000);
     return () => window.clearInterval(timer);
   }, [chatThreadId]);
-  const persistBoardConfig = useCallback((categories: string[], mode: ApprovalMode) => {
+  const persistBoardConfig = useCallback((categories: string[], mode: ApprovalMode, projects = projectPathsRef.current) => {
     saveCategoryOrder(categories);
     saveApprovalMode(mode);
-    if (boardConfigReady.current) void setBoardConfig({ categories, approvalMode: mode, revision: 0 }).catch((cause) => setError(asCodexError(cause)));
+    projectPathsRef.current = projects;
+    if (boardConfigReady.current) void setBoardConfig({ categories, projects, approvalMode: mode, revision: 0 }).catch((cause) => setError(asCodexError(cause)));
   }, []);
   useEffect(() => {
     approvalModeRef.current = approvalMode;
@@ -259,6 +268,17 @@ function App() {
         const sequenced = drained.map((event) => ({ sequence: ++eventSequence.current, event }));
         setEvents((current) => [...current, ...sequenced].slice(-2000));
         for (const event of drained) {
+          if (event.method === "board/config/updated") {
+            const config = record(event.params);
+            const nextCategories = Array.isArray(config.categories) ? config.categories.filter((item): item is string => typeof item === "string") : [];
+            const nextProjects = Array.isArray(config.projects) ? config.projects.filter((item): item is string => typeof item === "string") : [];
+            const nextMode = config.approvalMode === "ask" ? "ask" : "auto";
+            projectPathsRef.current = nextProjects;
+            setProjectPaths(nextProjects);
+            setCategoryOrder(nextCategories);
+            setApprovalMode(nextMode);
+            continue;
+          }
           const threadId = eventThreadId(event);
           if (!threadId) continue;
           if (event.method === "board/automation/turn-started") {
@@ -300,8 +320,18 @@ function App() {
       cwd,
       updatedAt,
     }));
-    return projectOptions(buildProjectMap(raw));
-  }, [threads]);
+    return projectOptions(buildProjectMap(raw, projectPaths));
+  }, [projectPaths, threads]);
+
+  useEffect(() => {
+    const discovered = threads.flatMap((thread) => thread.cwd ? [thread.cwd] : []);
+    const next = [...projectPaths];
+    for (const cwd of discovered) if (!next.some((item) => item.toLocaleLowerCase() === cwd.toLocaleLowerCase())) next.push(cwd);
+    if (next.length !== projectPaths.length) {
+      setProjectPaths(next);
+      persistBoardConfig(categoryOrder, approvalModeRef.current, next);
+    }
+  }, [categoryOrder, persistBoardConfig, projectPaths, threads]);
 
   useEffect(() => {
     if (!loading && project !== ALL_PROJECTS && !projects.some(({ key }) => key === project)) {
@@ -316,6 +346,15 @@ function App() {
     setSearch("");
     localStorage.setItem(PROJECT_BOARD_KEY, key);
   }, []);
+
+  function createProject(cwd: string) {
+    const next = [...projectPathsRef.current, cwd];
+    projectPathsRef.current = next;
+    setProjectPaths(next);
+    persistBoardConfig(categoryOrder, approvalModeRef.current, next);
+    setNewProjectDialog(false);
+    selectProjectBoard(buildProjectMap([], [cwd]).keys().next().value || ALL_PROJECTS);
+  }
 
   const visibleThreads = useMemo(
     () => (project === ALL_PROJECTS ? threads : threads.filter((item) => item.projectKey === project)),
@@ -633,6 +672,7 @@ function App() {
           onCategories={() => setCategoryManager(true)}
           onAutomations={() => setAutomationsDialog(true)}
           onNewTask={() => setNewTaskDialog(true)}
+          onNewProject={() => setNewProjectDialog(true)}
           onSettings={() => setSettingsOpen(true)}
           onGuide={() => setProductTour(true)}
           onInbox={() => setInboxOpen(true)}
@@ -684,7 +724,8 @@ function App() {
       {settingsOpen && <BoardSettingsDialog approvalMode={approvalMode} onApprovalMode={setApprovalMode} onClose={() => setSettingsOpen(false)} />}
       {remoteDialog && <RemoteDialog onClose={() => setRemoteDialog(false)} />}
       {automationsDialog && <AutomationsDialog threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}
-      {newTaskDialog && <NewTaskDialog threads={threads} categories={categories} defaultProjectKey={project === ALL_PROJECTS ? undefined : project} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt) => { const created = await createThread(cwd, category, title, prompt); retainCreatedThread(created); setNewTaskDialog(false); void refresh(true); }} />}
+      {newTaskDialog && <NewTaskDialog threads={threads} projects={projects.filter((item) => item.cwd)} categories={categories} defaultProjectKey={project === ALL_PROJECTS ? undefined : project} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt) => { const created = await createThread(cwd, category, title, prompt); retainCreatedThread(created); setNewTaskDialog(false); void refresh(true); }} />}
+      {newProjectDialog && <NewProjectDialog existingPaths={projectPaths} onClose={() => setNewProjectDialog(false)} onCreate={createProject} />}
       {productTour && <ProductTour onClose={() => { localStorage.setItem("codex-board.tour.v1", "done"); setProductTour(false); }} />}
       {inboxOpen && <InboxDialog items={notifications} onClose={()=>setInboxOpen(false)} onReadAll={()=>void markNotificationsRead().then(()=>listNotifications().then(setNotifications))} onClear={()=>void clearNotifications().then(()=>setNotifications([]))} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item);if(!item.read)void markNotificationsRead(item.id);}} onOpen={(threadId)=>{setInboxOpen(false);setChatThreadId(threadId);const item=notifications.find(entry=>entry.threadId===threadId&&!entry.read);if(item)void markNotificationsRead(item.id);}} />}
       {resultNotification && <AutomationResultDialog notification={resultNotification} onClose={()=>setResultNotification(null)} onOpenThread={(threadId)=>{setResultNotification(null);setChatThreadId(threadId);}} />}
