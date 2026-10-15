@@ -30,6 +30,7 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 - Manifest: `package.json`, `vite.config.ts`, `tsconfig*.json`.
 - Test/verifiche: `npm test`, `npm run build`; test mirati in `src/*.test.tsx` e `src/lib/*.test.ts`.
 - Pattern: mantenere composer chat isolato da render costosi; UI desktop e mobile devono restare allineate quando una capability e condivisa.
+- Creazione task: `src/NewTaskDialog.tsx` inoltra le immagini selezionate insieme al primo messaggio tramite `create_thread`; il backend costruisce lo stesso input immagine usato dai messaggi successivi.
 - Progetti: le cartelle registrate persistono in `BoardConfig.projects`; `src/lib/projects.ts` unisce queste board ai progetti scoperti dalle conversazioni, così le board vuote non scompaiono.
 
 ### Tauri / Rust core

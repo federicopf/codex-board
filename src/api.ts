@@ -23,8 +23,8 @@ export async function renameThread(threadId: string, newName: string): Promise<T
 export async function archiveThread(threadId: string): Promise<void> {
   return invoke("archive_thread", { threadId });
 }
-export async function createThread(cwd: string, category: string, title: string, prompt: string): Promise<ThreadDto> {
-  return invoke<ThreadDto>("create_thread", { cwd, category, title, prompt });
+export async function createThread(cwd: string, category: string, title: string, prompt: string, imageUrls: string[] = []): Promise<ThreadDto> {
+  return invoke<ThreadDto>("create_thread", { cwd, category, title, prompt, imageUrls: imageUrls.length ? imageUrls : null });
 }
 export async function forkThread(threadId: string, category: string, title: string, lastTurnId?: string | null): Promise<ThreadDto> {
   return invoke<ThreadDto>("fork_thread", { threadId, category, title, lastTurnId: lastTurnId || null });

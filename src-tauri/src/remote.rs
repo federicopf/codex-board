@@ -133,6 +133,8 @@ struct CreateThreadBody {
     category: String,
     title: String,
     prompt: String,
+    #[serde(default)]
+    image_urls: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -620,7 +622,7 @@ async fn create_thread(
     };
     let thread = state
         .client
-        .create_thread(body.cwd, name, body.prompt)
+        .create_thread(body.cwd, name, body.prompt, body.image_urls)
         .await?;
     serde_json::to_value(thread)
         .map(Json)

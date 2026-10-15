@@ -78,13 +78,16 @@ async fn create_thread(
     category: String,
     title: String,
     prompt: String,
+    image_urls: Option<Vec<String>>,
 ) -> Result<ThreadDto, CodexErrorDto> {
     let name = if category.trim().is_empty() || category == "Uncategorized" {
         title.trim().to_owned()
     } else {
         format!("{} - {}", category.trim(), title.trim())
     };
-    client.create_thread(cwd, name, prompt).await
+    client
+        .create_thread(cwd, name, prompt, image_urls.unwrap_or_default())
+        .await
 }
 
 #[tauri::command]

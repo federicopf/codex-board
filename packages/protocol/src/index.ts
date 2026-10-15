@@ -36,7 +36,7 @@ export interface RemoteHealth {
 export interface QueuedMessage { id: string; text: string; imageUrl?: string; imageUrls?: string[]; }
 export interface SendOutcome { queued: boolean; messageId?: string | null; turn?: JsonValue; }
 export interface PendingRemoteRequest { requestId: JsonValue; method: string; params: JsonValue; }
-export interface CreateThreadInput { cwd: string; category: string; title: string; prompt: string; }
+export interface CreateThreadInput { cwd: string; category: string; title: string; prompt: string; imageUrls?: string[]; }
 export interface ForkThreadInput { category: string; title: string; lastTurnId?: string | null; }
 export interface AutomationResultDetails {
   id: string;

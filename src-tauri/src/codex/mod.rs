@@ -205,6 +205,7 @@ impl CodexClient {
         cwd: String,
         name: String,
         prompt: String,
+        image_urls: Vec<String>,
     ) -> Result<ThreadDto, CodexErrorDto> {
         if cwd.trim().is_empty() || name.trim().is_empty() || prompt.trim().is_empty() {
             return Err(CodexErrorDto::new(
@@ -234,12 +235,16 @@ impl CodexClient {
                 json!({ "threadId": thread_id, "name": name }),
             )
             .await?;
+        let mut input = vec![json!({ "type": "text", "text": prompt })];
+        for url in image_urls {
+            input.push(json!({ "type": "image", "image": { "url": url } }));
+        }
         client
             .request(
                 "turn/start",
                 json!({
                     "threadId": thread_id,
-                    "input": [{ "type": "text", "text": prompt }]
+                    "input": input
                 }),
             )
             .await?;
