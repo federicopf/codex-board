@@ -474,8 +474,8 @@ function ForkThreadModal({ api, thread, categories, onClose, onCreated }: { api:
   </SafeAreaView></Modal>;
 }
 
-function InboxModal({ api, items, onClose, onOpen, onOpenResult, onChanged }: { api: BoardApi; items: BoardNotification[]; onClose: () => void; onOpen: (id: string) => void; onOpenResult: (item: BoardNotification) => void; onChanged: () => void }) {
-  const [tab,setTab]=useState<"notifications"|"automations">("notifications");
+function InboxModal({ api, items, onClose, onOpen, onOpenResult, onChanged, initialTab="notifications" }: { api: BoardApi; items: BoardNotification[]; onClose: () => void; onOpen: (id: string) => void; onOpenResult: (item: BoardNotification) => void; onChanged: () => void; initialTab?: "notifications"|"automations" }) {
+  const [tab,setTab]=useState<"notifications"|"automations">(initialTab);
   const regular=items.filter(item=>!item.automation); const automations=items.filter(item=>Boolean(item.automation)); const visible=tab==="automations"?automations:regular;
   return <Modal animationType="slide"><SafeAreaView style={styles.page}><View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Close inbox" style={styles.chatBackButton} onPress={onClose}><Text style={styles.closeIcon}>×</Text></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>Inbox</Text><Text style={styles.headerMeta}>Notifications and automation results</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Mark all notifications as read" style={styles.topbarIconButton} onPress={()=>void api.markNotificationsRead().then(onChanged)}><Text style={styles.readAllIcon}>✓✓</Text></Pressable></View><View style={[styles.segmented,{margin:14}]}><Pressable style={[styles.segment,tab==="notifications"&&styles.segmentActive]} onPress={()=>setTab("notifications")}><Text style={[styles.segmentText,tab==="notifications"&&styles.segmentTextActive]}>Notifications ({regular.filter(item=>!item.read).length})</Text></Pressable><Pressable style={[styles.segment,tab==="automations"&&styles.segmentActive]} onPress={()=>setTab("automations")}><Text style={[styles.segmentText,tab==="automations"&&styles.segmentTextActive]}>Automations ({automations.filter(item=>!item.read).length})</Text></Pressable></View><FlatList contentContainerStyle={styles.mobileInbox} data={visible} keyExtractor={item=>item.id} ListEmptyComponent={<View style={styles.emptyColumn}><Text style={styles.emptyTitle}>{tab==="automations"?"No automation results yet":"You're all caught up"}</Text></View>} renderItem={({item})=><Pressable style={[styles.mobileInboxItem,item.read&&styles.mobileInboxRead]} onPress={()=>{void api.markNotificationsRead(item.id);if(item.automation)onOpenResult(item);else if(item.threadId)onOpen(item.threadId)}}><View style={[styles.mobileInboxDot,item.kind==="error"&&styles.mobileInboxDotError,item.kind==="attention"&&styles.mobileInboxDotAttention]}/><View style={styles.categoryCopy}><Text style={styles.automationName}>{item.title}</Text><Text style={styles.automationDescription}>{item.automation?.name||item.message}</Text>{item.automation&&<Text style={styles.resultLink}>View quick result</Text>}</View><Text style={styles.openArrow}>→</Text></Pressable>} ListFooterComponent={items.length?<Pressable style={styles.moveCancel} onPress={()=>void api.clearNotifications().then(onChanged)}><Text style={styles.deleteAutomation}>Clear all notifications</Text></Pressable>:null}/></SafeAreaView></Modal>;
 }
@@ -564,6 +564,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   const [creatingTask, setCreatingTask] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
+  const [inboxInitialTab, setInboxInitialTab] = useState<"notifications" | "automations">("notifications");
   const [selectedProject, setSelectedProject] = useState(ALL_PROJECTS);
   const [search, setSearch] = useState("");
   const [connected, setConnected] = useState(false);
@@ -685,7 +686,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
       onArchive={archiveThread}
       onStop={stopThread}
       onNewTask={()=>setCreatingTask(true)}
-      onInbox={()=>setInboxOpen(true)}
+      onInbox={()=>{setInboxInitialTab("notifications");setInboxOpen(true)}}
       onAutomations={()=>setAutomating(true)}
       onSettings={()=>setManaging(true)}
     />
@@ -696,11 +697,11 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     {choosingProject && <ChoiceModal title="Choose a board" subtitle="Open a project dashboard or the complete overview." options={[{ key: ALL_PROJECTS, label: "All projects", meta: `${threads.length} tasks · overview` }, ...projects.map((project) => ({ key: project.key, label: project.label, meta: `${project.count} ${project.count === 1 ? "task" : "tasks"}` }))]} selected={selectedProject} onSelect={selectProjectBoard} onArchiveProject={(option) => archiveProject(option)} onCreate={()=>{setChoosingProject(false);setCreatingProject(true)}} onClose={() => setChoosingProject(false)} />}
     {creatingProject&&config&&<NewProjectModal config={config} api={api} onClose={()=>setCreatingProject(false)} onCreated={(cwd)=>{setCreatingProject(false);setSelectedProject(projectKey(cwd));void saveSelectedBoard(projectKey(cwd));void refresh()}}/>}
     {creatingTask && <NewTaskModal api={api} threads={threads} projects={config?.projects || []} categories={categories} defaultProjectKey={selectedProject === ALL_PROJECTS ? undefined : selectedProject} onClose={() => setCreatingTask(false)} onCreated={(thread) => { setCreatingTask(false); retainCreatedThread(thread); void refresh(); }} />}
-    {inboxOpen && <InboxModal api={api} items={notifications} onClose={()=>setInboxOpen(false)} onChanged={refresh} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item)}} onOpen={(id)=>{const thread=threads.find(item=>item.id===id);if(thread){setInboxOpen(false);setSelected(thread)}}}/>}
+    {inboxOpen && <InboxModal api={api} items={notifications} initialTab={inboxInitialTab} onClose={()=>setInboxOpen(false)} onChanged={refresh} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item)}} onOpen={(id)=>{const thread=threads.find(item=>item.id===id);if(thread){setInboxOpen(false);setSelected(thread)}}}/>}
     {moving && <MoveDialog thread={moving} categories={categories} api={api} onClose={() => setMoving(null)} onMoved={refresh} />}
     {forking && <ForkThreadModal api={api} thread={forking} categories={categories} onClose={()=>setForking(null)} onCreated={(thread)=>{setForking(null);setSelected(thread);void refresh()}}/>}
     {renaming&&<RenameThreadModal key={renaming.id} api={api} thread={renaming} onClose={()=>setRenaming(null)} onSaved={(saved)=>{setThreads(current=>current.map(item=>item.id===saved.id?saved:item));setSelected(current=>current?.id===saved.id?saved:current);setRenaming(null);void refresh()}}/>}
-    {resultNotification&&<AutomationResultModal notification={resultNotification} onClose={()=>setResultNotification(null)} onOpenThread={(id)=>{const thread=threads.find(item=>item.id===id);setResultNotification(null);if(thread)setSelected(thread)}}/>}
+    {resultNotification&&<AutomationResultModal notification={resultNotification} onClose={()=>setResultNotification(null)} onBackToList={()=>{setResultNotification(null);setInboxInitialTab("automations");setInboxOpen(true)}} onOpenThread={(id)=>{const thread=threads.find(item=>item.id===id);setResultNotification(null);if(thread)setSelected(thread)}}/>}
   </SafeAreaView>;
 }
 

@@ -1,10 +1,11 @@
 import type { BoardNotification } from "@codex-board/protocol";
 import { MarkdownContent } from "./MarkdownContent";
 
-export function AutomationResultDialog({ notification, onClose, onOpenThread }: {
+export function AutomationResultDialog({ notification, onClose, onOpenThread, onBackToList }: {
   notification: BoardNotification;
   onClose: () => void;
   onOpenThread: (threadId: string) => void;
+  onBackToList?: () => void;
 }) {
   const result = notification.automation;
   if (!result) return null;
@@ -25,6 +26,7 @@ export function AutomationResultDialog({ notification, onClose, onOpenThread }: 
         <footer>
           <time>{new Date(notification.createdAt).toLocaleString()}</time>
           <div>
+            {onBackToList && <button className="button secondary" onClick={onBackToList}>Back to results</button>}
             <button className="button secondary" onClick={onClose}>Close</button>
             {notification.threadId && <button className="button primary" onClick={() => onOpenThread(notification.threadId!)}>Open full conversation</button>}
           </div>

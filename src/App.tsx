@@ -93,6 +93,7 @@ function App() {
   const [automationAlerts, setAutomationAlerts] = useState<BoardNotification[]>([]);
   const [resultNotification, setResultNotification] = useState<BoardNotification | null>(null);
   const [inboxOpen, setInboxOpen] = useState(false);
+  const [inboxInitialTab, setInboxInitialTab] = useState<"notifications" | "automations">("notifications");
   const [categoryBusy, setCategoryBusy] = useState(false);
   const [archiveDialog, setArchiveDialog] = useState<ArchiveDialogState | null>(null);
   const [archiveBusy, setArchiveBusy] = useState(false);
@@ -675,7 +676,7 @@ function App() {
           onNewProject={() => setNewProjectDialog(true)}
           onSettings={() => setSettingsOpen(true)}
           onGuide={() => setProductTour(true)}
-          onInbox={() => setInboxOpen(true)}
+          onInbox={() => { setInboxInitialTab("notifications"); setInboxOpen(true); }}
           onRemote={() => setRemoteDialog(true)}
           onOpen={setChatThreadId}
           onMove={setMovingThreadId}
@@ -727,8 +728,8 @@ function App() {
       {newTaskDialog && <NewTaskDialog threads={threads} projects={projects.filter((item) => item.cwd)} categories={categories} defaultProjectKey={project === ALL_PROJECTS ? undefined : project} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt, imageUrls) => { const created = await createThread(cwd, category, title, prompt, imageUrls); retainCreatedThread(created); setNewTaskDialog(false); void refresh(true); }} />}
       {newProjectDialog && <NewProjectDialog existingPaths={projectPaths} onClose={() => setNewProjectDialog(false)} onCreate={createProject} />}
       {productTour && <ProductTour onClose={() => { localStorage.setItem("codex-board.tour.v1", "done"); setProductTour(false); }} />}
-      {inboxOpen && <InboxDialog items={notifications} onClose={()=>setInboxOpen(false)} onReadAll={()=>void markNotificationsRead().then(()=>listNotifications().then(setNotifications))} onClear={()=>void clearNotifications().then(()=>setNotifications([]))} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item);if(!item.read)void markNotificationsRead(item.id);}} onOpen={(threadId)=>{setInboxOpen(false);setChatThreadId(threadId);const item=notifications.find(entry=>entry.threadId===threadId&&!entry.read);if(item)void markNotificationsRead(item.id);}} />}
-      {resultNotification && <AutomationResultDialog notification={resultNotification} onClose={()=>setResultNotification(null)} onOpenThread={(threadId)=>{setResultNotification(null);setChatThreadId(threadId);}} />}
+      {inboxOpen && <InboxDialog items={notifications} initialTab={inboxInitialTab} onClose={()=>setInboxOpen(false)} onReadAll={()=>void markNotificationsRead().then(()=>listNotifications().then(setNotifications))} onClear={()=>void clearNotifications().then(()=>setNotifications([]))} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item);if(!item.read)void markNotificationsRead(item.id);}} onOpen={(threadId)=>{setInboxOpen(false);setChatThreadId(threadId);const item=notifications.find(entry=>entry.threadId===threadId&&!entry.read);if(item)void markNotificationsRead(item.id);}} />}
+      {resultNotification && <AutomationResultDialog notification={resultNotification} onClose={()=>setResultNotification(null)} onBackToList={()=>{setResultNotification(null);setInboxInitialTab("automations");setInboxOpen(true);}} onOpenThread={(threadId)=>{setResultNotification(null);setChatThreadId(threadId);}} />}
       {archiveDialog && <ConfirmArchiveDialog title={archiveDialog.kind === "thread" ? "Archive “" + archiveDialog.title + "”?" : "Archive project “" + archiveDialog.title + "”?"} description={archiveDialog.kind === "thread" ? "This removes the conversation from the active board while keeping its history safely in Codex archives." : "This archives " + archiveDialog.threadIds.length + " Codex conversation" + (archiveDialog.threadIds.length === 1 ? "" : "s") + ". Their history remains available in Codex archives."} confirmLabel={archiveDialog.kind === "thread" ? "Archive conversation" : "Archive project"} busy={archiveBusy} onCancel={() => { if (!archiveBusy) setArchiveDialog(null); }} onConfirm={() => void confirmArchive()} />}
       <aside className="toast-stack" aria-live="polite">
         {automationAlerts.map((item) => { const thread = item.threadId ? threadsRef.current.find((candidate) => candidate.id === item.threadId) : undefined; const projectLabel = thread?.projectLabel || "Codex Board"; return <button className="completion-toast automation-alert" key={item.id} onClick={()=>{setResultNotification(item);setAutomationAlerts((current)=>current.filter((entry)=>entry.id!==item.id));if(!item.read)void markNotificationsRead(item.id);}}><span className="toast-icon">⚡</span><span><strong>{projectLabel} · Automation completed</strong><small>{item.automation?.name}</small></span><i onClick={(event)=>{event.stopPropagation();setAutomationAlerts((current)=>current.filter((entry)=>entry.id!==item.id));}}>×</i></button>; })}

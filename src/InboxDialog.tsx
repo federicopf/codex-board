@@ -1,8 +1,8 @@
 import { useState } from "react";
 import type { BoardNotification } from "@codex-board/protocol";
 
-export function InboxDialog({items,onOpen,onOpenResult,onReadAll,onClear,onClose}:{items:BoardNotification[];onOpen:(id:string)=>void;onOpenResult:(item:BoardNotification)=>void;onReadAll:()=>void;onClear:()=>void;onClose:()=>void}) {
-  const [tab, setTab] = useState<"notifications" | "automations">("notifications");
+export function InboxDialog({items,onOpen,onOpenResult,onReadAll,onClear,onClose,initialTab="notifications"}:{items:BoardNotification[];onOpen:(id:string)=>void;onOpenResult:(item:BoardNotification)=>void;onReadAll:()=>void;onClear:()=>void;onClose:()=>void;initialTab?:"notifications"|"automations"}) {
+  const [tab, setTab] = useState<"notifications" | "automations">(initialTab);
   const regular = items.filter((item) => !item.automation);
   const automations = items.filter((item) => Boolean(item.automation));
   const visible = tab === "automations" ? automations : regular;

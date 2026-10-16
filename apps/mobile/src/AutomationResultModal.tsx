@@ -4,10 +4,11 @@ import { formatCodexDirectives } from "@codex-board/protocol";
 import type { BoardNotification } from "@codex-board/protocol";
 import { colors, radius, shadows, spacing } from "./theme";
 
-export function AutomationResultModal({ notification, onClose, onOpenThread }: {
+export function AutomationResultModal({ notification, onClose, onOpenThread, onBackToList }: {
   notification: BoardNotification;
   onClose: () => void;
   onOpenThread: (threadId: string) => void;
+  onBackToList?: () => void;
 }) {
   const result = notification.automation;
   if (!result) return null;
@@ -24,6 +25,7 @@ export function AutomationResultModal({ notification, onClose, onOpenThread }: {
           </View>
           <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}><Markdown style={markdownStyles}>{formatCodexDirectives(result.result)}</Markdown></ScrollView>
           <View style={styles.footer}>
+            {onBackToList?<Pressable style={styles.secondary} onPress={onBackToList}><Text style={styles.secondaryText}>Back to results</Text></Pressable>:null}
             <Pressable style={styles.secondary} onPress={onClose}><Text style={styles.secondaryText}>Close</Text></Pressable>
             {notification.threadId?<Pressable style={styles.primary} onPress={()=>onOpenThread(notification.threadId!)}><Text style={styles.primaryText}>Open conversation</Text></Pressable>:null}
           </View>
