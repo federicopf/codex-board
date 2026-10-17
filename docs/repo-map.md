@@ -48,8 +48,14 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 - Entry point: `apps/mobile/App.tsx`, `apps/mobile/src/MobileBoardHome.tsx`, `apps/mobile/src/api.ts`, `apps/mobile/src/connection.ts`.
 - Manifest: `apps/mobile/package.json`, `apps/mobile/app.json`, `apps/mobile/eas.json`.
 - Test/verifiche: `npm run mobile:typecheck`; per bundle Android usare `npx expo export --platform android` da `apps/mobile` quando serve.
-- Pattern: Expo Go QR e Board pairing QR sono cose diverse. EAS Update usa il progetto `@f.germani06/codex-board-mobile`, runtime `appVersion` e canali `preview`/`production`; una nuova build nativa resta necessaria quando cambia il runtime.
+- Pattern: Expo Go QR e Board pairing QR sono cose diverse. EAS Update usa il progetto `@f.germani06/codex-board-mobile` e canali `preview`/`production`. La versione JavaScript mobile 0.2.3 mantiene il runtime esplicito `0.2.2` per raggiungere gli APK OTA esistenti; cambiare il runtime richiede una nuova build nativa.
 - Inbox: desktop e mobile separano le notifiche ordinarie dai risultati delle automazioni tramite due tab, mantenendo un unico store persistente backend.
+- Navigazione: `ProjectHome.tsx` e la schermata iniziale mobile per scegliere il workspace; `MobileBoardHome.tsx` rappresenta una singola board e torna alla selezione progetti con back UI/hardware.
+- `MobileNavigation.tsx` mantiene accessibili progetti, Inbox, workflow e impostazioni; `MobileActionSheet.tsx` raccoglie le azioni secondarie. Chat e board sono schermate normali, gli strumenti sono modali con `onRequestClose`.
+- Icone: `MobileIcon.tsx` e l'unico adapter mobile per Ionicons; importare il modulo Ionicons diretto per non includere tutti i font di `@expo/vector-icons`.
+- Impostazioni turno: modello, effort, summary e service tier sono persistiti in `BoardConfig.turnSettings` e aggiornabili atomicamente tramite `/v1/turn-settings`, cosi desktop e mobile condividono la selezione.
+- `packages/protocol/src/turnSettings.ts` serializza le patch, ignora snapshot vecchi e attende la conferma prima dell'invio; `src/lib/turnSettings.ts` collega lo stesso store alla UI desktop. I salvataggi della board preservano le preferenze correnti sotto lo stesso lock Rust.
+- Compatibilita OTA: `apps/mobile/src/api.ts` riconosce i gateway precedenti senza `turnSettings`, conserva le scelte sul telefono in SecureStore e permette di continuare col modello ereditato dalla conversazione. La sincronizzazione completa si attiva con desktop 0.2.8.
 
 ### Shared protocol
 

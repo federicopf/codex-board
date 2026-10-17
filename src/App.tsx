@@ -13,6 +13,8 @@ import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordin
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { asCodexError, clearNotifications, createThread, archiveThread, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, getRateLimits, interruptTurn, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameThread, sendMessage, setBoardConfig } from "./api";
 import type { BoardNotification } from "@codex-board/protocol";
+import { turnPreferences } from "./lib/turnSettings";
+import { setTurnSettings } from "./api";
 import "./App.css";
 import { CategoryDialog } from "./CategoryDialog";
 import { ChatPanel } from "./ChatPanel";
@@ -166,8 +168,21 @@ function App() {
       const projects = [...(config.projects || [])];
       for (const thread of threadsRef.current) if (thread.cwd && !projects.some((cwd) => cwd.toLocaleLowerCase() === thread.cwd!.toLocaleLowerCase())) projects.push(thread.cwd);
       const mode = config.revision > 0 ? config.approvalMode : loadApprovalMode();
+      const localTurnSettings: TurnSettings = {
+        model: localStorage.getItem("codex-board.model") || undefined,
+        effort: localStorage.getItem("codex-board.effort") || undefined,
+        summary: localStorage.getItem("codex-board.summary") || "auto",
+        serviceTier: localStorage.getItem("codex-board.serviceTier") || undefined,
+      };
+      // Migrate the PC's existing preference once; subsequent snapshots are shared.
+      if (!config.turnSettings?.model && localTurnSettings.model) {
+        turnPreferences.receive(await setTurnSettings(localTurnSettings, true));
+      } else {
+        turnPreferences.receive(config);
+      }
+      const turnSettings = turnPreferences.getSnapshot().settings;
       if (config.revision === 0 || projects.length !== (config.projects || []).length) {
-        await setBoardConfig({ categories, projects, approvalMode: mode, revision: config.revision });
+        await setBoardConfig({ categories, projects, approvalMode: mode, turnSettings, revision: config.revision });
       }
       if (cancelled) return;
       setCategoryOrder(categories);
@@ -175,7 +190,7 @@ function App() {
       setProjectPaths(projects);
       setApprovalMode(mode);
       boardConfigReady.current = true;
-    }).catch((cause) => { if (!cancelled) setError(asCodexError(cause)); });
+    }).catch((cause) => { if (!cancelled) { turnPreferences.unavailable(cause); setError(asCodexError(cause)); } });
     return () => { cancelled = true; };
   }, []);
 
@@ -212,7 +227,7 @@ function App() {
     saveCategoryOrder(categories);
     saveApprovalMode(mode);
     projectPathsRef.current = projects;
-    if (boardConfigReady.current) void setBoardConfig({ categories, projects, approvalMode: mode, revision: 0 }).catch((cause) => setError(asCodexError(cause)));
+    if (boardConfigReady.current) void setBoardConfig({ categories, projects, approvalMode: mode, turnSettings: turnPreferences.getSnapshot().settings, revision: 0 }).catch((cause) => setError(asCodexError(cause)));
   }, []);
   useEffect(() => {
     approvalModeRef.current = approvalMode;
@@ -274,6 +289,14 @@ function App() {
             const nextCategories = Array.isArray(config.categories) ? config.categories.filter((item): item is string => typeof item === "string") : [];
             const nextProjects = Array.isArray(config.projects) ? config.projects.filter((item): item is string => typeof item === "string") : [];
             const nextMode = config.approvalMode === "ask" ? "ask" : "auto";
+            const nextTurnSettings = record(config.turnSettings);
+            const turnSettings: TurnSettings = {
+              model: typeof nextTurnSettings.model === "string" ? nextTurnSettings.model : undefined,
+              effort: typeof nextTurnSettings.effort === "string" ? nextTurnSettings.effort : undefined,
+              summary: typeof nextTurnSettings.summary === "string" ? nextTurnSettings.summary : "auto",
+              serviceTier: typeof nextTurnSettings.serviceTier === "string" ? nextTurnSettings.serviceTier : undefined,
+            };
+            turnPreferences.receive({ revision: typeof config.revision === "number" ? config.revision : 0, turnSettings });
             projectPathsRef.current = nextProjects;
             setProjectPaths(nextProjects);
             setCategoryOrder(nextCategories);
@@ -563,7 +586,7 @@ function App() {
     const wasWorking = workingIdsRef.current.has(threadId);
     if (!wasWorking) setThreadWorking(threadId, true);
     try {
-      const selected: TurnSettings = { ...settings, model: localStorage.getItem("codex-board.model") || settings?.model, effort: localStorage.getItem("codex-board.effort") || settings?.effort, summary: localStorage.getItem("codex-board.summary") || settings?.summary, serviceTier: localStorage.getItem("codex-board.serviceTier") || settings?.serviceTier };
+      const selected: TurnSettings = { ...await turnPreferences.flush(), ...settings };
       if (!selected.model) throw new Error("Select a Codex model before sending a message.");
       const response = await sendMessage(threadId, message, _imageUrls, selected);
       const turnId = text(record(response.turn).id);

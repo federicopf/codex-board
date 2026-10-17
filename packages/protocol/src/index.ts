@@ -1,4 +1,5 @@
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export { defaultTurnSettings, TurnSettingsSync, type TurnSettingsSnapshot } from "./turnSettings";
 
 export interface ThreadDto {
   id: string;
@@ -14,7 +15,15 @@ export interface BoardConfig {
   categories: string[];
   projects: string[];
   approvalMode: "auto" | "ask";
+  turnSettings: TurnSettings;
   revision: number;
+}
+
+export interface TurnSettings {
+  model?: string;
+  effort?: string;
+  summary?: string;
+  serviceTier?: string;
 }
 
 export interface CodexEvent {

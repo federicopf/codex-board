@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from "react";
 import { asCodexError, compactThread, getModels, interruptTurn, loadThread, respondToCodexRequest } from "./api";
+import { turnPreferences, useTurnPreferences } from "./lib/turnSettings";
 import { applyCodexEvent, createChatSession, eventRequest } from "./lib/chat";
 import { denialResult } from "./lib/approvals";
 import { MarkdownContent } from "./MarkdownContent";
@@ -89,7 +90,7 @@ function ChatComposer({ threadId, working, activeTurnId, loading, onSend, onStop
   async function submit() {
     const message = draft.trim();
     if ((!message && attachments.length === 0) || sending) return;
-    if (!localStorage.getItem("codex-board.model")) { onError("Choose a Codex model before sending."); return; }
+    if (!turnPreferences.getSnapshot().settings.model) { onError("Choose a Codex model before sending."); return; }
     setSending(true); onError(null);
     try { await onSend(threadId, message, attachments.map((attachment) => attachment.dataUrl)); setDraft(""); onClearAttachments(); }
     catch (cause) { onError(asCodexError(cause).message); }
@@ -125,10 +126,8 @@ function ImageAttachmentButton({ onSelect, onError, disabled, open, onOpenChange
 }
 
 function TurnSettingsBar({ threadId, working, open, onOpenChange }: { threadId: string; working: boolean; open: boolean; onOpenChange: (open: boolean) => void }) {
-  const [model, setModel] = useState(() => localStorage.getItem("codex-board.model") || "");
-  const [effort, setEffort] = useState(() => localStorage.getItem("codex-board.effort") || "");
-  const [summary, setSummary] = useState(() => localStorage.getItem("codex-board.summary") || "auto");
-  const [tier, setTier] = useState(() => localStorage.getItem("codex-board.serviceTier") || "");
+  const { settings, update, error: settingsError, saving } = useTurnPreferences();
+  const { model = "", effort = "", summary = "auto", serviceTier: tier = "" } = settings;
   const [models, setModels] = useState<Array<{ id: string; name: string; efforts: string[]; tiers: string[] }>>([]);
   const [compacting, setCompacting] = useState(false);
   useEffect(() => {
@@ -141,16 +140,14 @@ function TurnSettingsBar({ threadId, working, open, onOpenChange }: { threadId: 
         return { id: text(row.model) || text(row.id), name: text(row.displayName) || text(row.model) || text(row.id), efforts: Array.isArray(row.supportedReasoningEfforts) ? row.supportedReasoningEfforts.map((entry) => text(record(entry).reasoningEffort)).filter(Boolean) : [], tiers: Array.isArray(row.serviceTiers) ? row.serviceTiers.map((entry) => text(record(entry).id)).filter(Boolean) : [] };
       }).filter((item) => item.id);
       setModels(next);
-      if (next.length && !next.some((item) => item.id === model)) { setModel(""); localStorage.removeItem("codex-board.model"); }
     }).catch(() => { /* keep Default when Codex catalog is unavailable */ });
     return () => { alive = false; };
   }, []);
   const selected = models.find((item) => item.id === model);
   const efforts = selected?.efforts.length ? selected.efforts : ["low", "medium", "high", "xhigh"];
   const tiers = selected?.tiers.length ? selected.tiers : ["priority"];
-  function save(key: string, value: string, setter: (value: string) => void) { setter(value); localStorage.setItem(key, value); }
   async function compact() { setCompacting(true); try { await compactThread(threadId); } finally { setCompacting(false); } }
-  return <section className="model-picker"><button type="button" className="composer-tool-button model-trigger" onClick={() => onOpenChange(!open)} aria-expanded={open}><span>Model</span><strong>{models.find((item) => item.id === model)?.name || "Select model"}</strong><Icon name="chevronDown" /></button>{open && <div className="model-picker-popover"><div className="picker-heading"><strong>Model &amp; turn settings</strong><small>{models.length ? `${models.length} available in Codex` : "Loading model catalog…"}</small></div><div className="model-list" role="listbox" aria-label="Choose model">{models.map((item) => <button type="button" role="option" aria-selected={item.id === model} className={item.id === model ? "model-choice selected" : "model-choice"} key={item.id} onClick={() => save("codex-board.model", item.id, setModel)}><span>{item.name}</span>{item.id === model && <Icon name="check" />}</button>)}</div>{!model && <small className="model-required">Choose a model before sending.</small>}<div className="picker-fields"><label>Effort<select value={effort} onChange={(event) => save("codex-board.effort", event.target.value, setEffort)}><option value="">Model default</option>{efforts.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label>Summary<select value={summary} onChange={(event) => save("codex-board.summary", event.target.value, setSummary)}><option value="auto">Auto</option><option value="concise">Concise</option><option value="detailed">Detailed</option><option value="none">Off</option></select></label><label>Service tier<select value={tier} onChange={(event) => save("codex-board.serviceTier", event.target.value, setTier)}><option value="">Codex automatic</option>{tiers.map((item) => <option key={item} value={item}>{item}</option>)}</select></label></div><button className="compact-button" type="button" disabled={working || compacting} onClick={() => void compact()}>{compacting ? "Compacting…" : "Compact conversation"}</button></div>}</section>;
+  return <section className="model-picker"><button type="button" className="composer-tool-button model-trigger" onClick={() => onOpenChange(!open)} aria-expanded={open}><span>Model</span><strong>{models.find((item) => item.id === model)?.name || model || "Select model"}</strong><Icon name="chevronDown" /></button>{open && <div className="model-picker-popover"><div className="picker-heading"><strong>Model &amp; turn settings</strong><small>{models.length ? `${models.length} available in Codex` : "Loading model catalog…"}</small></div><div className="model-list" role="listbox" aria-label="Choose model">{models.map((item) => <button type="button" role="option" aria-selected={item.id === model} className={item.id === model ? "model-choice selected" : "model-choice"} key={item.id} onClick={() => update({ model: item.id, effort: "", serviceTier: "" })}><span>{item.name}</span>{item.id === model && <Icon name="check" />}</button>)}</div>{!model && <small className="model-required">Choose a model before sending.</small>}{settingsError && <small role="alert">{settingsError}</small>}{saving && <small role="status">Saving settings…</small>}<div className="picker-fields"><label>Effort<select value={effort} onChange={(event) => update({ effort: event.target.value })}><option value="">Model default</option>{efforts.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label>Summary<select value={summary} onChange={(event) => update({ summary: event.target.value })}><option value="auto">Auto</option><option value="concise">Concise</option><option value="detailed">Detailed</option><option value="none">Off</option></select></label><label>Service tier<select value={tier} onChange={(event) => update({ serviceTier: event.target.value })}><option value="">Codex automatic</option>{tiers.map((item) => <option key={item} value={item}>{item}</option>)}</select></label></div><button className="compact-button" type="button" disabled={working || compacting} onClick={() => void compact()}>{compacting ? "Compacting…" : "Compact conversation"}</button></div>}</section>;
 }
 
 export function ChatPanel({ thread, events, queuedMessages, working, activeTurnId, onSend, onRemoveQueued, onSessionState, onFork, onRename, onClose }: ChatPanelProps) {

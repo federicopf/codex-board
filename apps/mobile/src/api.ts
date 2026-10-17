@@ -1,9 +1,27 @@
-import type { Automation, BoardConfig, BoardNotification, CodexEvent, CreateAutomationInput, CreateThreadInput, ForkThreadInput, JsonValue, PairingCredential, PendingRemoteRequest, QueuedMessage, RemoteHealth, SendOutcome, ThreadDto } from "@codex-board/protocol";
+import type { Automation, BoardConfig, BoardNotification, CodexEvent, CreateAutomationInput, CreateThreadInput, ForkThreadInput, JsonValue, PairingCredential, PendingRemoteRequest, QueuedMessage, RemoteHealth, SendOutcome, ThreadDto, TurnSettings } from "@codex-board/protocol";
+import { loadLegacyTurnSettings, saveLegacyTurnSettings } from "./connection";
 
 type WebSocketWithHeaders = new (url: string, protocols?: string | string[] | null, options?: { headers?: Record<string, string> }) => WebSocket;
 
 export class BoardApi {
+  sharedTurnSettings: boolean | null = null;
+  private localTurnSettings: TurnSettings = {};
+  private localSettingsLoaded: Promise<void> | null = null;
+  private settingsRevisionOffset = 0;
   constructor(private readonly credential: PairingCredential) {}
+
+  private async resolveBoard(config: BoardConfig): Promise<BoardConfig> {
+    this.sharedTurnSettings = Boolean(config.turnSettings);
+    if (!this.sharedTurnSettings) {
+      this.localSettingsLoaded ??= loadLegacyTurnSettings(this.credential.baseUrl).then(settings=>{this.localTurnSettings=settings;});
+      await this.localSettingsLoaded;
+    }
+    return {
+      ...config,
+      turnSettings: config.turnSettings || this.localTurnSettings,
+      revision: config.revision + this.settingsRevisionOffset,
+    };
+  }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${this.credential.baseUrl}${path}`, {
@@ -27,8 +45,19 @@ export class BoardApi {
   models() { return this.request<JsonValue>("/v1/models"); }
   createThread(input: CreateThreadInput) { return this.request<ThreadDto>("/v1/threads/new", { method: "POST", body: JSON.stringify(input) }); }
   forkThread(id: string, input: ForkThreadInput) { return this.request<ThreadDto>(`/v1/threads/${encodeURIComponent(id)}/fork`, { method: "POST", body: JSON.stringify(input) }); }
-  board() { return this.request<BoardConfig>("/v1/board"); }
-  updateBoard(config: BoardConfig) { return this.request<BoardConfig>("/v1/board", { method: "PUT", body: JSON.stringify(config) }); }
+  async board() { return this.resolveBoard(await this.request<BoardConfig>("/v1/board")); }
+  async updateBoard(config: BoardConfig) { return this.resolveBoard(await this.request<BoardConfig>("/v1/board", { method: "PUT", body: JSON.stringify(config) })); }
+  async updateTurnSettings(settings: TurnSettings) {
+    if (this.sharedTurnSettings === null) await this.board();
+    if (this.sharedTurnSettings === false) {
+      const next = { ...this.localTurnSettings, ...settings };
+      await saveLegacyTurnSettings(this.credential.baseUrl, next);
+      this.localTurnSettings = next;
+      this.settingsRevisionOffset++;
+      return this.board();
+    }
+    return this.resolveBoard(await this.request<BoardConfig>("/v1/turn-settings", { method: "PUT", body: JSON.stringify(settings) }));
+  }
   thread(id: string) { return this.request<Record<string, JsonValue>>(`/v1/threads/${encodeURIComponent(id)}`); }
   archive(id: string) { return this.request<void>(`/v1/threads/${encodeURIComponent(id)}/archive`, { method: "POST" }); }
   rename(id: string, newName: string) { return this.request<ThreadDto>(`/v1/threads/${encodeURIComponent(id)}/name`, { method: "PUT", body: JSON.stringify({ newName }) }); }

@@ -1,21 +1,19 @@
-import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useState } from "react";
+import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
 import type { QueuedMessage, ThreadDto } from "@codex-board/protocol";
-import { colors, radius, shadows, spacing } from "./theme";
+import { colors } from "./theme";
+import { MobileIcon } from "./MobileIcon";
+import { MobileActionSheet } from "./MobileActionSheet";
 
-export interface MobileCategory {
-  name: string;
-  count: number;
-}
-
+export interface MobileCategory { name: string; count: number; }
 interface MobileBoardHomeProps {
   connected: boolean;
   loading: boolean;
+  refreshing: boolean;
   projectLabel: string;
   showProject: boolean;
   totalCount: number;
   workingCount: number;
-  usage: { used: number | null; resetsAt: number | null };
-  unreadCount: number;
   categories: MobileCategory[];
   activeCategory: string;
   threads: ThreadDto[];
@@ -25,7 +23,7 @@ interface MobileBoardHomeProps {
   titleFor: (thread: ThreadDto) => string;
   projectFor: (thread: ThreadDto) => string;
   onSearch: (value: string) => void;
-  onProject: () => void;
+  onBackToProjects: () => void;
   onCategory: (category: string) => void;
   onOpen: (thread: ThreadDto) => void;
   onMove: (thread: ThreadDto) => void;
@@ -34,87 +32,60 @@ interface MobileBoardHomeProps {
   onArchive: (thread: ThreadDto) => void;
   onStop: (thread: ThreadDto) => void;
   onNewTask: () => void;
-  onInbox: () => void;
-  onAutomations: () => void;
-  onSettings: () => void;
-}
-
-function Logo() {
-  return <View style={styles.logo}><View style={[styles.logoBar,{height:8}]} /><View style={[styles.logoBar,{height:17}]} /><View style={[styles.logoBar,{height:12}]} /></View>;
-}
-
-function resetLabel(timestamp: number | null) {
-  return timestamp ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp * 1000)) : "Reset unavailable";
-}
-
-function TaskCard({ thread, queueCount, working, title, project, showProject, onOpen, onMove, onFork, onRename, onArchive, onStop }: { thread: ThreadDto; queueCount: number; working: boolean; title: string; project: string; showProject: boolean; onOpen: () => void; onMove: () => void; onFork: () => void; onRename: () => void; onArchive: () => void; onStop: () => void }) {
-  return (
-    <View style={[styles.card,working&&styles.workingCard]}>
-      <Pressable onPress={onOpen} accessibilityRole="button" accessibilityLabel={`Open ${title}`}>
-        <View style={styles.cardTop}><View style={styles.cardBadges}>{showProject?<Text style={styles.projectPill} numberOfLines={1}>{project}</Text>:null}{thread.forkedFromId?<Text style={styles.forkPill}>⑂ Fork</Text>:null}</View>{working&&<View style={styles.workingPill}><View style={styles.liveDot}/><Text style={styles.workingPillText}>Working</Text></View>}</View>
-        <View style={styles.cardTitleRow}><Text style={[styles.cardTitle,{flex:1}]}>{title}</Text><Pressable style={styles.cardIconButton} onPress={onRename} accessibilityRole="button" accessibilityLabel={`Rename ${title}`}><Text style={styles.forkIcon}>✎</Text></Pressable></View>
-        {thread.preview ? <Text style={styles.cardPreview} numberOfLines={2}>{thread.preview}</Text> : null}
-      </Pressable>
-      <View style={styles.cardFooter}>
-        <Text style={[styles.cardMeta,working&&styles.cardMetaLive]}>{queueCount ? `${queueCount} queued` : working ? "Codex is working" : "Ready"}</Text>
-        {working ? <Pressable style={[styles.cardIconButton, styles.stopAction]} onPress={onStop} accessibilityRole="button" accessibilityLabel={`Stop ${title}`}><Text style={styles.stopIcon}>■</Text></Pressable> : <Pressable style={styles.cardIconButton} onPress={onFork} accessibilityRole="button" accessibilityLabel={`Fork ${title}`}><Text style={styles.forkIcon}>⑂</Text></Pressable>}
-        <Pressable style={styles.cardIconButton} onPress={onArchive} accessibilityRole="button" accessibilityLabel={`Archive ${title}`}><Text style={styles.archiveIcon}>□</Text></Pressable>
-        <Pressable style={styles.moveButton} onPress={onMove} accessibilityRole="button" accessibilityLabel={`Move ${title}`}><Text style={styles.moveIcon}>↔</Text><Text style={styles.moveText}>Move</Text></Pressable>
-        <Pressable style={styles.openButton} onPress={onOpen}><Text style={styles.openButtonText}>Open</Text><Text style={styles.openArrow}>→</Text></Pressable>
-      </View>
-    </View>
-  );
+  onRefresh: () => void;
 }
 
 export function MobileBoardHome(props: MobileBoardHomeProps) {
-  return (
-    <View style={styles.page}>
-      <View style={styles.header}>
-        <View style={styles.brand}><Logo/><View><Text style={styles.brandTitle}>Codex Board</Text><View style={styles.connection}><View style={[styles.connectionDot,{backgroundColor:props.connected?colors.success:colors.warning}]}/><Text style={styles.connectionText}>{props.connected?"Connected to your PC":"Reconnecting…"}</Text></View></View></View>
-        <Pressable style={styles.newButton} onPress={props.onNewTask} accessibilityRole="button" accessibilityLabel="New Codex task"><Text style={styles.newButtonIcon}>＋</Text></Pressable>
-      </View>
-
-      <View style={styles.overview}>
-        <View><Text style={styles.eyebrow}>CURRENT BOARD</Text><Text style={styles.overviewTitle}>{props.projectLabel}</Text><Text style={styles.overviewSubtitle}>{props.totalCount} active {props.totalCount===1?"task":"tasks"}</Text></View>
-        <View style={styles.overviewMetrics}><View style={[styles.liveMetric,props.workingCount>0&&styles.liveMetricActive]}><View style={styles.metricRow}><View style={[styles.metricDot,props.workingCount>0&&styles.metricDotActive]}/><Text style={styles.metricNumber}>{props.workingCount}</Text></View><Text style={styles.metricLabel}>working now</Text></View><View style={styles.usageMetric}><Text style={styles.usageValue}>{props.usage.used === null ? "—" : `${props.usage.used}%`}</Text><Text style={styles.metricLabel}>used · reset {resetLabel(props.usage.resetsAt)}</Text></View></View>
-      </View>
-
-      <View style={styles.controls}>
-        <Pressable style={styles.projectControl} onPress={props.onProject}><View><Text style={styles.controlLabel}>SWITCH BOARD</Text><Text style={styles.controlValue} numberOfLines={1}>{props.projectLabel}</Text></View><Text style={styles.chevron}>⌄</Text></Pressable>
-        <View style={styles.searchControl}><Text style={styles.searchIcon}>⌕</Text><TextInput style={styles.searchInput} value={props.search} onChangeText={props.onSearch} placeholder="Search tasks" placeholderTextColor={colors.textSoft}/>{props.search?<Pressable onPress={()=>props.onSearch("")}><Text style={styles.clearSearch}>×</Text></Pressable>:null}</View>
-      </View>
-
-      <ScrollView horizontal style={styles.tabsScroll} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>{props.categories.map(category=>{const active=category.name===props.activeCategory;return <Pressable key={category.name} style={[styles.tab,active&&styles.tabActive]} onPress={()=>props.onCategory(category.name)}><Text style={[styles.tabText,active&&styles.tabTextActive]}>{category.name}</Text><Text style={[styles.tabCount,active&&styles.tabCountActive]}>{category.count}</Text></Pressable>})}</ScrollView>
-
-      <FlatList
-        style={styles.list}
-        contentContainerStyle={styles.listContent}
-        data={props.threads}
-        keyExtractor={thread=>thread.id}
-        ListHeaderComponent={<View style={styles.listHeader}><View><Text style={styles.listTitle}>{props.activeCategory||"Tasks"}</Text><Text style={styles.listSubtitle}>{props.search?`Results for “${props.search}”`:"Your current stage"}</Text></View><Text style={styles.listCount}>{props.threads.length}</Text></View>}
-        ListEmptyComponent={<View style={styles.empty}>{props.loading?<><ActivityIndicator color={colors.primary}/><Text style={styles.emptyText}>Loading your workspace…</Text></>:<><View style={styles.emptyIcon}><Text>⌕</Text></View><Text style={styles.emptyTitle}>No tasks found</Text><Text style={styles.emptyText}>{props.search?"Try a different search.":"This stage has no tasks for the selected project."}</Text></>}</View>}
-        renderItem={({item})=><TaskCard thread={item} queueCount={props.queues[item.id]?.length||0} working={props.isWorking(item)} title={props.titleFor(item)} project={props.projectFor(item)} showProject={props.showProject} onOpen={()=>props.onOpen(item)} onMove={()=>props.onMove(item)} onFork={()=>props.onFork(item)} onRename={()=>props.onRename(item)} onArchive={()=>props.onArchive(item)} onStop={()=>props.onStop(item)}/>} />
-
-      <View style={styles.bottomNav}>
-        <Pressable style={styles.navItem} accessibilityRole="button" accessibilityState={{selected:true}}><Text style={[styles.navIcon,styles.navIconActive]}>⌂</Text><Text style={[styles.navLabel,styles.navLabelActive]}>Board</Text></Pressable>
-        <Pressable style={styles.navItem} onPress={props.onInbox} accessibilityRole="button" accessibilityLabel="Inbox"><View><Text style={styles.navIcon}>◇</Text>{props.unreadCount>0&&<View style={styles.badge}><Text style={styles.badgeText}>{props.unreadCount}</Text></View>}</View><Text style={styles.navLabel}>Inbox</Text></Pressable>
-        <Pressable style={styles.navItem} onPress={props.onAutomations} accessibilityRole="button" accessibilityLabel="Automations"><Text style={styles.navIcon}>⚡</Text><Text style={styles.navLabel}>Automate</Text></Pressable>
-        <Pressable style={styles.navItem} onPress={props.onSettings} accessibilityRole="button" accessibilityLabel="Settings"><Text style={styles.navIcon}>☰</Text><Text style={styles.navLabel}>Settings</Text></Pressable>
-      </View>
+  const compact = useWindowDimensions().height < 500;
+  const [actionThread, setActionThread] = useState<ThreadDto | null>(null);
+  return <View style={styles.page}>
+    <View style={[styles.header,compact&&styles.compactHeader]}>
+      <Pressable style={styles.iconButton} onPress={props.onBackToProjects} accessibilityRole="button" accessibilityLabel="Back to projects"><MobileIcon name="chevron-back" size={25} color={colors.text}/></Pressable>
+      <View style={styles.heading}><Text style={styles.title} numberOfLines={1}>{props.projectLabel}</Text><Text style={styles.subtitle}>{props.totalCount} tasks{props.workingCount?` · ${props.workingCount} working`:""}{!props.connected?" · Reconnecting…":""}</Text></View>
+      <Pressable style={[styles.iconButton,styles.newButton]} onPress={props.onNewTask} accessibilityRole="button" accessibilityLabel="New task"><MobileIcon name="add" size={24} color="white"/></Pressable>
     </View>
-  );
+    <View style={[styles.search,compact&&styles.compactSearch]}>
+      <MobileIcon name="search-outline" color={colors.textMuted}/>
+      <TextInput value={props.search} onChangeText={props.onSearch} style={styles.searchInput} placeholder="Search this project" placeholderTextColor={colors.textSoft} returnKeyType="search"/>
+      {props.search?<Pressable style={styles.clearSearch} onPress={()=>props.onSearch("")} accessibilityRole="button" accessibilityLabel="Clear search"><MobileIcon name="close-circle" color={colors.textMuted}/></Pressable>:null}
+    </View>
+    {!props.search.trim()&&props.categories.length>0&&<ScrollView horizontal style={[styles.categoryScroll,compact&&{maxHeight:48}]} contentContainerStyle={[styles.categories,compact&&{paddingVertical:4}]} showsHorizontalScrollIndicator={false}>{props.categories.map(category=>{
+      const active=category.name===props.activeCategory;
+      return <Pressable key={category.name} style={[styles.category,compact&&{minHeight:40},active&&styles.categoryActive]} onPress={()=>props.onCategory(category.name)} accessibilityRole="button" accessibilityState={{selected:active}}><Text style={[styles.categoryText,active&&styles.categoryTextActive]}>{category.name}</Text><Text style={[styles.categoryCount,active&&styles.categoryTextActive]}>{category.count}</Text></Pressable>;
+    })}</ScrollView>}
+    <FlatList data={props.threads} keyExtractor={thread=>thread.id} style={styles.list} contentContainerStyle={styles.listContent}
+      keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" refreshing={props.refreshing} onRefresh={props.onRefresh}
+      ListHeaderComponent={props.search.trim()?<Text style={styles.results}>{props.threads.length} results across this project</Text>:null}
+      ListEmptyComponent={<View style={styles.empty}>{props.loading?<ActivityIndicator color={colors.primary}/>:<MobileIcon name={props.search?"search-outline":"chatbubbles-outline"} size={32} color={colors.textSoft}/>}<Text style={styles.emptyTitle}>{props.loading?"Loading conversations…":props.search?"No matching conversations":"No tasks here yet"}</Text><Text style={styles.emptyText}>{props.search?"Try another title or phrase.":"Start a task in this project to begin."}</Text>{!props.loading&&!props.search&&<Pressable onPress={props.onNewTask} style={styles.emptyAction}><Text style={styles.emptyActionText}>Create a task</Text></Pressable>}</View>}
+      renderItem={({item})=>{
+        const working=props.isWorking(item);
+        const queued=props.queues[item.id]?.length||0;
+        return <View style={[styles.card,working&&styles.workingCard]}>
+          <Pressable style={styles.cardMain} onPress={()=>props.onOpen(item)} onLongPress={()=>setActionThread(item)} accessibilityRole="button" accessibilityLabel={`Open ${props.titleFor(item)}`}>
+            <View style={styles.cardMeta}>{props.showProject&&<Text numberOfLines={1} style={styles.project}>{props.projectFor(item)}</Text>}<View style={[styles.statusDot,working&&styles.statusDotLive]}/><Text style={[styles.status,working&&styles.statusLive]}>{working?"Working":"Ready"}{queued?` · ${queued} queued`:""}</Text></View>
+            <Text style={styles.cardTitle} numberOfLines={2}>{props.titleFor(item)}</Text>
+            {item.preview?<Text style={styles.preview} numberOfLines={2}>{item.preview}</Text>:null}
+          </Pressable>
+          <Pressable style={styles.moreButton} onPress={()=>setActionThread(item)} accessibilityRole="button" accessibilityLabel={`Actions for ${props.titleFor(item)}`}><MobileIcon name="ellipsis-horizontal" color={colors.textMuted}/></Pressable>
+        </View>;
+      }}/>
+    {actionThread&&<MobileActionSheet title={props.titleFor(actionThread)} onClose={()=>setActionThread(null)} actions={[
+      {label:"Rename conversation",icon:"pencil-outline",onPress:()=>props.onRename(actionThread)},
+      {label:"Move to category",icon:"swap-horizontal-outline",onPress:()=>props.onMove(actionThread)},
+      {label:"Fork conversation",icon:"git-branch-outline",onPress:()=>props.onFork(actionThread)},
+      ...(props.isWorking(actionThread)?[{label:"Stop Codex",icon:"stop-circle-outline" as const,onPress:()=>props.onStop(actionThread)}]:[]),
+      {label:"Archive conversation",icon:"archive-outline",destructive:true,onPress:()=>props.onArchive(actionThread)},
+    ]}/>}
+  </View>;
 }
 
 const styles=StyleSheet.create({
-  cardTitleRow:{flexDirection:"row",alignItems:"flex-start",justifyContent:"space-between",gap:8},
-  page:{flex:1,backgroundColor:colors.background},
-  header:{minHeight:70,paddingHorizontal:spacing.lg,flexDirection:"row",alignItems:"center",justifyContent:"space-between",borderBottomWidth:StyleSheet.hairlineWidth,borderColor:colors.border,backgroundColor:colors.surface},
-  brand:{flexDirection:"row",alignItems:"center",gap:10},logo:{width:36,height:36,padding:8,borderRadius:11,flexDirection:"row",alignItems:"flex-end",gap:3,backgroundColor:colors.ink},logoBar:{flex:1,borderRadius:2,backgroundColor:"white"},brandTitle:{color:colors.text,fontSize:16,fontWeight:"800",letterSpacing:-.4},connection:{marginTop:3,flexDirection:"row",alignItems:"center",gap:5},connectionDot:{width:6,height:6,borderRadius:3},connectionText:{color:colors.textMuted,fontSize:9,fontWeight:"600"},newButton:{width:40,height:40,alignItems:"center",justifyContent:"center",borderRadius:12,backgroundColor:colors.ink},newButtonIcon:{color:"white",fontSize:20,lineHeight:22},
-  overview:{paddingHorizontal:spacing.xl,paddingTop:spacing.xl,paddingBottom:spacing.lg,flexDirection:"row",alignItems:"center",justifyContent:"space-between"},eyebrow:{color:colors.primary,fontSize:8,fontWeight:"800",letterSpacing:1.2},overviewTitle:{maxWidth:240,marginTop:5,color:colors.text,fontSize:25,lineHeight:30,fontWeight:"800",letterSpacing:-.9},overviewSubtitle:{marginTop:4,color:colors.textMuted,fontSize:11},overviewMetrics:{alignItems:"flex-end",gap:7},liveMetric:{minWidth:75,padding:10,alignItems:"center",borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surface},liveMetricActive:{borderColor:"#B8E5CF",backgroundColor:"#ECF9F3"},usageMetric:{minWidth:120,padding:8,alignItems:"flex-end",borderRadius:radius.md,backgroundColor:colors.surfaceMuted},usageValue:{color:colors.text,fontSize:13,fontWeight:"800"},metricRow:{flexDirection:"row",alignItems:"center",gap:5},metricDot:{width:7,height:7,borderRadius:4,backgroundColor:"#B1B5BF"},metricDotActive:{backgroundColor:colors.success},metricNumber:{color:colors.text,fontSize:17,fontWeight:"800"},metricLabel:{marginTop:2,color:colors.textMuted,fontSize:8,fontWeight:"600"},
-  controls:{paddingHorizontal:spacing.lg,flexDirection:"row",gap:spacing.sm},projectControl:{height:48,flex:1.05,paddingHorizontal:12,flexDirection:"row",alignItems:"center",justifyContent:"space-between",borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surface},controlLabel:{color:colors.textSoft,fontSize:7,fontWeight:"800",letterSpacing:.8},controlValue:{maxWidth:120,marginTop:3,color:colors.text,fontSize:11,fontWeight:"700"},chevron:{color:colors.primary,fontSize:17},searchControl:{height:48,flex:1,flexDirection:"row",alignItems:"center",gap:7,paddingHorizontal:11,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surface},searchIcon:{color:colors.textMuted,fontSize:19,transform:[{rotate:"-12deg"}]},searchInput:{minWidth:0,flex:1,color:colors.text,fontSize:11},clearSearch:{color:colors.textMuted,fontSize:18},
-  tabsScroll:{flexGrow:0,flexShrink:0,height:58},tabs:{height:58,paddingHorizontal:spacing.lg,paddingVertical:10,alignItems:"center",gap:7},tab:{height:38,paddingLeft:13,paddingRight:6,flexDirection:"row",alignItems:"center",gap:8,borderWidth:1,borderColor:colors.border,borderRadius:radius.pill,backgroundColor:colors.surface},tabActive:{borderColor:colors.ink,backgroundColor:colors.ink},tabText:{color:colors.textMuted,fontSize:11,fontWeight:"700"},tabTextActive:{color:"white"},tabCount:{minWidth:24,height:24,textAlign:"center",textAlignVertical:"center",borderRadius:12,overflow:"hidden",color:colors.textMuted,backgroundColor:colors.surfaceMuted,fontSize:9,fontWeight:"800"},tabCountActive:{color:colors.ink,backgroundColor:"white"},
-  list:{flex:1},listContent:{paddingHorizontal:spacing.lg,paddingBottom:92},listHeader:{minHeight:50,flexDirection:"row",alignItems:"center",justifyContent:"space-between",paddingHorizontal:2},listTitle:{color:colors.text,fontSize:14,fontWeight:"800"},listSubtitle:{marginTop:2,color:colors.textMuted,fontSize:9},listCount:{minWidth:27,height:27,textAlign:"center",textAlignVertical:"center",borderRadius:14,overflow:"hidden",color:colors.textMuted,backgroundColor:colors.surfaceMuted,fontSize:10,fontWeight:"800"},
-  card:{marginBottom:10,padding:14,borderWidth:1,borderColor:colors.border,borderRadius:radius.lg,backgroundColor:colors.surface,...shadows.card},workingCard:{borderColor:"#AEB1F4",borderLeftWidth:4},cardTop:{minHeight:22,marginBottom:8,flexDirection:"row",alignItems:"center",justifyContent:"space-between"},cardBadges:{maxWidth:"72%",flexDirection:"row",alignItems:"center",gap:5},projectPill:{maxWidth:"68%",paddingHorizontal:7,paddingVertical:4,borderRadius:6,overflow:"hidden",color:colors.textMuted,backgroundColor:colors.surfaceMuted,fontSize:8,fontWeight:"700"},forkPill:{paddingHorizontal:7,paddingVertical:4,borderRadius:6,overflow:"hidden",color:colors.primary,backgroundColor:colors.primarySoft,fontSize:8,fontWeight:"700"},workingPill:{paddingHorizontal:7,paddingVertical:4,flexDirection:"row",alignItems:"center",gap:4,borderRadius:8,backgroundColor:colors.primarySoft},liveDot:{width:5,height:5,borderRadius:3,backgroundColor:colors.primary},workingPillText:{color:colors.primary,fontSize:8,fontWeight:"800"},cardTitle:{color:colors.text,fontSize:16,lineHeight:21,fontWeight:"700",letterSpacing:-.25},cardPreview:{marginTop:7,color:colors.textMuted,fontSize:12,lineHeight:18},cardFooter:{marginTop:13,paddingTop:10,flexDirection:"row",alignItems:"center",gap:7,borderTopWidth:StyleSheet.hairlineWidth,borderColor:colors.border},cardMeta:{flex:1,color:colors.textSoft,fontSize:9,fontWeight:"600"},cardMetaLive:{color:colors.primary},cardIconButton:{width:31,height:31,alignItems:"center",justifyContent:"center",borderRadius:8,backgroundColor:colors.surfaceMuted},cardActionDisabled:{opacity:.35},forkIcon:{color:colors.primary,fontSize:18,lineHeight:20},stopAction:{backgroundColor:"#FDEDEC"},stopIcon:{color:colors.danger,fontSize:12},archiveIcon:{color:colors.textMuted,fontSize:18,lineHeight:20},moveButton:{height:31,paddingHorizontal:8,flexDirection:"row",alignItems:"center",gap:4,borderRadius:8,backgroundColor:colors.surfaceMuted},moveIcon:{color:colors.textMuted,fontSize:13},moveText:{color:colors.textMuted,fontSize:9,fontWeight:"700"},openButton:{height:31,paddingHorizontal:10,flexDirection:"row",alignItems:"center",gap:5,borderRadius:8,backgroundColor:colors.primarySoft},openButtonText:{color:colors.primary,fontSize:9,fontWeight:"800"},openArrow:{color:colors.primary,fontSize:14},
-  empty:{minHeight:260,alignItems:"center",justifyContent:"center"},emptyIcon:{width:50,height:50,alignItems:"center",justifyContent:"center",borderRadius:16,backgroundColor:colors.primarySoft},emptyTitle:{marginTop:12,color:colors.text,fontSize:15,fontWeight:"800"},emptyText:{maxWidth:230,marginTop:5,textAlign:"center",color:colors.textMuted,fontSize:11,lineHeight:17},
-  bottomNav:{position:"absolute",left:0,right:0,bottom:0,height:72,paddingHorizontal:12,paddingTop:7,paddingBottom:5,flexDirection:"row",alignItems:"center",justifyContent:"space-around",borderTopWidth:StyleSheet.hairlineWidth,borderColor:colors.border,backgroundColor:"rgba(255,255,255,.98)"},navItem:{width:70,height:54,alignItems:"center",justifyContent:"center",gap:3,borderRadius:12},navIcon:{color:colors.textMuted,fontSize:18},navIconActive:{color:colors.primary},navLabel:{color:colors.textMuted,fontSize:8,fontWeight:"700"},navLabelActive:{color:colors.primary},badge:{position:"absolute",top:-5,right:-10,minWidth:16,height:16,paddingHorizontal:3,alignItems:"center",justifyContent:"center",borderRadius:8,backgroundColor:colors.danger},badgeText:{color:"white",fontSize:7,fontWeight:"800"},
+  page:{flex:1,backgroundColor:colors.background},header:{minHeight:84,paddingHorizontal:12,paddingVertical:12,flexDirection:"row",alignItems:"center",gap:10,backgroundColor:colors.surface},
+  compactHeader:{minHeight:60,paddingVertical:6},compactSearch:{marginTop:8,marginBottom:4,minHeight:44},
+  iconButton:{width:48,height:48,flexShrink:0,alignItems:"center",justifyContent:"center",borderRadius:15},newButton:{backgroundColor:colors.ink},heading:{flex:1,minWidth:0},title:{fontSize:21,fontWeight:"700",letterSpacing:-.5,color:colors.text},subtitle:{marginTop:5,fontSize:12,color:colors.textMuted},
+  search:{margin:16,marginBottom:8,minHeight:48,paddingLeft:14,flexDirection:"row",alignItems:"center",gap:10,borderWidth:1,borderColor:colors.border,borderRadius:14,backgroundColor:colors.surface},searchInput:{flex:1,minWidth:0,paddingVertical:12,paddingRight:8,color:colors.text,fontSize:14},clearSearch:{width:44,height:44,alignItems:"center",justifyContent:"center"},
+  categoryScroll:{flexGrow:0,flexShrink:0,maxHeight:64},categories:{paddingHorizontal:16,paddingVertical:8,gap:8},category:{minHeight:44,paddingHorizontal:14,flexDirection:"row",alignItems:"center",gap:9,borderRadius:14,backgroundColor:colors.surface},categoryActive:{backgroundColor:colors.ink},categoryText:{fontSize:13,fontWeight:"600",color:colors.textMuted},categoryTextActive:{color:"white"},categoryCount:{fontSize:12,color:colors.textSoft},
+  list:{flex:1},listContent:{padding:16,paddingTop:8,paddingBottom:24,flexGrow:1},results:{marginBottom:14,fontSize:12,color:colors.textMuted},
+  card:{marginBottom:10,flexDirection:"row",alignItems:"flex-start",borderWidth:1,borderColor:colors.border,borderRadius:18,backgroundColor:colors.surface,overflow:"hidden"},workingCard:{borderColor:"#BBBDF3"},cardMain:{flex:1,minWidth:0,padding:16,paddingRight:0},moreButton:{width:48,height:52,alignItems:"center",justifyContent:"center",flexShrink:0},cardMeta:{flexDirection:"row",alignItems:"center",gap:6,marginBottom:9},project:{maxWidth:"55%",marginRight:4,fontSize:11,color:colors.textMuted},statusDot:{width:6,height:6,borderRadius:3,backgroundColor:colors.textSoft},statusDotLive:{backgroundColor:colors.success},status:{fontSize:11,color:colors.textMuted},statusLive:{color:colors.success},cardTitle:{fontSize:17,lineHeight:23,fontWeight:"600",letterSpacing:-.2,color:colors.text},preview:{marginTop:8,fontSize:13,lineHeight:20,color:colors.textMuted},
+  empty:{flex:1,minHeight:220,alignItems:"center",justifyContent:"center",padding:24},emptyTitle:{marginTop:16,fontSize:17,fontWeight:"700",color:colors.text},emptyText:{marginTop:7,fontSize:13,lineHeight:20,textAlign:"center",color:colors.textMuted},emptyAction:{minHeight:48,justifyContent:"center",paddingHorizontal:20,marginTop:16,borderRadius:14,backgroundColor:colors.ink},emptyActionText:{color:"white",fontSize:14,fontWeight:"600"},
 });

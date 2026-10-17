@@ -1,9 +1,10 @@
 {
   "name": "@codex-board/mobile",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "main": "index.ts",
   "dependencies": {
     "@codex-board/protocol": "*",
+    "@expo/vector-icons": "^15.1.1",
     "expo": "~57.0.12",
     "expo-build-properties": "~57.0.10",
     "expo-camera": "~57.0.3",

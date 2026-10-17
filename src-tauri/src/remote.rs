@@ -41,8 +41,42 @@ pub struct BoardConfig {
     #[serde(default = "default_approval_mode")]
     pub approval_mode: String,
     #[serde(default)]
+    pub turn_settings: TurnPreferences,
+    #[serde(default)]
     pub revision: u64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnPreferences {
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub effort: String,
+    #[serde(default = "default_summary")]
+    pub summary: String,
+    #[serde(default)]
+    pub service_tier: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnPreferencesPatch {
+    #[serde(default)]
+    pub initialize_only: bool,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub summary: Option<String>,
+    pub service_tier: Option<String>,
+}
+
+impl Default for TurnPreferences {
+    fn default() -> Self {
+        Self { model: String::new(), effort: String::new(), summary: default_summary(), service_tier: String::new() }
+    }
+}
+
+fn default_summary() -> String { "auto".into() }
 
 fn default_approval_mode() -> String {
     "auto".into()
@@ -54,6 +88,7 @@ impl Default for BoardConfig {
             categories: Vec::new(),
             projects: Vec::new(),
             approval_mode: default_approval_mode(),
+            turn_settings: TurnPreferences::default(),
             revision: 0,
         }
     }
@@ -215,6 +250,10 @@ impl RemoteGateway {
         save_board_config(&self.config, &self.config_path, config)
     }
 
+    pub fn set_turn_settings(&self, patch: TurnPreferencesPatch) -> Result<BoardConfig, String> {
+        save_turn_settings(&self.config, &self.config_path, patch)
+    }
+
     pub fn start(
         &self,
         client: Arc<CodexClient>,
@@ -270,6 +309,7 @@ impl RemoteGateway {
                 .route("/v1/requests/respond", post(respond_to_request))
                 .route("/v1/requests", get(pending_requests))
                 .route("/v1/board", get(get_board).put(put_board))
+                .route("/v1/turn-settings", put(put_turn_settings))
                 .route(
                     "/v1/automations",
                     get(list_automations).post(create_automation),
@@ -463,6 +503,29 @@ fn save_board_config(
     mut config: BoardConfig,
 ) -> Result<BoardConfig, String> {
     let mut current = state.write().map_err(|error| error.to_string())?;
+    // Board/category writes must never replace a newer model preference.
+    config.turn_settings = current.turn_settings.clone();
+    config.revision = current.revision.saturating_add(1);
+    persist_config(path, &config)?;
+    *current = config.clone();
+    Ok(config)
+}
+
+fn save_turn_settings(
+    state: &Arc<RwLock<BoardConfig>>,
+    path: &Path,
+    patch: TurnPreferencesPatch,
+) -> Result<BoardConfig, String> {
+    let mut current = state.write().map_err(|error| error.to_string())?;
+    if patch.initialize_only && !current.turn_settings.model.is_empty() {
+        return Ok(current.clone());
+    }
+    let mut config = current.clone();
+    let settings = &mut config.turn_settings;
+    if let Some(model) = patch.model { settings.model = model.trim().to_string(); }
+    if let Some(effort) = patch.effort { settings.effort = effort; }
+    if let Some(summary) = patch.summary { settings.summary = summary; }
+    if let Some(tier) = patch.service_tier { settings.service_tier = tier; }
     config.revision = current.revision.saturating_add(1);
     persist_config(path, &config)?;
     *current = config.clone();
@@ -801,6 +864,22 @@ async fn put_board(
     Ok(Json(config))
 }
 
+async fn put_turn_settings(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(patch): Json<TurnPreferencesPatch>,
+) -> Result<Json<BoardConfig>, ApiError> {
+    authorized(&headers, &state)?;
+    let config = save_turn_settings(&state.config, &state.config_path, patch)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    state.client.emit_local_event(
+        "board/config/updated",
+        serde_json::to_value(&config)
+            .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
+    ).await;
+    Ok(Json(config))
+}
+
 async fn list_automations(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -974,6 +1053,57 @@ mod tests {
     #[test]
     fn new_board_defaults_to_auto_approval() {
         assert_eq!(BoardConfig::default().approval_mode, "auto");
+        assert_eq!(BoardConfig::default().turn_settings.summary, "auto");
+    }
+
+    #[test]
+    fn legacy_board_config_gets_default_turn_settings() {
+        let config: BoardConfig = serde_json::from_value(json!({
+            "categories": ["WIP"], "projects": [], "approvalMode": "ask", "revision": 2
+        })).unwrap();
+        assert!(config.turn_settings.model.is_empty());
+        assert_eq!(config.turn_settings.summary, "auto");
+    }
+
+    #[test]
+    fn turn_settings_patches_preserve_board_and_other_preferences() {
+        let directory = std::env::temp_dir().join(format!("codex-board-settings-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        let gateway = RemoteGateway::prepare(&directory).unwrap();
+        let mut stale_board = gateway.board_config();
+        stale_board.categories = vec!["Review".into()];
+        gateway.set_turn_settings(serde_json::from_value(json!({
+            "model": "desktop-model", "effort": "high", "serviceTier": "priority"
+        })).unwrap()).unwrap();
+        gateway.set_board_config(stale_board).unwrap();
+        let saved = gateway.set_turn_settings(serde_json::from_value(json!({ "effort": "", "serviceTier": "" })).unwrap()).unwrap();
+        assert_eq!(saved.categories, vec!["Review"]);
+        assert_eq!(saved.turn_settings.model, "desktop-model");
+        assert_eq!(saved.turn_settings.effort, "");
+        assert_eq!(saved.turn_settings.service_tier, "");
+        let migrated = gateway.set_turn_settings(serde_json::from_value(json!({
+            "initializeOnly": true, "model": "stale-desktop-cache", "effort": "high"
+        })).unwrap()).unwrap();
+        assert_eq!(migrated.turn_settings.model, "desktop-model");
+        assert_eq!(migrated.turn_settings.effort, "");
+        let barrier = Barrier::new(2);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let mut stale = gateway.board_config();
+                stale.categories = vec!["Concurrent review".into()];
+                barrier.wait();
+                gateway.set_board_config(stale).unwrap();
+            });
+            scope.spawn(|| {
+                barrier.wait();
+                gateway.set_turn_settings(serde_json::from_value(json!({ "summary": "concise" })).unwrap()).unwrap();
+            });
+        });
+        let disk: BoardConfig = crate::persistence::load_json_or_default(&directory.join("board-config.json"));
+        assert_eq!(disk.turn_settings.model, "desktop-model");
+        assert_eq!(disk.categories, vec!["Concurrent review"]);
+        assert_eq!(disk.turn_settings.summary, "concise");
+        assert_eq!(serde_json::to_value(&disk).unwrap()["turnSettings"]["serviceTier"], "");
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -1005,6 +1135,7 @@ mod tests {
                     categories: vec![category.into()],
                     projects: vec!["C:\\work\\demo".into()],
                     approval_mode: "auto".into(),
+                    turn_settings: TurnPreferences::default(),
                     revision: 0,
                 })
             })

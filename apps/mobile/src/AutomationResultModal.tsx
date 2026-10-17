@@ -3,6 +3,7 @@ import Markdown from "react-native-markdown-display";
 import { formatCodexDirectives } from "@codex-board/protocol";
 import type { BoardNotification } from "@codex-board/protocol";
 import { colors, radius, shadows, spacing } from "./theme";
+import { MobileIcon } from "./MobileIcon";
 
 export function AutomationResultModal({ notification, onClose, onOpenThread, onBackToList }: {
   notification: BoardNotification;
@@ -19,9 +20,9 @@ export function AutomationResultModal({ notification, onClose, onOpenThread, onB
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close automation result" />
         <View style={styles.dialog}>
           <View style={styles.header}>
-            <View style={[styles.statusIcon,failed&&styles.statusIconFailed]}><Text style={[styles.statusSymbol,failed&&styles.statusSymbolFailed]}>{failed?"!":"✓"}</Text></View>
+            <View style={[styles.statusIcon,failed&&styles.statusIconFailed]}><MobileIcon name={failed?"alert":"checkmark"} size={20} color={failed?colors.danger:colors.success}/></View>
             <View style={styles.headerCopy}><Text style={styles.eyebrow}>AUTOMATION RESULT</Text><Text style={styles.title}>{result.name}</Text><Text style={styles.meta}>{failed?"Finished with an error":"Completed successfully"}{result.durationMs?` · ${Math.max(1,Math.round(result.durationMs/1000))}s`:""}</Text></View>
-            <Pressable style={styles.close} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close result"><Text style={styles.closeText}>×</Text></Pressable>
+            <Pressable hitSlop={10} style={styles.close} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close result"><MobileIcon name="close" size={22} color={colors.textMuted}/></Pressable>
           </View>
           <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}><Markdown style={markdownStyles}>{formatCodexDirectives(result.result)}</Markdown></ScrollView>
           <View style={styles.footer}>

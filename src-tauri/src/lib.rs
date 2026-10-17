@@ -10,7 +10,7 @@ use codex::{
     TurnCoordinator, TurnSettings,
 };
 use notifications::{BoardNotification, NotificationStore};
-use remote::{BoardConfig, GatewayInfo, RemoteGateway, TailscaleInfo};
+use remote::{BoardConfig, GatewayInfo, RemoteGateway, TailscaleInfo, TurnPreferencesPatch};
 use serde_json::Value;
 use std::sync::Arc;
 use tauri::Manager;
@@ -213,6 +213,20 @@ async fn set_board_config(
 }
 
 #[tauri::command]
+async fn set_turn_settings(
+    gateway: tauri::State<'_, RemoteGateway>,
+    client: tauri::State<'_, Arc<CodexClient>>,
+    settings: TurnPreferencesPatch,
+) -> Result<BoardConfig, String> {
+    let saved = gateway.set_turn_settings(settings)?;
+    client.emit_local_event(
+        "board/config/updated",
+        serde_json::to_value(&saved).map_err(|error| error.to_string())?,
+    ).await;
+    Ok(saved)
+}
+
+#[tauri::command]
 async fn tailscale_status() -> TailscaleInfo {
     remote::tailscale_status().await
 }
@@ -327,6 +341,7 @@ pub fn run() {
             gateway_info,
             get_board_config,
             set_board_config,
+            set_turn_settings,
             tailscale_status,
             configure_tailscale_serve,
             list_automations,
