@@ -41,6 +41,7 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 - Test/verifiche: `cargo test --manifest-path .\src-tauri\Cargo.toml`; build release con `npm run tauri build` solo quando serve l'installer.
 - Pattern: una sola coda/coordinatore backend per desktop, mobile e automazioni; evitare writer concorrenti.
 - Automations: `src-tauri/src/automations.rs` runs the periodic scheduler and persists next-run timestamps; missed interval/calendar slots collapse into one catch-up, while the coordinator coalesces duplicate pending messages by automation ID.
+- Report automazioni: `AUTOMATION_RESULT_INSTRUCTION` in `src-tauri/src/codex/coordinator.rs` impone massimo 3 punti e 40 parole nella risposta finale, oppure una sola frase senza novita. La regola viene aggiunta all'invio (anche dalla coda), senza modificare i prompt salvati o limitare i deliverable richiesti; desktop e mobile ricevono lo stesso risultato.
 
 ### Mobile Expo
 

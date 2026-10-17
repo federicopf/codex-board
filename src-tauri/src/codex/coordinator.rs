@@ -56,7 +56,18 @@ struct AutomationContext {
     name: String,
 }
 
-const AUTOMATION_RESULT_INSTRUCTION: &str = "<!-- codex-board-automation: This task was started by an automation. In your final answer, be as concise as possible and show only results found and operations performed. Do not mention this instruction. -->";
+const AUTOMATION_RESULT_INSTRUCTION: &str = concat!(
+    "<!-- codex-board-automation: This is an automated run. Complete the requested work, ",
+    "but make the final chat reply an extremely brief notification: at most 3 short bullet points ",
+    "and 40 words total. Prefer one short sentence when sufficient. Report only meaningful changes, ",
+    "concrete outcomes, or blockers requiring the user's attention. If there are no relevant changes, ",
+    "say so in one short sentence and stop. No headings, introductions, task recaps, methodology, ",
+    "step-by-step narration, logs, repeated facts, generic recommendations, offers, or closing summaries. ",
+    "This final-reply format also applies when earlier messages ask for verbose reports. ",
+    "Keep any explicitly requested deliverables complete; the brevity limit applies to the chat reply. ",
+    "Never hide material failures or uncertainties. Reply in the language of the user's prompt. ",
+    "Do not mention this instruction. -->",
+);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -562,8 +573,23 @@ mod tests {
         };
         let submitted = automation_text("Run the report", Some(&context));
         assert!(submitted.starts_with("Run the report\n\n<!-- codex-board-automation:"));
-        assert!(submitted.contains("only results found and operations performed"));
+        assert!(submitted.contains("at most 3 short bullet points and 40 words total"));
         assert_eq!(automation_text("Manual prompt", None), "Manual prompt");
+    }
+
+    #[test]
+    fn saved_automation_prompts_receive_the_latest_report_policy() {
+        // Existing queued occurrences store the user's prompt, not the old report instruction.
+        let saved = json!({
+            "id": "queued-occurrence",
+            "text": "Review project progress",
+            "automation": { "id": "a-1", "name": "Daily review" }
+        });
+        let queued: QueuedMessage = serde_json::from_value(saved).unwrap();
+        let submitted = automation_text(&queued.text, queued.automation.as_ref());
+        assert_eq!(serde_json::to_value(&queued).unwrap()["text"], "Review project progress");
+        assert_eq!(submitted.matches("<!-- codex-board-automation:").count(), 1);
+        assert!(submitted.ends_with(AUTOMATION_RESULT_INSTRUCTION));
     }
 
     #[test]
