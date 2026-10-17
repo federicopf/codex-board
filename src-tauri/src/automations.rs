@@ -114,7 +114,7 @@ pub struct AutomationEnabledInput {
     pub enabled: bool,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PersistedState {
     automations: Vec<Automation>,
@@ -124,6 +124,8 @@ struct PersistedState {
 
 pub struct AutomationStore {
     state: Mutex<PersistedState>,
+    // Serialize edits with scheduler submissions, not with the duration of Codex turns.
+    mutation: Mutex<()>,
     path: PathBuf,
     client: Arc<CodexClient>,
     coordinator: Arc<TurnCoordinator>,
@@ -138,6 +140,7 @@ impl AutomationStore {
         let state = persistence::load_json_or_default(&path);
         Arc::new(Self {
             state: Mutex::new(state),
+            mutation: Mutex::new(()),
             path,
             client,
             coordinator,
@@ -161,101 +164,7 @@ impl AutomationStore {
 
     pub async fn create(&self, input: CreateAutomationInput) -> Result<Automation, String> {
         let name = required(input.name, "Automation name")?;
-        let action = match input.action {
-            CreateAutomationAction::RecurringMessage {
-                thread_id,
-                prompt,
-                every_minutes,
-                start_in_minutes,
-            } => {
-                minutes_ms(every_minutes, "Recurring interval")?;
-                let start_ms = minutes_ms(start_in_minutes.max(1), "Start delay")?;
-                AutomationAction::RecurringMessage {
-                    thread_id: required(thread_id, "Thread")?,
-                    prompt: required(prompt, "Prompt")?,
-                    every_minutes,
-                    next_run_at: now_ms().saturating_add(start_ms),
-                }
-            }
-            CreateAutomationAction::CategoryPipeline {
-                from_category,
-                to_category,
-                after_minutes,
-            } => {
-                let from_category = category(from_category)?;
-                let to_category = category(to_category)?;
-                if from_category == to_category {
-                    return Err("Pipeline categories must be different".into());
-                }
-                minutes_ms(after_minutes, "Pipeline delay")?;
-                AutomationAction::CategoryPipeline {
-                    from_category,
-                    to_category,
-                    after_minutes,
-                }
-            }
-            CreateAutomationAction::ScheduledCategoryPipeline {
-                from_category,
-                to_category,
-                run_at,
-            } => {
-                let from_category = category(from_category)?;
-                let to_category = category(to_category)?;
-                if from_category == to_category {
-                    return Err("Pipeline categories must be different".into());
-                }
-                if run_at <= now_ms() {
-                    return Err("Pipeline time must be in the future".into());
-                }
-                AutomationAction::ScheduledCategoryPipeline {
-                    from_category,
-                    to_category,
-                    run_at,
-                }
-            }
-            CreateAutomationAction::ScheduledMessage {
-                thread_id,
-                prompt,
-                run_at,
-            } => {
-                if run_at <= now_ms() {
-                    return Err("Scheduled time must be in the future".into());
-                }
-                AutomationAction::ScheduledMessage {
-                    thread_id: required(thread_id, "Thread")?,
-                    prompt: required(prompt, "Prompt")?,
-                    run_at,
-                }
-            }
-            CreateAutomationAction::CalendarMessage {
-                thread_id,
-                prompt,
-                weekdays,
-                minute_of_day,
-                timezone_offset_minutes,
-            } => {
-                let weekdays = valid_weekdays(weekdays)?;
-                if minute_of_day >= 24 * 60 {
-                    return Err("Calendar time is invalid".into());
-                }
-                if !(-14 * 60..=14 * 60).contains(&timezone_offset_minutes) {
-                    return Err("Timezone offset is invalid".into());
-                }
-                AutomationAction::CalendarMessage {
-                    thread_id: required(thread_id, "Thread")?,
-                    prompt: required(prompt, "Prompt")?,
-                    next_run_at: next_calendar_run(
-                        now_ms(),
-                        &weekdays,
-                        minute_of_day,
-                        timezone_offset_minutes,
-                    ),
-                    weekdays,
-                    minute_of_day,
-                    timezone_offset_minutes,
-                }
-            }
-        };
+        let action = build_action(input.action, None, now_ms())?;
         let automation = Automation {
             id: random_id(),
             name,
@@ -272,7 +181,37 @@ impl AutomationStore {
         Ok(automation)
     }
 
+    pub async fn update(
+        &self,
+        id: &str,
+        input: CreateAutomationInput,
+    ) -> Result<Automation, String> {
+        let _mutation = self.mutation.lock().await;
+        let mut state = self.state.lock().await;
+        let index = state
+            .automations
+            .iter()
+            .position(|item| item.id == id)
+            .ok_or_else(|| "Automation not found".to_string())?;
+        let result = edited_automation(&state.automations[index], input, now_ms())?;
+        let same_source = matches!((&state.automations[index].action, &result.action),
+            (AutomationAction::CategoryPipeline { from_category: old, .. },
+             AutomationAction::CategoryPipeline { from_category: next, .. }) if old == next);
+        let mut next = state.clone();
+        next.automations[index] = result.clone();
+        if !same_source {
+            next.entered_at
+                .retain(|key, _| !key.starts_with(&format!("{id}:")));
+        }
+        self.persist(&next)?;
+        *state = next;
+        drop(state);
+        self.emit_updated().await;
+        Ok(result)
+    }
+
     pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<Automation, String> {
+        let _mutation = self.mutation.lock().await;
         let mut state = self.state.lock().await;
         let automation = state
             .automations
@@ -294,6 +233,7 @@ impl AutomationStore {
     }
 
     pub async fn delete(&self, id: &str) -> Result<bool, String> {
+        let _mutation = self.mutation.lock().await;
         let mut state = self.state.lock().await;
         let before = state.automations.len();
         state.automations.retain(|item| item.id != id);
@@ -312,6 +252,7 @@ impl AutomationStore {
     }
 
     async fn tick(&self) {
+        let _mutation = self.mutation.lock().await;
         let now = now_ms();
         let mut changed = false;
         let automations = self.list().await;
@@ -359,7 +300,8 @@ impl AutomationStore {
                         if let AutomationAction::RecurringMessage { next_run_at, .. } =
                             &mut current.action
                         {
-                            *next_run_at = coalesced_next_interval_run(now_ms(), *next_run_at, every_minutes);
+                            *next_run_at =
+                                coalesced_next_interval_run(now_ms(), *next_run_at, every_minutes);
                         }
                     }
                     let _ = self.persist(&state);
@@ -631,6 +573,163 @@ impl AutomationStore {
     }
 }
 
+// Editing metadata must not postpone a due occurrence or change a calendar's timezone.
+fn build_action(
+    input: CreateAutomationAction,
+    previous: Option<&AutomationAction>,
+    now: i64,
+) -> Result<AutomationAction, String> {
+    let mut action = match input {
+        CreateAutomationAction::RecurringMessage {
+            thread_id,
+            prompt,
+            every_minutes,
+            start_in_minutes,
+        } => {
+            minutes_ms(every_minutes, "Recurring interval")?;
+            let start_ms = minutes_ms(start_in_minutes.max(1), "Start delay")?;
+            AutomationAction::RecurringMessage {
+                thread_id: required(thread_id, "Thread")?,
+                prompt: required(prompt, "Prompt")?,
+                every_minutes,
+                next_run_at: now.saturating_add(start_ms),
+            }
+        }
+        CreateAutomationAction::CategoryPipeline {
+            from_category,
+            to_category,
+            after_minutes,
+        } => {
+            let from_category = category(from_category)?;
+            let to_category = category(to_category)?;
+            if from_category == to_category {
+                return Err("Pipeline categories must be different".into());
+            }
+            minutes_ms(after_minutes, "Pipeline delay")?;
+            AutomationAction::CategoryPipeline {
+                from_category,
+                to_category,
+                after_minutes,
+            }
+        }
+        CreateAutomationAction::ScheduledCategoryPipeline {
+            from_category,
+            to_category,
+            run_at,
+        } => {
+            let from_category = category(from_category)?;
+            let to_category = category(to_category)?;
+            if from_category == to_category {
+                return Err("Pipeline categories must be different".into());
+            }
+            if run_at <= now
+                && !matches!(previous, Some(AutomationAction::ScheduledCategoryPipeline { run_at: old, .. }) if *old == run_at)
+            {
+                return Err("Pipeline time must be in the future".into());
+            }
+            AutomationAction::ScheduledCategoryPipeline {
+                from_category,
+                to_category,
+                run_at,
+            }
+        }
+        CreateAutomationAction::ScheduledMessage {
+            thread_id,
+            prompt,
+            run_at,
+        } => {
+            if run_at <= now
+                && !matches!(previous, Some(AutomationAction::ScheduledMessage { run_at: old, .. }) if *old == run_at)
+            {
+                return Err("Scheduled time must be in the future".into());
+            }
+            AutomationAction::ScheduledMessage {
+                thread_id: required(thread_id, "Thread")?,
+                prompt: required(prompt, "Prompt")?,
+                run_at,
+            }
+        }
+        CreateAutomationAction::CalendarMessage {
+            thread_id,
+            prompt,
+            weekdays,
+            minute_of_day,
+            timezone_offset_minutes,
+        } => {
+            let weekdays = valid_weekdays(weekdays)?;
+            if minute_of_day >= 24 * 60 {
+                return Err("Calendar time is invalid".into());
+            }
+            if !(-14 * 60..=14 * 60).contains(&timezone_offset_minutes) {
+                return Err("Timezone offset is invalid".into());
+            }
+            AutomationAction::CalendarMessage {
+                thread_id: required(thread_id, "Thread")?,
+                prompt: required(prompt, "Prompt")?,
+                next_run_at: next_calendar_run(
+                    now,
+                    &weekdays,
+                    minute_of_day,
+                    timezone_offset_minutes,
+                ),
+                weekdays,
+                minute_of_day,
+                timezone_offset_minutes,
+            }
+        }
+    };
+
+    match (&mut action, previous) {
+        (
+            AutomationAction::RecurringMessage {
+                every_minutes,
+                next_run_at,
+                ..
+            },
+            Some(AutomationAction::RecurringMessage {
+                every_minutes: old_interval,
+                next_run_at: old_next,
+                ..
+            }),
+        ) if every_minutes == old_interval => *next_run_at = *old_next,
+        (
+            AutomationAction::CalendarMessage {
+                weekdays,
+                minute_of_day,
+                timezone_offset_minutes,
+                next_run_at,
+                ..
+            },
+            Some(AutomationAction::CalendarMessage {
+                weekdays: old_days,
+                minute_of_day: old_minute,
+                timezone_offset_minutes: old_offset,
+                next_run_at: old_next,
+                ..
+            }),
+        ) if weekdays == old_days
+            && minute_of_day == old_minute
+            && timezone_offset_minutes == old_offset =>
+        {
+            *next_run_at = *old_next
+        }
+        _ => {}
+    }
+    Ok(action)
+}
+
+fn edited_automation(
+    current: &Automation,
+    input: CreateAutomationInput,
+    now: i64,
+) -> Result<Automation, String> {
+    Ok(Automation {
+        name: required(input.name, "Automation name")?,
+        action: build_action(input.action, Some(&current.action), now)?,
+        ..current.clone()
+    })
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -806,6 +905,82 @@ mod tests {
         );
         // UTC+1 is represented by JavaScript's getTimezoneOffset as -60.
         assert_eq!(next_calendar_run(0, &[4], 120, -60), 3_600_000);
+    }
+
+    fn edit_input(action: serde_json::Value) -> CreateAutomationInput {
+        serde_json::from_value(json!({ "name": "Edited", "action": action })).unwrap()
+    }
+
+    #[test]
+    fn editing_prompt_preserves_identity_pause_history_and_overdue_interval() {
+        let original = Automation {
+            id: "stable".into(), name: "Old".into(), enabled: false,
+            action: AutomationAction::RecurringMessage { thread_id: "t".into(), prompt: "Old".into(), every_minutes: 60, next_run_at: 42 },
+            last_run_at: Some(20), last_error: Some("Previous error".into()),
+        };
+        let input = edit_input(json!({ "kind": "recurringMessage", "threadId": "t", "prompt": "New", "everyMinutes": 60, "startInMinutes": 60 }));
+        let result = edited_automation(&original, input, 100_000).unwrap();
+        assert_eq!(result.id, "stable");
+        assert_eq!(result.name, "Edited");
+        assert!(!result.enabled);
+        assert_eq!(result.last_run_at, Some(20));
+        assert_eq!(result.last_error, original.last_error);
+        assert!(matches!(result.action, AutomationAction::RecurringMessage { next_run_at: 42, prompt, .. } if prompt == "New"));
+        let changed = build_action(edit_input(json!({ "kind": "recurringMessage", "threadId": "t", "prompt": "New", "everyMinutes": 30, "startInMinutes": 30 })).action, Some(&original.action), 100_000).unwrap();
+        assert!(matches!(changed, AutomationAction::RecurringMessage { next_run_at: 1_900_000, every_minutes: 30, .. }));
+    }
+
+    #[test]
+    fn editing_calendar_only_reschedules_changed_calendar_fields() {
+        let previous = AutomationAction::CalendarMessage { thread_id: "t".into(), prompt: "Old".into(), weekdays: vec![1, 5], minute_of_day: 570, timezone_offset_minutes: -60, next_run_at: 42 };
+        let action = |days| edit_input(json!({ "kind": "calendarMessage", "threadId": "t", "prompt": "New", "weekdays": days, "minuteOfDay": 570, "timezoneOffsetMinutes": -60 })).action;
+        assert!(matches!(build_action(action(vec![5, 1]), Some(&previous), 100_000).unwrap(), AutomationAction::CalendarMessage { next_run_at: 42, .. }));
+        assert!(matches!(build_action(action(vec![2]), Some(&previous), 100_000).unwrap(), AutomationAction::CalendarMessage { next_run_at, .. } if next_run_at > 100_000));
+        assert!(build_action(action(Vec::<u8>::new()), Some(&previous), 100_000).is_err());
+    }
+
+    #[test]
+    fn editing_past_one_off_is_allowed_only_when_date_is_unchanged() {
+        for kind in ["scheduledMessage", "scheduledCategoryPipeline"] {
+            let input = |run_at| edit_input(if kind == "scheduledMessage" {
+                json!({ "kind": kind, "threadId": "t", "prompt": "New", "runAt": run_at })
+            } else {
+                json!({ "kind": kind, "fromCategory": "Custom", "toCategory": "Ship", "runAt": run_at })
+            }).action;
+            let previous = build_action(input(42), None, 0).unwrap();
+            assert!(build_action(input(42), Some(&previous), 100).is_ok());
+            assert!(build_action(input(41), Some(&previous), 100).is_err());
+            assert!(build_action(input(200), Some(&previous), 100).is_ok());
+            assert!(build_action(input(42), None, 100).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn updates_persist_in_place_and_failed_edits_leave_state_untouched() {
+        let directory = std::env::temp_dir().join(format!("board-automation-edit-{}", random_id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let client = Arc::new(CodexClient::new());
+        let coordinator = TurnCoordinator::new(client.clone(), directory.join("queue.json"));
+        let path = directory.join("automations.json");
+        let store = AutomationStore::new(path.clone(), client.clone(), coordinator.clone());
+        let created = store.create(edit_input(json!({ "kind": "categoryPipeline", "fromCategory": "Custom", "toCategory": "Review", "afterMinutes": 60 }))).await.unwrap();
+        store.set_enabled(&created.id, false).await.unwrap();
+        let key = format!("{}:task", created.id);
+        store.state.lock().await.entered_at.insert(key.clone(), 42);
+        let updated = store.update(&created.id, edit_input(json!({ "kind": "categoryPipeline", "fromCategory": "Custom", "toCategory": "Ship", "afterMinutes": 120 }))).await.unwrap();
+        assert_eq!(created.id, updated.id);
+        assert!(!updated.enabled);
+        assert_eq!(store.state.lock().await.entered_at.get(&key), Some(&42));
+        let reloaded = AutomationStore::new(path, client, coordinator);
+        assert_eq!(reloaded.list().await.len(), 1);
+        assert!(matches!(&reloaded.list().await[0].action, AutomationAction::CategoryPipeline { to_category, after_minutes: 120, .. } if to_category == "Ship"));
+        assert!(store.update(&created.id, edit_input(json!({ "kind": "categoryPipeline", "fromCategory": "X", "toCategory": "X", "afterMinutes": 120 }))).await.is_err());
+        assert!(matches!(&store.list().await[0].action, AutomationAction::CategoryPipeline { to_category, .. } if to_category == "Ship"));
+        store.update(&created.id, edit_input(json!({ "kind": "categoryPipeline", "fromCategory": "Different", "toCategory": "Ship", "afterMinutes": 120 }))).await.unwrap();
+        assert!(store.state.lock().await.entered_at.is_empty());
+        assert_eq!(store.update("missing", edit_input(json!({ "kind": "categoryPipeline", "fromCategory": "X", "toCategory": "Y", "afterMinutes": 60 }))).await.unwrap_err(), "Automation not found");
+        // The directory was uniquely created by this test, never a user persistence directory.
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

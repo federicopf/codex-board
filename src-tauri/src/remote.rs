@@ -316,7 +316,7 @@ impl RemoteGateway {
                 )
                 .route(
                     "/v1/automations/{id}",
-                    put(set_automation_enabled).delete(delete_automation),
+                    put(set_automation_enabled).patch(update_automation).delete(delete_automation),
                 )
                 .route(
                     "/v1/notifications",
@@ -901,6 +901,32 @@ async fn create_automation(
         .create(input)
         .await
         .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error))?;
+    serde_json::to_value(automation)
+        .map(Json)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+}
+
+async fn update_automation(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(input): Json<CreateAutomationInput>,
+) -> Result<Json<Value>, ApiError> {
+    authorized(&headers, &state)?;
+    let automation = state
+        .automations
+        .update(&id, input)
+        .await
+        .map_err(|error| {
+            ApiError(
+                if error == "Automation not found" {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::BAD_REQUEST
+                },
+                error,
+            )
+        })?;
     serde_json::to_value(automation)
         .map(Json)
         .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))

@@ -252,6 +252,15 @@ async fn create_automation(
 }
 
 #[tauri::command]
+async fn update_automation(
+    store: tauri::State<'_, Arc<AutomationStore>>,
+    id: String,
+    input: CreateAutomationInput,
+) -> Result<Automation, String> {
+    store.update(&id, input).await
+}
+
+#[tauri::command]
 async fn set_automation_enabled(
     store: tauri::State<'_, Arc<AutomationStore>>,
     id: String,
@@ -346,6 +355,7 @@ pub fn run() {
             configure_tailscale_serve,
             list_automations,
             create_automation,
+            update_automation,
             set_automation_enabled,
             delete_automation,
             list_notifications,

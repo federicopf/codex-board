@@ -64,6 +64,7 @@ export async function setBoardConfig(config: BoardConfig): Promise<BoardConfig> 
 export async function setTurnSettings(settings: TurnSettings, initializeOnly = false): Promise<BoardConfig> { return invoke<BoardConfig>("set_turn_settings", { settings: { ...settings, initializeOnly } }); }
 export async function listAutomations(): Promise<Automation[]> { return invoke<Automation[]>("list_automations"); }
 export async function createAutomation(input: CreateAutomationInput): Promise<Automation> { return invoke<Automation>("create_automation", { input }); }
+export async function updateAutomation(id: string, input: CreateAutomationInput): Promise<Automation> { return invoke<Automation>("update_automation", { id, input }); }
 export async function setAutomationEnabled(id: string, enabled: boolean): Promise<Automation> { return invoke<Automation>("set_automation_enabled", { id, input: { enabled } }); }
 export async function deleteAutomation(id: string): Promise<boolean> { return invoke<boolean>("delete_automation", { id }); }
 export async function listNotifications(): Promise<BoardNotification[]> { return invoke("list_notifications"); }

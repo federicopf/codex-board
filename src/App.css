@@ -543,3 +543,5 @@ body { min-width: 980px; }
 .sidebar-project-heading button { width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 7px; color: var(--sidebar-muted); background: transparent; font-size: 18px; line-height: 1; }
 .sidebar-project-heading button:hover { color: white; background: rgba(255,255,255,.1); }
 .number-field .automation-interval-unit { width: 130px; height: 42px; padding: 0 10px; }
+.automation-edit { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 8px 14px; border: 1px solid #E0E2EA; border-radius: 9px; background: transparent; color: #5559D8; cursor: pointer; }
+.automation-edit-note { color: #727784; font-size: 12px; line-height: 1.5; }

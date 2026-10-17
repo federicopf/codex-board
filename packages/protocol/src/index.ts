@@ -102,6 +102,8 @@ export type CreateAutomationInput =
     | { name: string; action: { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number } }
     | { name: string; action: { kind: "scheduledCategoryPipeline"; fromCategory: string; toCategory: string; runAt: number } };
 
+export { automationDateTimeValue, automationEditFields, automationUpdateInput } from "./automationEditing";
+
 export type AutomationIntervalUnit = "minutes" | "hours" | "days";
 
 export function automationIntervalMinutes(value: number, unit: AutomationIntervalUnit): number {

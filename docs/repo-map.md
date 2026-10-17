@@ -41,6 +41,7 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 - Test/verifiche: `cargo test --manifest-path .\src-tauri\Cargo.toml`; build release con `npm run tauri build` solo quando serve l'installer.
 - Pattern: una sola coda/coordinatore backend per desktop, mobile e automazioni; evitare writer concorrenti.
 - Automations: `src-tauri/src/automations.rs` runs the periodic scheduler and persists next-run timestamps; missed interval/calendar slots collapse into one catch-up, while the coordinator coalesces duplicate pending messages by automation ID.
+- Editing: `AutomationStore.update`, Tauri `update_automation` and authenticated `PATCH /v1/automations/{id}` update workflows in place, serializing against scheduler submission. Shared `packages/protocol/src/automationEditing.ts` prefills both clients and preserves timestamp precision/calendar timezone. Metadata edits preserve next run, pause and history; pipeline source changes reset category-entry tracking. Queued/running turns retain their submitted prompt. Regression tests: `src/AutomationsDialog.test.tsx`, `src/lib/automationEditing.test.ts`, Rust automation tests.
 - Report automazioni: `AUTOMATION_RESULT_INSTRUCTION` in `src-tauri/src/codex/coordinator.rs` impone massimo 3 punti e 40 parole nella risposta finale, oppure una sola frase senza novita. La regola viene aggiunta all'invio (anche dalla coda), senza modificare i prompt salvati o limitare i deliverable richiesti; desktop e mobile ricevono lo stesso risultato.
 
 ### Mobile Expo
@@ -49,7 +50,7 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 - Entry point: `apps/mobile/App.tsx`, `apps/mobile/src/MobileBoardHome.tsx`, `apps/mobile/src/api.ts`, `apps/mobile/src/connection.ts`.
 - Manifest: `apps/mobile/package.json`, `apps/mobile/app.json`, `apps/mobile/eas.json`.
 - Test/verifiche: `npm run mobile:typecheck`; per bundle Android usare `npx expo export --platform android` da `apps/mobile` quando serve.
-- Pattern: Expo Go QR e Board pairing QR sono cose diverse. EAS Update usa il progetto `@f.germani06/codex-board-mobile` e canali `preview`/`production`. La versione JavaScript mobile 0.2.3 mantiene il runtime esplicito `0.2.2` per raggiungere gli APK OTA esistenti; cambiare il runtime richiede una nuova build nativa.
+- Pattern: Expo Go QR e Board pairing QR sono cose diverse. EAS Update usa il progetto `@f.germani06/codex-board-mobile` e canali `preview`/`production`. La versione JavaScript mobile 0.2.4 mantiene il runtime esplicito `0.2.2` per raggiungere gli APK OTA esistenti; cambiare il runtime richiede una nuova build nativa.
 - Inbox: desktop e mobile separano le notifiche ordinarie dai risultati delle automazioni tramite due tab, mantenendo un unico store persistente backend.
 - Navigazione: `ProjectHome.tsx` e la schermata iniziale mobile per scegliere il workspace; `MobileBoardHome.tsx` rappresenta una singola board e torna alla selezione progetti con back UI/hardware.
 - `MobileNavigation.tsx` mantiene accessibili progetti, Inbox, workflow e impostazioni; `MobileActionSheet.tsx` raccoglie le azioni secondarie. Chat e board sono schermate normali, gli strumenti sono modali con `onRequestClose`.

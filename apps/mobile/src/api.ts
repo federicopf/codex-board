@@ -70,6 +70,13 @@ export class BoardApi {
   respond(requestId: JsonValue, result: JsonValue) { return this.request<void>("/v1/requests/respond", { method: "POST", body: JSON.stringify({ requestId, result }) }); }
   automations() { return this.request<Automation[]>("/v1/automations"); }
   createAutomation(input: CreateAutomationInput) { return this.request<Automation>("/v1/automations", { method: "POST", body: JSON.stringify(input) }); }
+  async updateAutomation(id: string, input: CreateAutomationInput) {
+    try { return await this.request<Automation>(`/v1/automations/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) }); }
+    catch (error) {
+      if (error instanceof Error && /404|405/.test(error.message)) throw new Error("Update Codex Board on your PC to edit workflows from mobile.");
+      throw error;
+    }
+  }
   setAutomationEnabled(id: string, enabled: boolean) { return this.request<Automation>(`/v1/automations/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ enabled }) }); }
   deleteAutomation(id: string) { return this.request<void>(`/v1/automations/${encodeURIComponent(id)}`, { method: "DELETE" }); }
   notifications() { return this.request<BoardNotification[]>("/v1/notifications"); }
