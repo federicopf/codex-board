@@ -19,6 +19,14 @@ pub struct CodexClient {
     events: EventQueue,
 }
 
+
+fn turn_input(text: &str, image_urls: Vec<String>) -> Vec<Value> {
+    let mut input = Vec::new();
+    if !text.trim().is_empty() { input.push(json!({ "type": "text", "text": text })); }
+    for url in image_urls { input.push(json!({ "type": "image", "url": url })); }
+    input
+}
+
 fn fork_params(thread_id: &str, last_turn_id: Option<&str>) -> Value {
     let mut params = json!({ "threadId": thread_id });
     if let Some(last_turn_id) = last_turn_id.filter(|value| !value.trim().is_empty()) {
@@ -235,10 +243,7 @@ impl CodexClient {
                 json!({ "threadId": thread_id, "name": name }),
             )
             .await?;
-        let mut input = vec![json!({ "type": "text", "text": prompt })];
-        for url in image_urls {
-            input.push(json!({ "type": "image", "image": { "url": url } }));
-        }
+        let input = turn_input(&prompt, image_urls);
         client
             .request(
                 "turn/start",
@@ -352,6 +357,7 @@ impl CodexClient {
         text: String,
         image_urls: Vec<String>,
         settings: Option<TurnSettings>,
+        output_schema: Option<Value>,
     ) -> Result<Value, CodexErrorDto> {
         if text.trim().is_empty() && image_urls.is_empty() {
             return Err(CodexErrorDto::new(
@@ -388,9 +394,7 @@ impl CodexClient {
             }
             return Err(error);
         }
-        let mut input = Vec::new();
-        if !text.trim().is_empty() { input.push(json!({ "type": "text", "text": text })); }
-        for url in image_urls { input.push(json!({ "type": "image", "image": { "url": url } })); }
+        let input = turn_input(&text, image_urls);
         let mut params = json!({ "threadId": thread_id, "input": input });
         if let Some(settings) = settings {
             if let Some(object) = params.as_object_mut() {
@@ -400,6 +404,7 @@ impl CodexClient {
                 if let Some(service_tier) = settings.service_tier.filter(|value| !value.trim().is_empty()) { object.insert("serviceTier".into(), json!(service_tier)); }
             }
         }
+        if let Some(schema) = output_schema { params["outputSchema"] = schema; }
         client.request("turn/start", params)
             .await
     }
@@ -467,6 +472,18 @@ impl Default for CodexClient {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn image_inputs_match_codex_v2_schema_for_new_existing_and_queued_turns() {
+        let data = "data:image/jpeg;base64,/9j/AA==";
+        assert_eq!(super::turn_input("Look", vec![data.into(), "https://example.test/picture.png".into()]),
+            serde_json::json!([
+                {"type":"text","text":"Look"},
+                {"type":"image","url":data},
+                {"type":"image","url":"https://example.test/picture.png"}
+            ]).as_array().unwrap().to_vec());
+        assert_eq!(super::turn_input("", vec![data.into()]), serde_json::json!([{"type":"image","url":data}]).as_array().unwrap().to_vec());
+        assert!(super::turn_input("Text", vec![])[0].get("image").is_none());
+    }
     use super::*;
 
     #[test]

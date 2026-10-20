@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 use crate::{
     codex::{CodexClient, TurnCoordinator},
     persistence,
+    automation_result::AutomationRunResult,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +63,10 @@ pub struct Automation {
     pub action: AutomationAction,
     pub last_run_at: Option<i64>,
     pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_result: Option<AutomationRunResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -137,7 +142,15 @@ impl AutomationStore {
         client: Arc<CodexClient>,
         coordinator: Arc<TurnCoordinator>,
     ) -> Arc<Self> {
-        let state = persistence::load_json_or_default(&path);
+        let mut state: PersistedState = persistence::load_json_or_default(&path);
+        for item in &mut state.automations {
+            if item.last_result.is_none() {
+                if let Some(error) = item.last_error.as_ref() {
+                    item.last_result = Some(AutomationRunResult { status: "failed".into(), summary: error.clone(), finished_at: item.last_run_at.unwrap_or(0) });
+                }
+            }
+            item.run_state = None;
+        }
         Arc::new(Self {
             state: Mutex::new(state),
             mutation: Mutex::new(()),
@@ -148,6 +161,26 @@ impl AutomationStore {
     }
 
     pub fn start(self: &Arc<Self>) {
+        let outcomes = self.clone();
+        let mut events = self.client.subscribe_events();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                };
+                if event.method == "board/automation/completed" {
+                    if let Some(id) = event.params.get("automationId").and_then(serde_json::Value::as_str) {
+                        let raw = event.params.get("status").and_then(serde_json::Value::as_str).unwrap_or("unknown");
+                        let status = if raw == "completed" { "success" } else if raw == "interrupted" { "failed" } else { raw };
+                        let summary = event.params.get("result").and_then(serde_json::Value::as_str).unwrap_or("Esito non verificabile.");
+                        let finished = event.params.get("finishedAt").and_then(serde_json::Value::as_i64).unwrap_or_else(now_ms);
+                        let _ = outcomes.record_completion(id, status, summary, finished).await;
+                    }
+                }
+            }
+        });
         let store = self.clone();
         tauri::async_runtime::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
@@ -159,7 +192,11 @@ impl AutomationStore {
     }
 
     pub async fn list(&self) -> Vec<Automation> {
-        self.state.lock().await.automations.clone()
+        let mut items = self.state.lock().await.automations.clone();
+        for item in &mut items {
+            item.run_state = self.coordinator.automation_run_state(&item.id).await;
+        }
+        items
     }
 
     pub async fn create(&self, input: CreateAutomationInput) -> Result<Automation, String> {
@@ -172,6 +209,8 @@ impl AutomationStore {
             action,
             last_run_at: None,
             last_error: None,
+            last_result: None,
+            run_state: None,
         };
         let mut state = self.state.lock().await;
         state.automations.push(automation.clone());
@@ -179,6 +218,74 @@ impl AutomationStore {
         drop(state);
         self.emit_updated().await;
         Ok(automation)
+    }
+
+    async fn record_completion(&self, id: &str, status: &str, summary: &str, finished_at: i64) -> Result<(), String> {
+        let mut state = self.state.lock().await;
+        let mut next = state.clone();
+        let Some(item) = next.automations.iter_mut().find(|item| item.id == id) else { return Ok(()) };
+        if item.last_result.as_ref().is_some_and(|previous| previous.finished_at > finished_at) { return Ok(()) }
+        let status = match status { "success" | "failed" => status, _ => "unknown" };
+        item.last_result = Some(AutomationRunResult { status: status.into(), summary: summary.chars().take(500).collect(), finished_at });
+        item.last_error = (status != "success").then(|| summary.to_owned());
+        item.last_run_at = Some(finished_at);
+        self.persist(&next)?;
+        *state = next;
+        drop(state);
+        self.emit_updated().await;
+        Ok(())
+    }
+
+    pub async fn retry(&self, id: &str) -> Result<(), String> {
+        let _mutation = self.mutation.lock().await;
+        let automation = self.state.lock().await.automations.iter().find(|item| item.id == id).cloned()
+            .ok_or_else(|| "Automation not found".to_owned())?;
+        if automation.last_result.as_ref().is_some_and(|result| result.status == "success") {
+            return Err("L'ultima esecuzione è già riuscita. Aggiorna l'elenco dei risultati.".into());
+        }
+        if let Some(state) = self.coordinator.automation_run_state(id).await {
+            if state == "queued" { return self.coordinator.retry_pending_automation(id).await; }
+            return Err("Automazione già in esecuzione o in coda: non verrà duplicata.".into());
+        }
+        match &automation.action {
+            AutomationAction::RecurringMessage { thread_id, prompt, .. } |
+            AutomationAction::ScheduledMessage { thread_id, prompt, .. } |
+            AutomationAction::CalendarMessage { thread_id, prompt, .. } => {
+                match self.coordinator.send_automation(thread_id.clone(), prompt.clone(), id.into(), automation.name.clone()).await {
+                    Ok(_) => { self.emit_updated().await; Ok(()) },
+                    Err(error) => {
+                        self.record_completion(id, "failed", &error.message, now_ms()).await?;
+                        self.emit_failed(&automation, Some(thread_id), error.message.clone()).await;
+                        Err(error.message)
+                    }
+                }
+            }
+            AutomationAction::CategoryPipeline { from_category, to_category, .. } |
+            AutomationAction::ScheduledCategoryPipeline { from_category, to_category, .. } => {
+                let threads = self.client.list_threads().await.map_err(|error| error.message)?;
+                let mut moved = 0;
+                let mut failed = 0;
+                for thread in threads.iter().filter(|thread| title_category(thread.name.as_deref()) == *from_category) {
+                    if let AutomationAction::CategoryPipeline { after_minutes, .. } = &automation.action {
+                        let entered = self.state.lock().await.entered_at.get(&format!("{id}:{}", thread.id)).copied();
+                        if !entered.is_some_and(|entered| now_ms().saturating_sub(entered) >= minutes_ms(*after_minutes, "Pipeline delay").unwrap_or(i64::MAX)) { continue; }
+                    }
+                    let title = display_title(thread.name.as_deref(), thread.preview.as_deref());
+                    if self.client.rename_thread(thread.id.clone(), format!("{to_category} - {title}")).await.is_ok() {
+                        moved += 1;
+                        self.state.lock().await.entered_at.remove(&format!("{id}:{}", thread.id));
+                    }
+                    else { failed += 1; }
+                }
+                let status = if failed == 0 { "success" } else { "failed" };
+                let summary = format!("{moved} task spostati da {from_category} a {to_category}; {failed} non riusciti.");
+                self.record_completion(id, status, &summary, now_ms()).await?;
+                self.client.emit_local_event("board/automation/completed", json!({
+                    "automationId": id, "automationName": automation.name, "status": status, "result": summary
+                })).await;
+                Ok(())
+            }
+        }
     }
 
     pub async fn update(
@@ -435,7 +542,7 @@ impl AutomationStore {
                         let error = result.err();
                         let error_message = error.as_ref().map(|value| value.message.clone());
                         let mut state = self.state.lock().await;
-                        state.entered_at.remove(&key);
+                        if error_message.is_none() { state.entered_at.remove(&key); }
                         if let Some(current) = state
                             .automations
                             .iter_mut()
@@ -916,7 +1023,7 @@ mod tests {
         let original = Automation {
             id: "stable".into(), name: "Old".into(), enabled: false,
             action: AutomationAction::RecurringMessage { thread_id: "t".into(), prompt: "Old".into(), every_minutes: 60, next_run_at: 42 },
-            last_run_at: Some(20), last_error: Some("Previous error".into()),
+            last_run_at: Some(20), last_error: Some("Previous error".into()), last_result: None, run_state: None,
         };
         let input = edit_input(json!({ "kind": "recurringMessage", "threadId": "t", "prompt": "New", "everyMinutes": 60, "startInMinutes": 60 }));
         let result = edited_automation(&original, input, 100_000).unwrap();
@@ -953,6 +1060,33 @@ mod tests {
             assert!(build_action(input(200), Some(&previous), 100).is_ok());
             assert!(build_action(input(42), None, 100).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn persisted_outcomes_survive_edits_and_stale_completions_and_retry_cannot_duplicate_queue() {
+        let directory = std::env::temp_dir().join(format!("board-outcome-test-{}", random_id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let client = Arc::new(CodexClient::new());
+        let path = directory.join("automations.json");
+        let queue_path = directory.join("queues.json");
+        let coordinator = TurnCoordinator::new(client.clone(), queue_path.clone());
+        let store = AutomationStore::new(path.clone(), client.clone(), coordinator);
+        let created = store.create(edit_input(json!({"kind":"recurringMessage","threadId":"t","prompt":"Check","everyMinutes":60,"startInMinutes":60}))).await.unwrap();
+        store.set_enabled(&created.id, false).await.unwrap();
+        store.record_completion(&created.id, "failed", "Missing access.", 200).await.unwrap();
+        store.record_completion(&created.id, "success", "Stale", 100).await.unwrap();
+        store.update(&created.id, edit_input(json!({"kind":"recurringMessage","threadId":"t","prompt":"New","everyMinutes":60,"startInMinutes":60}))).await.unwrap();
+        persistence::write_json(&queue_path, &json!({"t":[{"id":"manual","text":"Earlier manual instruction"},{"id":"q","text":"New","automation":{"id":created.id,"name":"Review"}}]})).unwrap();
+        let coordinator = TurnCoordinator::new(client.clone(), queue_path);
+        let reloaded = AutomationStore::new(path, client, coordinator);
+        assert_eq!(reloaded.list().await[0].last_result.as_ref().unwrap().status, "failed");
+        assert_eq!(reloaded.list().await[0].last_result.as_ref().unwrap().finished_at, 200);
+        assert!(!reloaded.list().await[0].enabled);
+        assert_eq!(reloaded.list().await[0].run_state.as_deref(), Some("queued"));
+        let next_run = match reloaded.list().await[0].action { AutomationAction::RecurringMessage { next_run_at, .. } => next_run_at, _ => unreachable!() };
+        assert!(reloaded.retry(&created.id).await.unwrap_err().contains("già in esecuzione o in coda"));
+        assert!(matches!(reloaded.list().await[0].action, AutomationAction::RecurringMessage { next_run_at, .. } if next_run_at == next_run));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]

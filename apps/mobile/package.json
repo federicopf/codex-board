@@ -1,6 +1,6 @@
 {
   "name": "@codex-board/mobile",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "main": "index.ts",
   "dependencies": {
     "@codex-board/protocol": "*",
@@ -8,6 +8,7 @@
     "expo": "~57.0.12",
     "expo-build-properties": "~57.0.10",
     "expo-camera": "~57.0.3",
+    "expo-file-system": "~57.0.2",
     "expo-image-picker": "~57.0.20",
     "expo-secure-store": "~57.0.1",
     "expo-status-bar": "~57.0.1",

@@ -545,3 +545,17 @@ body { min-width: 980px; }
 .number-field .automation-interval-unit { width: 130px; height: 42px; padding: 0 10px; }
 .automation-edit { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 8px 14px; border: 1px solid #E0E2EA; border-radius: 9px; background: transparent; color: #5559D8; cursor: pointer; }
 .automation-edit-note { color: #727784; font-size: 12px; line-height: 1.5; }
+.automation-outcome { display: inline-flex; align-items: center; width: fit-content; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-style: normal; font-weight: 700; }
+.automation-outcome.success { color: #177C50; background: #E8F8F0; }
+.automation-outcome.failed { color: #B34337; background: #FFF0ED; }
+.automation-outcome.unknown { color: #796026; background: #FFF6DD; }
+.automation-last-result { display: grid; gap: 4px; margin-top: 10px; }
+.automation-last-result p { margin: 0; }
+.automation-retry { margin-top: 8px; }
+.automation-retry-confirm { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; line-height: 1.5; }
+.automation-retry-confirm span { flex-basis: 100%; }
+.automation-result-dialog footer > div { flex-wrap: wrap; }
+.result-status-icon.unknown { color: #796026; background: #FFF6DD; }
+.automation-card-actions .automation-delete { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; height: 44px; padding: 0; margin: 0; border-radius: 10px; line-height: 1; }
+.automation-card-actions .automation-delete:hover { background: #FFF0ED; }
+.automation-card-actions .automation-delete:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

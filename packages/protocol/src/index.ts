@@ -54,6 +54,16 @@ export interface AutomationResultDetails {
   status: "completed" | "failed" | "interrupted" | string;
   durationMs: number | null;
 }
+export interface AutomationRunResult {
+  status: "success" | "failed" | "unknown";
+  summary: string;
+  finishedAt: number;
+}
+export function automationOutcome(status: string | null | undefined): { label: string; tone: "success" | "failed" | "unknown"; retryable: boolean } {
+  if (status === "success") return { label: "Success", tone: "success", retryable: false };
+  if (status === "failed" || status === "interrupted") return { label: "Failed", tone: "failed", retryable: true };
+  return { label: "Unverified", tone: "unknown", retryable: true };
+}
 export interface BoardNotification {
   id: string;
   kind: "done" | "attention" | "error" | "automation";
@@ -94,7 +104,7 @@ export type AutomationAction =
     | { kind: "calendarMessage"; threadId: string; prompt: string; weekdays: number[]; minuteOfDay: number; timezoneOffsetMinutes: number; nextRunAt: number }
     | { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number }
     | { kind: "scheduledCategoryPipeline"; fromCategory: string; toCategory: string; runAt: number };
-export interface Automation { id: string; name: string; enabled: boolean; action: AutomationAction; lastRunAt: number | null; lastError: string | null; }
+export interface Automation { id: string; name: string; enabled: boolean; action: AutomationAction; lastRunAt: number | null; lastError: string | null; lastResult?: AutomationRunResult | null; runState?: "queued" | "running" | null; }
 export type CreateAutomationInput =
     | { name: string; action: { kind: "recurringMessage"; threadId: string; prompt: string; everyMinutes: number; startInMinutes: number } }
     | { name: string; action: { kind: "scheduledMessage"; threadId: string; prompt: string; runAt: number } }
@@ -158,3 +168,5 @@ export function parsePairingPayload(value: string): PairingCredential {
   if (!baseUrl || !/^https?:\/\//.test(baseUrl) || !token) throw new Error("Invalid Codex Board pairing code");
   return { baseUrl, token };
 }
+export { ChatDraftStore, parseChatDraft } from "./chatDrafts";
+export type { ChatDraft, DraftAttachment, DraftSnapshot, DraftStorage } from "./chatDrafts";

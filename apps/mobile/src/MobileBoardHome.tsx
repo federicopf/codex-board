@@ -40,14 +40,14 @@ export function MobileBoardHome(props: MobileBoardHomeProps) {
   const [actionThread, setActionThread] = useState<ThreadDto | null>(null);
   return <View style={styles.page}>
     <View style={[styles.header,compact&&styles.compactHeader]}>
-      <Pressable style={styles.iconButton} onPress={props.onBackToProjects} accessibilityRole="button" accessibilityLabel="Back to projects"><MobileIcon name="chevron-back" size={25} color={colors.text}/></Pressable>
+      <Pressable style={styles.iconButton} onPress={props.onBackToProjects} accessibilityRole="button" accessibilityLabel="Back to projects"><MobileIcon name="chevron-left" size={25} color={colors.text}/></Pressable>
       <View style={styles.heading}><Text style={styles.title} numberOfLines={1}>{props.projectLabel}</Text><Text style={styles.subtitle}>{props.totalCount} tasks{props.workingCount?` · ${props.workingCount} working`:""}{!props.connected?" · Reconnecting…":""}</Text></View>
-      <Pressable style={[styles.iconButton,styles.newButton]} onPress={props.onNewTask} accessibilityRole="button" accessibilityLabel="New task"><MobileIcon name="add" size={24} color="white"/></Pressable>
+      <Pressable style={[styles.iconButton,styles.newButton]} onPress={props.onNewTask} accessibilityRole="button" accessibilityLabel="New task"><MobileIcon name="plus" size={24} color="white"/></Pressable>
     </View>
     <View style={[styles.search,compact&&styles.compactSearch]}>
-      <MobileIcon name="search-outline" color={colors.textMuted}/>
+      <MobileIcon name="search" color={colors.textMuted}/>
       <TextInput value={props.search} onChangeText={props.onSearch} style={styles.searchInput} placeholder="Search this project" placeholderTextColor={colors.textSoft} returnKeyType="search"/>
-      {props.search?<Pressable style={styles.clearSearch} onPress={()=>props.onSearch("")} accessibilityRole="button" accessibilityLabel="Clear search"><MobileIcon name="close-circle" color={colors.textMuted}/></Pressable>:null}
+      {props.search?<Pressable style={styles.clearSearch} onPress={()=>props.onSearch("")} accessibilityRole="button" accessibilityLabel="Clear search"><MobileIcon name="x-circle" color={colors.textMuted}/></Pressable>:null}
     </View>
     {!props.search.trim()&&props.categories.length>0&&<ScrollView horizontal style={[styles.categoryScroll,compact&&{maxHeight:48}]} contentContainerStyle={[styles.categories,compact&&{paddingVertical:4}]} showsHorizontalScrollIndicator={false}>{props.categories.map(category=>{
       const active=category.name===props.activeCategory;
@@ -56,7 +56,7 @@ export function MobileBoardHome(props: MobileBoardHomeProps) {
     <FlatList data={props.threads} keyExtractor={thread=>thread.id} style={styles.list} contentContainerStyle={styles.listContent}
       keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" refreshing={props.refreshing} onRefresh={props.onRefresh}
       ListHeaderComponent={props.search.trim()?<Text style={styles.results}>{props.threads.length} results across this project</Text>:null}
-      ListEmptyComponent={<View style={styles.empty}>{props.loading?<ActivityIndicator color={colors.primary}/>:<MobileIcon name={props.search?"search-outline":"chatbubbles-outline"} size={32} color={colors.textSoft}/>}<Text style={styles.emptyTitle}>{props.loading?"Loading conversations…":props.search?"No matching conversations":"No tasks here yet"}</Text><Text style={styles.emptyText}>{props.search?"Try another title or phrase.":"Start a task in this project to begin."}</Text>{!props.loading&&!props.search&&<Pressable onPress={props.onNewTask} style={styles.emptyAction}><Text style={styles.emptyActionText}>Create a task</Text></Pressable>}</View>}
+      ListEmptyComponent={<View style={styles.empty}>{props.loading?<ActivityIndicator color={colors.primary}/>:<MobileIcon name={props.search?"search":"message-square"} size={32} color={colors.textSoft}/>}<Text style={styles.emptyTitle}>{props.loading?"Loading conversations…":props.search?"No matching conversations":"No tasks here yet"}</Text><Text style={styles.emptyText}>{props.search?"Try another title or phrase.":"Start a task in this project to begin."}</Text>{!props.loading&&!props.search&&<Pressable onPress={props.onNewTask} style={styles.emptyAction}><Text style={styles.emptyActionText}>Create a task</Text></Pressable>}</View>}
       renderItem={({item})=>{
         const working=props.isWorking(item);
         const queued=props.queues[item.id]?.length||0;
@@ -66,15 +66,15 @@ export function MobileBoardHome(props: MobileBoardHomeProps) {
             <Text style={styles.cardTitle} numberOfLines={2}>{props.titleFor(item)}</Text>
             {item.preview?<Text style={styles.preview} numberOfLines={2}>{item.preview}</Text>:null}
           </Pressable>
-          <Pressable style={styles.moreButton} onPress={()=>setActionThread(item)} accessibilityRole="button" accessibilityLabel={`Actions for ${props.titleFor(item)}`}><MobileIcon name="ellipsis-horizontal" color={colors.textMuted}/></Pressable>
+          <Pressable style={styles.moreButton} onPress={()=>setActionThread(item)} accessibilityRole="button" accessibilityLabel={`Actions for ${props.titleFor(item)}`}><MobileIcon name="more-horizontal" color={colors.textMuted}/></Pressable>
         </View>;
       }}/>
     {actionThread&&<MobileActionSheet title={props.titleFor(actionThread)} onClose={()=>setActionThread(null)} actions={[
-      {label:"Rename conversation",icon:"pencil-outline",onPress:()=>props.onRename(actionThread)},
-      {label:"Move to category",icon:"swap-horizontal-outline",onPress:()=>props.onMove(actionThread)},
-      {label:"Fork conversation",icon:"git-branch-outline",onPress:()=>props.onFork(actionThread)},
-      ...(props.isWorking(actionThread)?[{label:"Stop Codex",icon:"stop-circle-outline" as const,onPress:()=>props.onStop(actionThread)}]:[]),
-      {label:"Archive conversation",icon:"archive-outline",destructive:true,onPress:()=>props.onArchive(actionThread)},
+      {label:"Rename conversation",icon:"edit-2",onPress:()=>props.onRename(actionThread)},
+      {label:"Move to category",icon:"repeat",onPress:()=>props.onMove(actionThread)},
+      {label:"Fork conversation",icon:"git-branch",onPress:()=>props.onFork(actionThread)},
+      ...(props.isWorking(actionThread)?[{label:"Stop Codex",icon:"stop-circle" as const,onPress:()=>props.onStop(actionThread)}]:[]),
+      {label:"Archive conversation",icon:"archive",destructive:true,onPress:()=>props.onArchive(actionThread)},
     ]}/>}
   </View>;
 }

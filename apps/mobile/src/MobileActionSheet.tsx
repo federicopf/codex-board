@@ -30,7 +30,7 @@ export function MobileActionSheet({ title, actions, onClose }: { title: string; 
     <View style={styles.backdrop}>
       <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel="Dismiss actions"/>
       <View accessibilityViewIsModal style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-        <View style={styles.heading}><Text style={styles.title} numberOfLines={2}>{title}</Text><Pressable onPress={onClose} style={styles.close} accessibilityRole="button" accessibilityLabel="Close actions"><MobileIcon name="close" color={colors.text} size={23}/></Pressable></View>
+        <View style={styles.heading}><Text style={styles.title} numberOfLines={2}>{title}</Text><Pressable onPress={onClose} style={styles.close} accessibilityRole="button" accessibilityLabel="Close actions"><MobileIcon name="x" color={colors.text} size={23}/></Pressable></View>
         <ScrollView keyboardShouldPersistTaps="handled">{actions.map(action=><Pressable key={action.label} accessibilityRole="button" style={({pressed})=>[styles.action, pressed&&styles.pressed]} onPress={()=>select(action)}>
           <MobileIcon name={action.icon} color={action.destructive?colors.danger:colors.textMuted}/><Text style={[styles.label,action.destructive&&styles.danger]}>{action.label}</Text>
         </Pressable>)}</ScrollView>

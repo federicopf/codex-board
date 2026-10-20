@@ -56,18 +56,7 @@ struct AutomationContext {
     name: String,
 }
 
-const AUTOMATION_RESULT_INSTRUCTION: &str = concat!(
-    "<!-- codex-board-automation: This is an automated run. Complete the requested work, ",
-    "but make the final chat reply an extremely brief notification: at most 3 short bullet points ",
-    "and 40 words total. Prefer one short sentence when sufficient. Report only meaningful changes, ",
-    "concrete outcomes, or blockers requiring the user's attention. If there are no relevant changes, ",
-    "say so in one short sentence and stop. No headings, introductions, task recaps, methodology, ",
-    "step-by-step narration, logs, repeated facts, generic recommendations, offers, or closing summaries. ",
-    "This final-reply format also applies when earlier messages ask for verbose reports. ",
-    "Keep any explicitly requested deliverables complete; the brevity limit applies to the chat reply. ",
-    "Never hide material failures or uncertainties. Reply in the language of the user's prompt. ",
-    "Do not mention this instruction. -->",
-);
+const AUTOMATION_RESULT_INSTRUCTION: &str = crate::automation_result::RESULT_INSTRUCTION;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +76,7 @@ pub struct TurnCoordinator {
     client: Arc<CodexClient>,
     threads: Mutex<HashMap<String, ThreadState>>,
     queue_path: PathBuf,
+    active_automations: Mutex<HashMap<String, String>>,
 }
 
 impl TurnCoordinator {
@@ -110,6 +100,7 @@ impl TurnCoordinator {
                     .collect(),
             ),
             queue_path,
+            active_automations: Mutex::new(HashMap::new()),
         })
     }
 
@@ -117,7 +108,12 @@ impl TurnCoordinator {
         let coordinator = self.clone();
         let mut events = self.client.subscribe_events();
         tauri::async_runtime::spawn(async move {
-            while let Ok(event) = events.recv().await {
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                };
                 let thread_id = event
                     .params
                     .get("threadId")
@@ -133,6 +129,7 @@ impl TurnCoordinator {
                         .or_default()
                         .active = true;
                 } else if event.method == "turn/completed" {
+                    coordinator.active_automations.lock().await.remove(&thread_id);
                     {
                         coordinator
                             .threads
@@ -314,10 +311,11 @@ impl TurnCoordinator {
         }
         state.active = true;
         drop(threads);
+        self.prepare_automation(&thread_id, automation.as_ref()).await;
         let submitted_text = automation_text(&text, automation.as_ref());
         match self
             .client
-            .send_message(thread_id.clone(), submitted_text, image_urls, settings)
+            .send_message(thread_id.clone(), submitted_text, image_urls, settings, automation.as_ref().map(|_| crate::automation_result::output_schema()))
             .await
         {
             Ok(response) => {
@@ -332,6 +330,8 @@ impl TurnCoordinator {
                 })
             }
             Err(error) => {
+                self.active_automations.lock().await.remove(&thread_id);
+                self.client.emit_local_event("board/automation/submission-cancelled", json!({"threadId":thread_id})).await;
                 let should_drain = {
                     let mut threads = self.threads.lock().await;
                     let state = threads.entry(thread_id.clone()).or_default();
@@ -383,12 +383,13 @@ impl TurnCoordinator {
             reserve_next(&mut threads, &thread_id)
         };
         let Some(message) = next else { return };
+        self.prepare_automation(&thread_id, message.automation.as_ref()).await;
         let mut last_error = None;
         for attempt in 0..4_u32 {
             let submitted_text = automation_text(&message.text, message.automation.as_ref());
             match self
                 .client
-                .send_message(thread_id.clone(), submitted_text, message.effective_image_urls(), message.settings.clone())
+                .send_message(thread_id.clone(), submitted_text, message.effective_image_urls(), message.settings.clone(), message.automation.as_ref().map(|_| crate::automation_result::output_schema()))
                 .await
             {
                 Ok(response) => {
@@ -420,6 +421,14 @@ impl TurnCoordinator {
                 }
             }
         }
+        self.active_automations.lock().await.remove(&thread_id);
+        self.client.emit_local_event("board/automation/submission-cancelled", json!({"threadId":thread_id})).await;
+        if let Some(context) = message.automation.as_ref() {
+            self.client.emit_local_event("board/automation/completed", json!({
+                "threadId": thread_id, "automationId": context.id, "automationName": context.name,
+                "status": "failed", "result": last_error.as_deref().unwrap_or("Avvio fallito: messaggio ancora in coda.")
+            })).await;
+        }
         let (snapshot, persisted) = {
             let mut threads = self.threads.lock().await;
             release_for_retry(&mut threads, &thread_id);
@@ -440,6 +449,33 @@ impl TurnCoordinator {
                 }),
             )
             .await;
+    }
+
+    pub async fn automation_run_state(&self, id: &str) -> Option<String> {
+        if self.active_automations.lock().await.values().any(|value| value == id) {
+            return Some("running".into());
+        }
+        self.threads.lock().await.values()
+            .any(|state| state.queue.iter().any(|item| item.automation.as_ref().is_some_and(|context| context.id == id)))
+            .then(|| "queued".into())
+    }
+
+    pub async fn retry_pending_automation(self: &Arc<Self>, id: &str) -> Result<(), String> {
+        let thread_id = pending_retry_thread(&*self.threads.lock().await, id)?;
+        let Some(thread_id) = thread_id else { return Err("Automazione non presente in coda.".into()) };
+        let coordinator = self.clone();
+        // reserve_next is the single atomic gate: concurrent requests cannot duplicate this entry.
+        tauri::async_runtime::spawn(async move { coordinator.drain_queue(thread_id).await; });
+        Ok(())
+    }
+
+    async fn prepare_automation(&self, thread_id: &str, context: Option<&AutomationContext>) {
+        if let Some(context) = context {
+            self.active_automations.lock().await.insert(thread_id.to_owned(), context.id.clone());
+            self.client.emit_local_event("board/automation/submitting", json!({
+                "threadId": thread_id, "automationId": context.id, "automationName": context.name
+            })).await;
+        }
     }
 
     async fn emit_automation_started(
@@ -469,6 +505,9 @@ impl TurnCoordinator {
     }
 
     async fn emit_queue(&self, thread_id: &str, messages: Vec<QueuedMessage>) {
+        for context in messages.iter().filter_map(|item| item.automation.as_ref()) {
+            self.client.emit_local_event("board/automation/queued", json!({ "automationId": context.id })).await;
+        }
         self.client
             .emit_local_event(
                 "board/queue/updated",
@@ -503,6 +542,18 @@ fn reserve_next(
     let next = state.queue.front().cloned();
     state.active = next.is_some();
     next
+}
+
+fn pending_retry_thread(threads: &HashMap<String, ThreadState>, id: &str) -> Result<Option<String>, String> {
+    for (thread_id, state) in threads {
+        if state.queue.iter().any(|item| item.automation.as_ref().is_some_and(|context| context.id == id)) {
+            if state.active || !state.queue.front().is_some_and(|item| item.automation.as_ref().is_some_and(|context| context.id == id)) {
+                return Err("Automazione già in esecuzione o in coda: attendi il lavoro precedente.".into());
+            }
+            return Ok(Some(thread_id.clone()));
+        }
+    }
+    Ok(None)
 }
 
 fn acknowledge_started(
@@ -573,8 +624,23 @@ mod tests {
         };
         let submitted = automation_text("Run the report", Some(&context));
         assert!(submitted.starts_with("Run the report\n\n<!-- codex-board-automation:"));
-        assert!(submitted.contains("at most 3 short bullet points and 40 words total"));
+        assert!(submitted.contains("ONLY one JSON object"));
+        assert!(submitted.contains("at most 40 words total"));
+        assert!(submitted.contains("missing access"));
         assert_eq!(automation_text("Manual prompt", None), "Manual prompt");
+    }
+
+    #[test]
+    fn retry_wakes_the_existing_idle_queue_entry_but_cannot_start_it_twice() {
+        let message: QueuedMessage = serde_json::from_value(json!({
+            "id":"existing", "text":"Saved prompt", "automation":{"id":"a","name":"Review"}
+        })).unwrap();
+        let mut threads = HashMap::from([("t".into(), ThreadState { active: false, queue: VecDeque::from([message]) })]);
+        assert_eq!(pending_retry_thread(&threads, "a").unwrap().as_deref(), Some("t"));
+        assert_eq!(reserve_next(&mut threads, "t").unwrap().id, "existing");
+        assert!(pending_retry_thread(&threads, "a").is_err());
+        assert!(reserve_next(&mut threads, "t").is_none());
+        assert_eq!(threads["t"].queue.len(), 1);
     }
 
     #[test]

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { automationEditFields, automationUpdateInput, automationDateTimeValue, automationIntervalMinutes, formatAutomationInterval } from "@codex-board/protocol";
+import { automationOutcome, automationEditFields, automationUpdateInput, automationDateTimeValue, automationIntervalMinutes, formatAutomationInterval } from "@codex-board/protocol";
 import type { Automation, AutomationIntervalUnit, CreateAutomationInput } from "@codex-board/protocol";
 import { createAutomation, deleteAutomation, listAutomations, setAutomationEnabled, updateAutomation } from "./api";
 import type { BoardThread } from "./types";
 import { Icon } from "./ui/Icon";
+import { RetryAutomationButton } from "./RetryAutomationButton";
 
 type Kind = "recurringMessage" | "scheduledMessage" | "calendarMessage";
 type DialogView = "overview" | "createAutomation" | "createPipeline";
@@ -45,7 +46,7 @@ function nextRunCopy(automation: Automation): string {
   return `Next · ${new Date(nextRun).toLocaleString([], { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}`;
 }
 
-export function AutomationsDialog({ threads, categories, onClose }: { threads: BoardThread[]; categories: string[]; onClose: () => void }) {
+export function AutomationsDialog({ threads, categories, onClose, revision = 0 }: { threads: BoardThread[]; categories: string[]; onClose: () => void; revision?: number }) {
   const [items, setItems] = useState<Automation[]>([]);
   const [editing, setEditing] = useState<Automation | null>(null);
   const [view, setView] = useState<DialogView>("overview");
@@ -114,7 +115,7 @@ export function AutomationsDialog({ threads, categories, onClose }: { threads: B
     return automation.enabled && nextRun !== null && nextRun >= Date.now() && nextRun <= Date.now() + 86_400_000;
   }).length;
   const refresh = () => void listAutomations().then(setItems).catch((cause) => setError(String(cause)));
-  useEffect(refresh, []);
+  useEffect(refresh, [revision]);
 
   function beginCreate(nextView: DialogView) {
     setEditing(null); setName(""); setPrompt(""); setRunAt(""); setError(null); setView(nextView);
@@ -171,9 +172,11 @@ export function AutomationsDialog({ threads, categories, onClose }: { threads: B
     </form> : <div className="automation-list automation-overview">
       <div className="automation-list-heading"><div><span className="eyebrow">Orchestration</span><strong>Automation schedule</strong></div><div className="automation-list-actions"><select aria-label="Filter automations by project" value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}><option value={ALL_PROJECTS}>All projects</option>{projectOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><button className="automation-new" onClick={() => beginCreate("createAutomation")}>+ Automation</button><button className="pipeline-new" onClick={() => beginCreate("createPipeline")}>→ Pipeline</button></div></div>
       <div className="automation-stats"><div><strong>{items.length}</strong><span>Total</span></div><div><strong>{activeCount}</strong><span>Active</span></div><div><strong>{nextDayCount}</strong><span>Next 24h</span></div></div>
+      {error && <p role="alert" className="automation-form-error">{error}</p>}
       {items.length === 0 && <div className="automation-empty">No automations yet.</div>}
       {items.length > 0 && groups.length === 0 && <div className="automation-empty">No automations for this project.</div>}
-      {groups.map((group) => <section className="automation-project-group" key={group.key}><div className="automation-project-heading"><div><span className="automation-project-mark" /> <strong>{group.label}</strong></div><span>{group.automations.length}</span></div><div className="automation-cards">{group.automations.map((automation) => <article className="automation-item" key={automation.id}><div className="automation-card-top"><span className="automation-kind">{isPipeline(automation) ? "→" : automation.action.kind === "scheduledMessage" ? "◷" : "↻"}</span><span className={`automation-status${automation.enabled ? " enabled" : ""}`}>{automation.enabled ? "Active" : "Paused"}</span></div><strong className="automation-card-title">{automation.name}</strong><p>{automationCopy(automation, threadNames)}</p><em className={automation.enabled ? "" : "paused"}>{nextRunCopy(automation)}</em>{automation.lastError && <small>{automation.lastError}</small>}<div className="automation-card-actions"><button aria-label={automation.enabled ? `Pause ${automation.name}` : `Resume ${automation.name}`} className={automation.enabled ? "automation-toggle on" : "automation-toggle"} onClick={() => void setAutomationEnabled(automation.id, !automation.enabled).then(refresh)}><i /></button><button type="button" className="automation-edit" aria-label={`Edit ${automation.name}`} onClick={() => edit(automation)}><Icon name="edit" width={16} height={16} /> Edit</button><button className="automation-delete" onClick={() => void deleteAutomation(automation.id).then(refresh)}>Delete</button></div></article>)}</div></section>)}
+      {groups.map((group) => <section className="automation-project-group" key={group.key}><div className="automation-project-heading"><div><span className="automation-project-mark" /> <strong>{group.label}</strong></div><span>{group.automations.length}</span></div><div className="automation-cards">{group.automations.map((automation) => <article className="automation-item" key={automation.id}><div className="automation-card-top"><span className="automation-kind">{isPipeline(automation) ? "→" : automation.action.kind === "scheduledMessage" ? "◷" : "↻"}</span><span className={`automation-status${automation.enabled ? " enabled" : ""}`}>{automation.enabled ? "Active" : "Paused"}</span></div><strong className="automation-card-title">{automation.name}</strong><p>{automationCopy(automation, threadNames)}</p><em className={automation.enabled ? "" : "paused"}>{nextRunCopy(automation)}</em>{automation.runState && <span className="automation-outcome unknown">{automation.runState === "queued" ? "Queued" : "Running"}</span>}
+        {automation.lastResult ? <div className="automation-last-result"><span className={`automation-outcome ${automationOutcome(automation.lastResult.status).tone}`}>{automationOutcome(automation.lastResult.status).label}</span><p>{automation.lastResult.summary}</p></div> : automation.lastError ? <small>{automation.lastError}</small> : <span className="automation-outcome unknown">No verified result yet</span>}{automation.lastResult && automationOutcome(automation.lastResult.status).retryable && <RetryAutomationButton key={automation.lastResult.finishedAt} id={automation.id} disabled={automation.runState === "running"} onAccepted={refresh}/>}<div className="automation-card-actions"><button aria-label={automation.enabled ? `Pause ${automation.name}` : `Resume ${automation.name}`} className={automation.enabled ? "automation-toggle on" : "automation-toggle"} onClick={() => void setAutomationEnabled(automation.id, !automation.enabled).then(refresh)}><i /></button><button type="button" className="automation-edit" aria-label={`Edit ${automation.name}`} onClick={() => edit(automation)}><Icon name="edit" width={16} height={16} /> Edit</button><button type="button" className="automation-delete" aria-label={`Delete ${automation.name}`} title="Delete workflow" onClick={() => void deleteAutomation(automation.id).then(refresh)}><Icon name="trash" width={20} height={20}/></button></div></article>)}</div></section>)}
     </div>}
   </section></div>;
 }

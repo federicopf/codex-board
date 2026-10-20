@@ -1,4 +1,5 @@
 mod automations;
+mod automation_result;
 mod codex;
 mod notifications;
 mod persistence;
@@ -252,6 +253,11 @@ async fn create_automation(
 }
 
 #[tauri::command]
+async fn retry_automation(store: tauri::State<'_, Arc<AutomationStore>>, id: String) -> Result<(), String> {
+    store.retry(&id).await
+}
+
+#[tauri::command]
 async fn update_automation(
     store: tauri::State<'_, Arc<AutomationStore>>,
     id: String,
@@ -313,9 +319,9 @@ pub fn run() {
                 client.clone(),
                 coordinator.clone(),
             );
-            automations.start();
             let notifications =
                 NotificationStore::new(directory.join("notifications.json"), client.clone());
+            automations.start();
             let gateway = RemoteGateway::prepare(&directory).map_err(|error| {
                 std::io::Error::other(format!("Could not prepare remote gateway: {error}"))
             })?;
@@ -356,6 +362,7 @@ pub fn run() {
             list_automations,
             create_automation,
             update_automation,
+            retry_automation,
             set_automation_enabled,
             delete_automation,
             list_notifications,

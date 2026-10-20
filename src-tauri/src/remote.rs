@@ -293,12 +293,12 @@ impl RemoteGateway {
                 .route("/v1/rate-limits", get(rate_limits))
                 .route("/v1/models", get(models))
                 .route("/v1/threads", get(list_threads))
-                .route("/v1/threads/new", post(create_thread))
+                .route("/v1/threads/new", post(create_thread).layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)))
                 .route("/v1/threads/{id}", get(load_thread))
                 .route("/v1/threads/{id}/archive", axum::routing::post(archive_thread))
                 .route("/v1/threads/{id}/fork", post(fork_thread))
                 .route("/v1/threads/{id}/name", put(rename_thread))
-                .route("/v1/threads/{id}/messages", post(send_message))
+                .route("/v1/threads/{id}/messages", post(send_message).layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)))
                 .route("/v1/queues", get(message_queues))
                 .route(
                     "/v1/threads/{id}/queue/{message_id}",
@@ -317,6 +317,10 @@ impl RemoteGateway {
                 .route(
                     "/v1/automations/{id}",
                     put(set_automation_enabled).patch(update_automation).delete(delete_automation),
+                )
+                .route(
+                    "/v1/automations/{id}/retry",
+                    post(retry_automation),
                 )
                 .route(
                     "/v1/notifications",
@@ -904,6 +908,16 @@ async fn create_automation(
     serde_json::to_value(automation)
         .map(Json)
         .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+}
+
+async fn retry_automation(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, ApiError> {
+    authorized(&headers, &state)?;
+    state.automations.retry(&id).await.map_err(|error| ApiError(StatusCode::CONFLICT, error))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn update_automation(

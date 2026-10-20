@@ -87,6 +87,7 @@ function App() {
   const [renamingThreadId, setRenamingThreadId] = useState<string | null>(null);
   const [remoteDialog, setRemoteDialog] = useState(false);
   const [automationsDialog, setAutomationsDialog] = useState(false);
+  const [automationRevision, setAutomationRevision] = useState(0);
   const [newTaskDialog, setNewTaskDialog] = useState(false);
   const [newProjectDialog, setNewProjectDialog] = useState(false);
   const [projectPaths, setProjectPaths] = useState<string[]>([]);
@@ -107,7 +108,10 @@ function App() {
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>(loadApprovalMode);
   const [rateLimits, setRateLimits] = useState<JsonValue | null>(null);
   const workingIdsRef = useRef(workingIds);
+  const turnStateRevision = useRef(0);
   const queuesRef = useRef(queues);
+  const queueRevision = useRef(0);
+  const refreshRequest = useRef(0);
   const threadsRef = useRef(threads);
   const eventSequence = useRef(0);
   const toastSequence = useRef(0);
@@ -124,8 +128,12 @@ function App() {
 
   const refresh = useCallback(async (background = false) => {
     background ? setRefreshing(true) : setLoading(true);
+    const request = ++refreshRequest.current;
+    const requestedTurnRevision = turnStateRevision.current;
+    const requestedQueueRevision = queueRevision.current;
     try {
       const [result, serverQueues] = await Promise.all([listThreads(), getMessageQueues()]);
+      if (request !== refreshRequest.current) return;
       const fetchedThreads = toBoardThreads(result);
       const fetchedIds = new Set(fetchedThreads.map((thread) => thread.id));
       for (const [id, thread] of pendingThreadIdsRef.current) {
@@ -133,17 +141,23 @@ function App() {
         else fetchedThreads.push(thread);
       }
       setThreads(fetchedThreads);
-      queuesRef.current = serverQueues;
-      setQueues(serverQueues);
-      const active = new Set(result.filter((thread) => text(record(thread.status).type) === "active").map((thread) => thread.id));
-      workingIdsRef.current = active;
-      setWorkingIds(active);
+      if (queueRevision.current === requestedQueueRevision) {
+        queuesRef.current = serverQueues;
+        setQueues(serverQueues);
+      }
+      if (turnStateRevision.current === requestedTurnRevision) {
+        const active = new Set(result.filter((thread) => text(record(thread.status).type) === "active").map((thread) => thread.id));
+        workingIdsRef.current = active;
+        setWorkingIds(active);
+      }
       setError(null);
     } catch (cause) {
-      setError(asCodexError(cause));
+      if (request === refreshRequest.current) setError(asCodexError(cause));
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (request === refreshRequest.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -236,6 +250,7 @@ function App() {
   }, [approvalMode, persistBoardConfig]);
 
   const setThreadWorking = useCallback((threadId: string, working: boolean) => {
+    turnStateRevision.current += 1;
     setWorkingIds((current) => {
       const next = new Set(current);
       working ? next.add(threadId) : next.delete(threadId);
@@ -284,6 +299,7 @@ function App() {
         const sequenced = drained.map((event) => ({ sequence: ++eventSequence.current, event }));
         setEvents((current) => [...current, ...sequenced].slice(-2000));
         for (const event of drained) {
+          if (["board/automations/updated", "board/automation/submitting", "board/automation/queued"].includes(event.method)) setAutomationRevision(value => value + 1);
           if (event.method === "board/config/updated") {
             const config = record(event.params);
             const nextCategories = Array.isArray(config.categories) ? config.categories.filter((item): item is string => typeof item === "string") : [];
@@ -312,6 +328,7 @@ function App() {
             const messages = record(event.params).messages;
             const next = { ...queuesRef.current, [threadId]: Array.isArray(messages) ? messages as unknown as QueuedMessage[] : [] };
             if (next[threadId].length === 0) delete next[threadId];
+            queueRevision.current += 1;
             queuesRef.current = next;
             setQueues(next);
           } else if (event.method === "turn/started") {
@@ -589,6 +606,7 @@ function App() {
       const selected: TurnSettings = { ...await turnPreferences.flush(), ...settings };
       if (!selected.model) throw new Error("Select a Codex model before sending a message.");
       const response = await sendMessage(threadId, message, _imageUrls, selected);
+      if (response.queued) queueRevision.current += 1;
       const turnId = text(record(response.turn).id);
       if (turnId) setActiveTurns((current) => ({ ...current, [threadId]: turnId }));
     } catch (cause) {
@@ -598,7 +616,7 @@ function App() {
   }
 
   function removeQueuedMessage(threadId: string, messageId: string) {
-    void removeQueuedMessageApi(threadId, messageId).catch((cause) => setError(asCodexError(cause)));
+    void removeQueuedMessageApi(threadId, messageId).then(() => { queueRevision.current += 1; }).catch((cause) => setError(asCodexError(cause)));
   }
 
   async function stopThread(threadId: string) {
@@ -747,7 +765,7 @@ function App() {
       {renamingThread && <RenameThreadDialog key={renamingThread.id} thread={renamingThread} onClose={()=>setRenamingThreadId(null)} onRename={renameConversation}/>}
       {settingsOpen && <BoardSettingsDialog approvalMode={approvalMode} onApprovalMode={setApprovalMode} onClose={() => setSettingsOpen(false)} />}
       {remoteDialog && <RemoteDialog onClose={() => setRemoteDialog(false)} />}
-      {automationsDialog && <AutomationsDialog threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}
+      {automationsDialog && <AutomationsDialog revision={automationRevision} threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}
       {newTaskDialog && <NewTaskDialog threads={threads} projects={projects.filter((item) => item.cwd)} categories={categories} defaultProjectKey={project === ALL_PROJECTS ? undefined : project} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt, imageUrls) => { const created = await createThread(cwd, category, title, prompt, imageUrls); retainCreatedThread(created); setNewTaskDialog(false); void refresh(true); }} />}
       {newProjectDialog && <NewProjectDialog existingPaths={projectPaths} onClose={() => setNewProjectDialog(false)} onCreate={createProject} />}
       {productTour && <ProductTour onClose={() => { localStorage.setItem("codex-board.tour.v1", "done"); setProductTour(false); }} />}

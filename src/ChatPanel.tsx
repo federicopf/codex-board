@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type KeyboardEvent } from "react";
 import { asCodexError, compactThread, getModels, interruptTurn, loadThread, respondToCodexRequest } from "./api";
 import { turnPreferences, useTurnPreferences } from "./lib/turnSettings";
 import { applyCodexEvent, createChatSession, eventRequest } from "./lib/chat";
@@ -6,6 +6,9 @@ import { denialResult } from "./lib/approvals";
 import { MarkdownContent } from "./MarkdownContent";
 import { Icon } from "./ui/Icon";
 import type { BoardThread, ChatSession, JsonValue, PendingCodexRequest, QueuedMessage, SequencedCodexEvent, TurnSettings } from "./types";
+
+import { desktopDrafts } from "./lib/chatDrafts";
+import { ChatDraftStore, type DraftAttachment } from "@codex-board/protocol";
 
 type JsonObject = Record<string, JsonValue>;
 const record = (value: JsonValue | undefined): JsonObject => value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
@@ -26,7 +29,7 @@ interface ChatPanelProps {
   onClose: () => void;
 }
 
-interface ImageAttachmentDraft { id: string; name: string; dataUrl: string; }
+type ImageAttachmentDraft = DraftAttachment;
 
 function ApprovalPrompt({ request, busy, onResolve }: { request: PendingCodexRequest; busy: boolean; onResolve: (result: JsonValue) => void }) {
   const { method, params } = request;
@@ -71,7 +74,7 @@ function ApprovalPrompt({ request, busy, onResolve }: { request: PendingCodexReq
   </section>;
 }
 
-function ChatComposer({ threadId, working, activeTurnId, loading, onSend, onStop, onError, controls, attachments, onRemoveAttachment, onClearAttachments }: {
+export function ChatComposer({ threadId, working, activeTurnId, loading, onSend, onStop, onError, drafts = desktopDrafts }: {
   threadId: string;
   working: boolean;
   activeTurnId: string | null;
@@ -79,29 +82,47 @@ function ChatComposer({ threadId, working, activeTurnId, loading, onSend, onStop
   onSend: (threadId: string, message: string, imageUrls?: string[], settings?: TurnSettings) => Promise<void>;
   onStop: () => Promise<void>;
   onError: (message: string | null) => void;
-  controls: ReactNode;
-  attachments: ImageAttachmentDraft[];
-  onRemoveAttachment: (id: string) => void;
-  onClearAttachments: () => void;
+  drafts?: ChatDraftStore;
 }) {
-  const [draft, setDraft] = useState("");
+  const subscribe = useCallback((listener: () => void) => drafts.subscribe(threadId, listener), [drafts, threadId]);
+  const snapshot = useCallback(() => drafts.getSnapshot(threadId), [drafts, threadId]);
+  const { draft: saved, ready, error: draftError } = useSyncExternalStore(subscribe, snapshot);
+  const draft = saved.text;
+  const attachments = saved.attachments;
+  const [openComposerTool, setOpenComposerTool] = useState<"model" | "attachment" | null>(null);
+  const sendingRef = useRef(false);
+  useEffect(() => {
+    void drafts.load(threadId);
+    return () => { void drafts.flush(threadId).catch(() => undefined); };
+  }, [drafts, threadId]);
+  useEffect(() => {
+    if (!openComposerTool) return;
+    const close = (event: PointerEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest(".composer-tools")) setOpenComposerTool(null);
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [openComposerTool]);
+  const controls = <><TurnSettingsBar threadId={threadId} working={working} open={openComposerTool === "model"} onOpenChange={open => setOpenComposerTool(open ? "model" : null)}/>
+    <ImageAttachmentButton onSelect={selected => drafts.update(threadId, current => ({ ...current, attachments: [...current.attachments, ...selected] }))}
+      onError={onError} disabled={loading || !ready} open={openComposerTool === "attachment"} onOpenChange={open => setOpenComposerTool(open ? "attachment" : null)} selectedCount={attachments.length}/></>;
   const [sending, setSending] = useState(false);
 
   async function submit() {
     const message = draft.trim();
-    if ((!message && attachments.length === 0) || sending) return;
+    if ((!message && attachments.length === 0) || sendingRef.current || !ready) return;
     if (!turnPreferences.getSnapshot().settings.model) { onError("Choose a Codex model before sending."); return; }
-    setSending(true); onError(null);
-    try { await onSend(threadId, message, attachments.map((attachment) => attachment.dataUrl)); setDraft(""); onClearAttachments(); }
+    sendingRef.current = true; setSending(true); onError(null);
+    try { await onSend(threadId, message, attachments.map((attachment) => attachment.dataUrl)); drafts.accepted(threadId, saved); }
     catch (cause) { onError(asCodexError(cause).message); }
-    finally { setSending(false); }
+    finally { sendingRef.current = false; setSending(false); }
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); }
   }
 
-  return <footer className="composer-wrap"><div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} placeholder={working ? "Add another message to the queue…" : "Message Codex…"} disabled={loading} rows={2} />{attachments.length > 0 && <div className="composer-attachments">{attachments.map((attachment) => <div className="composer-attachment" key={attachment.id}><img src={attachment.dataUrl} alt="" /><span title={attachment.name}>{attachment.name}</span><button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => onRemoveAttachment(attachment.id)}>×</button></div>)}</div>}<div className="composer-bottom"><div className="composer-tools">{controls}</div><div className="composer-actions">{working && <button className="stop-button" disabled={!activeTurnId} onClick={() => void onStop()}>Stop</button>}<button className="send-button" disabled={(!draft.trim() && attachments.length === 0) || sending || loading} onClick={() => void submit()}>{working ? (sending ? "Adding…" : "Queue") : (sending ? "Sending…" : "Send")}</button></div></div></div><small>Enter to send · Shift+Enter for a new line</small></footer>;
+  return <footer className="composer-wrap"><div className="composer"><textarea value={draft} onChange={(event) => drafts.update(threadId, current => ({ ...current, text: event.target.value }))} onKeyDown={handleKeyDown} placeholder={working ? "Add another message to the queue…" : "Message Codex…"} disabled={loading || !ready} rows={2} />{attachments.length > 0 && <div className="composer-attachments">{attachments.map((attachment) => <div className="composer-attachment" key={attachment.id}><img src={attachment.dataUrl} alt="" /><span title={attachment.name}>{attachment.name}</span><button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => drafts.update(threadId, current => ({ ...current, attachments: current.attachments.filter(item => item.id !== attachment.id) }))}>×</button></div>)}</div>}<div className="composer-bottom"><div className="composer-tools">{controls}</div><div className="composer-actions">{working && <button className="stop-button" disabled={!activeTurnId} onClick={() => void onStop()}>Stop</button>}<button className="send-button" disabled={(!draft.trim() && attachments.length === 0) || sending || loading || !ready} onClick={() => void submit()}>{working ? (sending ? "Adding…" : "Queue") : (sending ? "Sending…" : "Send")}</button></div></div></div>{draftError && <small role="alert">{draftError}</small>}<small>Enter to send · Shift+Enter for a new line</small></footer>;
 }
 
 function ImageAttachmentButton({ onSelect, onError, disabled, open, onOpenChange, selectedCount }: { onSelect: (attachments: ImageAttachmentDraft[]) => void; onError: (message: string | null) => void; disabled: boolean; open: boolean; onOpenChange: (open: boolean) => void; selectedCount: number }) {
@@ -157,16 +178,6 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [requests, setRequests] = useState<PendingCodexRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [openComposerTool, setOpenComposerTool] = useState<"model" | "attachment" | null>(null);
-  const [imageAttachments, setImageAttachments] = useState<ImageAttachmentDraft[]>([]);
-  useEffect(() => {
-    if (!openComposerTool) return;
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!(event.target instanceof Element) || !event.target.closest(".composer-tools")) setOpenComposerTool(null);
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
-  }, [openComposerTool]);
   const lastSequence = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -181,7 +192,7 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
     lastSequence.current = events.at(-1)?.sequence || 0;
     initialScrollPending.current = true;
     followOutput.current = true;
-    setLoading(true); setSession(null); setRequests([]); setError(null); setOpenComposerTool(null); setImageAttachments([]);
+    setLoading(true); setSession(null); setRequests([]); setError(null);
     void loadThread(thread.id).then((loaded) => {
       if (cancelled) return;
       const next = createChatSession(loaded);
@@ -255,8 +266,17 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
   const title = useMemo(() => thread.displayTitle || thread.effectiveTitle || "Untitled thread", [thread]);
 
   async function stop() {
-    if (!activeTurnId) return;
-    try { await interruptTurn(thread.id, activeTurnId); }
+    try {
+      let turnId = activeTurnId || session?.activeTurnId;
+      if (!turnId) {
+        const latest = createChatSession(await loadThread(thread.id));
+        setSession(latest);
+        onSessionState(thread.id, latest.running, latest.activeTurnId);
+        turnId = latest.activeTurnId;
+      }
+      if (!turnId) throw new Error("No active turn was found. Refresh the conversation and try again.");
+      await interruptTurn(thread.id, turnId);
+    }
     catch (cause) { setError(asCodexError(cause).message); }
   }
 
@@ -280,6 +300,6 @@ export function ChatPanel({ thread, events, queuedMessages, working, activeTurnI
       {request && <ApprovalPrompt request={request} busy={approvalBusy} onResolve={(result) => void resolveRequest(result)} />}
       <div ref={bottomRef} />
     </div>
-    <ChatComposer key={thread.id} threadId={thread.id} working={working} activeTurnId={activeTurnId} loading={loading} onSend={onSend} onStop={stop} onError={setError} attachments={imageAttachments} onRemoveAttachment={(id) => setImageAttachments((current) => current.filter((attachment) => attachment.id !== id))} onClearAttachments={() => setImageAttachments([])} controls={<><TurnSettingsBar threadId={thread.id} working={working} open={openComposerTool === "model"} onOpenChange={(open) => setOpenComposerTool(open ? "model" : null)} /><ImageAttachmentButton onSelect={(selected) => setImageAttachments((current) => [...current, ...selected])} onError={setError} disabled={loading} open={openComposerTool === "attachment"} onOpenChange={(open) => setOpenComposerTool(open ? "attachment" : null)} selectedCount={imageAttachments.length} /></>} />
+    <ChatComposer key={thread.id} threadId={thread.id} working={working} activeTurnId={activeTurnId || session?.activeTurnId || (working ? "pending" : null)} loading={loading} onSend={onSend} onStop={stop} onError={setError} />
   </section></div>;
 }

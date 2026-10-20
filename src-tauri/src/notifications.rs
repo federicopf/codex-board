@@ -1,7 +1,7 @@
-use crate::{codex::CodexClient, persistence};
+use crate::{automation_result, codex::CodexClient, persistence};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -38,6 +38,7 @@ pub struct AutomationResultDetails {
 struct PendingAutomation {
     id: String,
     name: String,
+    final_text: Option<String>,
 }
 
 pub struct NotificationStore {
@@ -56,36 +57,64 @@ impl NotificationStore {
         let worker = store.clone();
         let mut events = client.subscribe_events();
         tauri::async_runtime::spawn(async move {
-            while let Ok(event) = events.recv().await {
-                if event.method == "board/automation/turn-started" {
-                    if let (Some(turn_id), Some(id), Some(name)) = (
-                        event.params.get("turnId").and_then(Value::as_str),
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        let pending = worker.pending_automations.lock().await.drain().collect::<Vec<_>>();
+                        for (thread_id, pending) in pending {
+                            client.emit_local_event("board/automation/completed", json!({
+                                "threadId": thread_id, "automationId": pending.id, "automationName": pending.name,
+                                "status": "unknown", "result": "Esito non verificabile: alcuni eventi dell'esecuzione sono andati persi."
+                            })).await;
+                        }
+                        continue;
+                    }
+                    Err(_) => break,
+                };
+                let thread_id = event.params.get("threadId").and_then(Value::as_str);
+                if event.method == "board/automation/submitting" {
+                    if let (Some(thread_id), Some(id), Some(name)) = (
+                        thread_id,
                         event.params.get("automationId").and_then(Value::as_str),
                         event.params.get("automationName").and_then(Value::as_str),
                     ) {
-                        worker.pending_automations.lock().await.insert(
-                            turn_id.to_owned(),
-                            PendingAutomation {
-                                id: id.to_owned(),
-                                name: name.to_owned(),
-                            },
-                        );
+                        worker.pending_automations.lock().await.insert(thread_id.to_owned(),
+                            PendingAutomation { id: id.into(), name: name.into(), final_text: None });
+                    }
+                    continue;
+                }
+                if event.method == "board/automation/submission-cancelled" {
+                    if let Some(thread_id) = thread_id { worker.pending_automations.lock().await.remove(thread_id); }
+                    continue;
+                }
+                if event.method == "item/completed" {
+                    if let (Some(thread_id), Some(item)) = (thread_id, event.params.get("item")) {
+                        if let Some(text) = automation_result::final_message(std::slice::from_ref(item)) {
+                            if let Some(pending) = worker.pending_automations.lock().await.get_mut(thread_id) {
+                                // Bound malformed streams; parsing refuses oversized/truncated JSON.
+                                pending.final_text = Some(text.chars().take(16_000).collect());
+                            }
+                        }
                     }
                     continue;
                 }
                 let automation = if event.method == "turn/completed" {
-                    let turn_id = event
-                        .params
-                        .get("turn")
-                        .and_then(|turn| turn.get("id"))
-                        .and_then(Value::as_str);
-                    match turn_id {
+                    match thread_id {
                         Some(id) => worker.pending_automations.lock().await.remove(id),
                         None => None,
                     }
-                } else {
-                    None
-                };
+                } else { None };
+                if let Some(pending) = automation.as_ref() {
+                    let item = from_event(&event.method, &event.params, false, Some(pending)).unwrap();
+                    let result = item.automation.unwrap();
+                    client.emit_local_event("board/automation/completed", json!({
+                        "threadId": thread_id, "automationId": result.id, "automationName": result.name,
+                        "status": result.status, "result": result.result, "durationMs": result.duration_ms,
+                        "finishedAt": item.created_at
+                    })).await;
+                    continue;
+                }
                 if let Some(item) = from_event(
                     &event.method,
                     &event.params,
@@ -144,15 +173,16 @@ fn from_event(
         let status = params
             .get("status")
             .and_then(Value::as_str)
-            .unwrap_or("completed");
+            .unwrap_or("unknown");
+        let status = if status == "completed" { "success" } else { status };
         let result = params
             .get("result")
             .and_then(Value::as_str)
             .unwrap_or("Automation finished.");
         (
             "automation",
-            "Automation completed",
-            format!("{name} finished"),
+            outcome_title(status),
+            format!("{name}: {}", outcome_title(status)),
             Some(AutomationResultDetails {
                 id: params
                     .get("automationId")
@@ -160,27 +190,26 @@ fn from_event(
                     .unwrap_or_default()
                     .to_owned(),
                 name: name.to_owned(),
-                result: result.to_owned(),
+                result: truncate(result, 2_000),
                 status: status.to_owned(),
                 duration_ms: params.get("durationMs").and_then(Value::as_i64),
             }),
         )
     } else if let Some(pending) = pending_automation {
         let turn = params.get("turn").unwrap_or(&Value::Null);
-        let status = turn
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("completed");
-        let result = automation_result(turn, status);
+        let text = turn.get("items").and_then(Value::as_array)
+            .and_then(|items| automation_result::final_message(items))
+            .or(pending.final_text.as_deref());
+        let report = automation_result::resolve(turn, text, now_ms());
         (
             "automation",
-            "Automation completed",
-            format!("{} finished", pending.name),
+            outcome_title(&report.status),
+            format!("{}: {}", pending.name, outcome_title(&report.status)),
             Some(AutomationResultDetails {
                 id: pending.id.clone(),
                 name: pending.name.clone(),
-                result,
-                status: status.to_owned(),
+                result: report.summary,
+                status: report.status,
                 duration_ms: turn.get("durationMs").and_then(Value::as_i64),
             }),
         )
@@ -229,31 +258,12 @@ fn from_event(
     })
 }
 
-fn automation_result(turn: &Value, status: &str) -> String {
-    if status == "failed" {
-        return turn
-            .get("error")
-            .and_then(|error| error.get("message"))
-            .and_then(Value::as_str)
-            .unwrap_or("The automation ended with an error.")
-            .to_owned();
+fn outcome_title(status: &str) -> &'static str {
+    match status {
+        "success" => "Automation succeeded",
+        "failed" | "interrupted" => "Automation failed",
+        _ => "Automation outcome unverified",
     }
-    let result = turn
-        .get("items")
-        .and_then(Value::as_array)
-        .and_then(|items| {
-            items.iter().rev().find_map(|item| {
-                (item.get("type").and_then(Value::as_str) == Some("agentMessage"))
-                    .then(|| item.get("text").and_then(Value::as_str))
-                    .flatten()
-            })
-        })
-        .unwrap_or(if status == "interrupted" {
-            "Automation interrupted."
-        } else {
-            "Automation completed without a written result."
-        });
-    truncate(result, 2_000)
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
@@ -310,6 +320,7 @@ mod tests {
         let pending = PendingAutomation {
             id: "a-1".into(),
             name: "Daily report".into(),
+            final_text: None,
         };
         let notification = from_event(
             "turn/completed",
@@ -321,7 +332,7 @@ mod tests {
                     "durationMs": 1500,
                     "items": [
                         { "type": "userMessage", "text": "Run" },
-                        { "type": "agentMessage", "text": "Found 3 records. Updated the report." }
+                        { "type": "agentMessage", "text": r#"{"status":"success","summary":"Found 3 records. Updated the report."}"# }
                     ]
                 }
             }),
@@ -334,5 +345,45 @@ mod tests {
         assert_eq!(result.name, "Daily report");
         assert_eq!(result.result, "Found 3 records. Updated the report.");
         assert_eq!(result.duration_ms, Some(1500));
+    }
+
+    #[test]
+    fn empty_completed_turn_uses_captured_final_message_not_commentary() {
+        let pending = PendingAutomation { id: "a".into(), name: "Review".into(),
+            final_text: Some(r#"{"status":"failed","summary":"Test non superati."}"#.into()) };
+        let item = from_event("turn/completed", &json!({
+            "threadId":"t", "turn": {"id":"turn", "status":"completed", "items":[]}
+        }), false, Some(&pending)).unwrap();
+        let result = item.automation.unwrap();
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.result, "Test non superati.");
+        assert_eq!(item.title, "Automation failed");
+    }
+
+    #[tokio::test]
+    async fn automation_stream_is_correlated_before_turn_start_response_and_emits_one_result() {
+        let directory = std::env::temp_dir().join(format!("board-result-test-{}", random_id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let client = Arc::new(CodexClient::new());
+        let store = NotificationStore::new(directory.join("notifications.json"), client.clone());
+        // Synthetic local events only: no Codex process, task or model turn is started.
+        client.emit_local_event("board/automation/submitting", json!({"threadId":"t","automationId":"a","automationName":"Review"})).await;
+        client.emit_local_event("item/completed", json!({"threadId":"t","item":{"type":"agentMessage","phase":"commentary","text":"Working..."}})).await;
+        client.emit_local_event("item/completed", json!({"threadId":"t","item":{"type":"agentMessage","phase":"final_answer","text":r#"{"status":"success","summary":"Tutto verificato."}"#}})).await;
+        client.emit_local_event("turn/completed", json!({"threadId":"t","turn":{"id":"fast","status":"completed","items":[]}})).await;
+        client.emit_local_event("board/automation/turn-started", json!({"threadId":"t","turnId":"fast","automationId":"a","automationName":"Review"})).await;
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let items = store.list().await;
+                if !items.is_empty() {
+                    assert_eq!(items.len(), 1);
+                    assert_eq!(items[0].automation.as_ref().unwrap().status, "success");
+                    assert_eq!(items[0].automation.as_ref().unwrap().result, "Tutto verificato.");
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }).await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

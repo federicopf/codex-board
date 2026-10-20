@@ -11,10 +11,10 @@ export function MobileNavigation({ unreadCount, onProjects, onInbox, onAutomatio
 }) {
   const compact=useWindowDimensions().height<500;
   return <View style={[styles.bar,compact&&styles.compact]}>
-    <Pressable style={[styles.item,compact&&styles.compactItem]} onPress={onProjects} accessibilityRole="button" accessibilityLabel="Projects"><MobileIcon name="folder-outline" color={colors.primary}/><Text style={[styles.label,styles.active]}>Projects</Text></Pressable>
-    <Pressable style={[styles.item,compact&&styles.compactItem]} onPress={onInbox} accessibilityRole="button" accessibilityLabel={`Inbox, ${unreadCount} unread`}><View><MobileIcon name="mail-outline" color={colors.textMuted}/>{unreadCount>0&&<View style={styles.badge}><Text style={styles.badgeText}>{unreadCount>99?"99+":unreadCount}</Text></View>}</View><Text style={styles.label}>Inbox</Text></Pressable>
-    <Pressable style={[styles.item,compact&&styles.compactItem]} onPress={onAutomations} accessibilityRole="button"><MobileIcon name="flash-outline" color={colors.textMuted}/><Text style={styles.label}>Workflows</Text></Pressable>
-    <Pressable style={[styles.item,compact&&styles.compactItem]} onPress={onSettings} accessibilityRole="button"><MobileIcon name="settings-outline" color={colors.textMuted}/><Text style={styles.label}>Settings</Text></Pressable>
+    <Pressable style={[styles.item,compact&&styles.compactItem]} onPress={onProjects} accessibilityRole="button" accessibilityLabel="Projects"><MobileIcon name="folder" color={colors.primary}/><Text style={[styles.label,styles.active]}>Projects</Text></Pressable>
+    <Pressable style={[styles.item,compact&&styles.compactItem]} onPress={onInbox} accessibilityRole="button" accessibilityLabel={`Inbox, ${unreadCount} unread`}><View><MobileIcon name="inbox" color={colors.textMuted}/>{unreadCount>0&&<View style={styles.badge}><Text style={styles.badgeText}>{unreadCount>99?"99+":unreadCount}</Text></View>}</View><Text style={styles.label}>Inbox</Text></Pressable>
+    <Pressable style={[styles.item,compact&&styles.compactItem]} onPress={onAutomations} accessibilityRole="button"><MobileIcon name="zap" color={colors.textMuted}/><Text style={styles.label}>Workflows</Text></Pressable>
+    <Pressable style={[styles.item,compact&&styles.compactItem]} onPress={onSettings} accessibilityRole="button"><MobileIcon name="settings" color={colors.textMuted}/><Text style={styles.label}>Settings</Text></Pressable>
   </View>;
 }
 

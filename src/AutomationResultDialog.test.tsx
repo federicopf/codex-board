@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AutomationResultDialog } from "./AutomationResultDialog";
+afterEach(cleanup);
 
 describe("AutomationResultDialog", () => {
   it("shows the concise result and keeps the full conversation secondary", () => {
@@ -20,5 +21,15 @@ describe("AutomationResultDialog", () => {
     expect(screen.getByText("3 records")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Open full conversation" }));
     expect(onOpenThread).toHaveBeenCalledWith("t-1");
+  });
+  it.each(["failed", "interrupted", "unknown", "success"])("shows %s accurately and only offers relevant retries", status => {
+    render(<AutomationResultDialog notification={{
+      id: "n", kind: "automation", title: "Result", message: "Result", threadId: null, createdAt: 1, read: false,
+      automation: { id: "a", name: "Review", result: "Short report", status, durationMs: null },
+    }} onClose={vi.fn()} onOpenThread={vi.fn()}/>);
+    const label = status === "success" ? "Success" : status === "unknown" ? "Unverified" : "Failed";
+    expect(screen.getByText(label)).toBeTruthy();
+    expect(Boolean(screen.queryByRole("button", { name: "Retry" }))).toBe(status !== "success");
+    expect(screen.queryByText("Completed successfully")).toBeNull();
   });
 });

@@ -33,6 +33,7 @@ export class BoardApi {
       },
     });
     if (!response.ok) {
+      if (response.status === 413) throw new Error("Photos exceed the upload limit (32 MB on the updated PC). Choose fewer or smaller images.");
       const body = await response.json().catch(() => ({})) as { error?: string };
       throw new Error(body.error || `Gateway returned ${response.status}`);
     }
@@ -70,6 +71,13 @@ export class BoardApi {
   respond(requestId: JsonValue, result: JsonValue) { return this.request<void>("/v1/requests/respond", { method: "POST", body: JSON.stringify({ requestId, result }) }); }
   automations() { return this.request<Automation[]>("/v1/automations"); }
   createAutomation(input: CreateAutomationInput) { return this.request<Automation>("/v1/automations", { method: "POST", body: JSON.stringify(input) }); }
+  async retryAutomation(id: string) {
+    try { return await this.request<void>(`/v1/automations/${encodeURIComponent(id)}/retry`, { method: "POST" }); }
+    catch (error) {
+      if (error instanceof Error && /404|405/.test(error.message)) throw new Error("Aggiorna Codex Board sul PC per rilanciare le automazioni.");
+      throw error;
+    }
+  }
   async updateAutomation(id: string, input: CreateAutomationInput) {
     try { return await this.request<Automation>(`/v1/automations/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) }); }
     catch (error) {
