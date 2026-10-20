@@ -492,7 +492,7 @@ function App() {
     try {
       const created = await forkThread(forkingThread.id, category, title, lastTurnId);
       setForkingThreadId(null);
-      setChatThreadId(created.id);
+      retainCreatedThread(created);
       await refresh(true);
     } finally {
       setForkBusy(false);
