@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { automationOutcome, automationEditFields, automationUpdateInput, automationDateTimeValue, automationIntervalMinutes, formatAutomationInterval } from "@codex-board/protocol";
 import type { Automation, AutomationIntervalUnit, CreateAutomationInput } from "@codex-board/protocol";
-import { createAutomation, deleteAutomation, listAutomations, setAutomationEnabled, updateAutomation } from "./api";
+import { createAutomation, deleteAutomation, listAutomations, retryAutomation, setAutomationEnabled, updateAutomation } from "./api";
 import type { BoardThread } from "./types";
 import { Icon } from "./ui/Icon";
 import { RetryAutomationButton } from "./RetryAutomationButton";
@@ -14,6 +14,31 @@ const BOARD_WIDE = "__board__";
 
 type AutomationGroup = { key: string; label: string; automations: Automation[] };
 type PipelineAction = Extract<Automation["action"], { kind: "categoryPipeline" } | { kind: "scheduledCategoryPipeline" }>;
+
+function ScheduleTaskPicker({ tasks, selectedId, onSelect }: { tasks: BoardThread[]; selectedId: string; onSelect: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const selected = tasks.find((task) => task.id === selectedId);
+  return <div className="automation-task-picker"><span className="automation-task-picker-label">Schedule tasks · {tasks.length}</span>
+    <button type="button" className="automation-task-select" onClick={() => setOpen(true)}>{selected?.displayTitle || "Choose a Schedule task"}<span>⌄</span></button>
+    {open && <div className="dialog-backdrop automation-task-modal" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}><section className="automations-dialog" role="dialog" aria-modal="true" aria-label="Choose a Schedule task"><header><div><span className="eyebrow">Schedule</span><h2>Choose a task</h2></div><button className="icon-button" aria-label="Close" onClick={() => setOpen(false)}>×</button></header><div className="automation-task-grid">{tasks.map((task) => <button type="button" key={task.id} className={`automation-task-option${selectedId === task.id ? " selected" : ""}`} aria-pressed={selectedId === task.id} onClick={() => { onSelect(task.id); setOpen(false); }}><strong>{task.displayTitle}</strong><small>{task.projectLabel} · Updated {task.updatedAt ? new Date(task.updatedAt).toLocaleDateString() : "recently"}</small></button>)}</div>{tasks.length === 0 && <p className="automation-task-empty">No tasks in Schedule.</p>}</section></div>}
+  </div>;
+}
+
+function RetrySelectedAutomations({ items, onAccepted }: { items: Automation[]; onAccepted: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const retryable = items.filter((item) => item.lastResult ? automationOutcome(item.lastResult.status).retryable : Boolean(item.lastError));
+  async function runSelected() {
+    setBusy(true); setError(null);
+    try { await Promise.all(selected.map((id) => retryAutomation(id))); setOpen(false); onAccepted(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBusy(false); }
+  }
+  return <><button type="button" className="automation-new" disabled={!retryable.length} onClick={() => { setSelected(retryable.filter((item) => item.runState !== "running").map((item) => item.id)); setOpen(true); }}>Retry automations</button>
+    {open && <div className="dialog-backdrop automation-task-modal" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setOpen(false); }}><section className="automations-dialog" role="dialog" aria-modal="true" aria-label="Retry automations"><header><div><span className="eyebrow">Manual run</span><h2>Select automations</h2><p>Choose which failed workflows to run again.</p></div><button className="icon-button" disabled={busy} onClick={() => setOpen(false)}>×</button></header><div className="automation-bulk-list">{retryable.map((item) => <label key={item.id}><input type="checkbox" disabled={item.runState === "running" || busy} checked={selected.includes(item.id)} onChange={() => setSelected((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])}/><span>{item.name}{item.runState === "running" ? " · Running" : ""}</span></label>)}</div>{error && <p role="alert" className="automation-form-error">{error}</p>}<div className="automation-create-actions"><button type="button" className="secondary" disabled={busy} onClick={() => setOpen(false)}>Cancel</button><button className="automation-submit" disabled={busy || selected.length === 0} onClick={() => void runSelected()}>{busy ? "Queuing…" : `Retry ${selected.length} selected`}</button></div></section></div>}</>;
+}
 
 function automationCopy(automation: Automation, names: Map<string, string>): string {
   const action = automation.action;
@@ -52,8 +77,8 @@ export function AutomationsDialog({ threads, categories, onClose, revision = 0 }
   const [view, setView] = useState<DialogView>("overview");
   const [kind, setKind] = useState<Kind>("recurringMessage");
   const [name, setName] = useState("");
-  const [threadId, setThreadId] = useState(threads[0]?.id || "");
-  const [taskProjectKey, setTaskProjectKey] = useState(threads[0]?.projectKey || "");
+  const [threadId, setThreadId] = useState(threads.find((thread) => thread.category.toLocaleLowerCase() === "schedule")?.id || "");
+  const [taskProjectKey, setTaskProjectKey] = useState(threads.find((thread) => thread.category.toLocaleLowerCase() === "schedule")?.projectKey || "");
   const [prompt, setPrompt] = useState("");
   const [minutes, setMinutes] = useState("60");
   const [intervalValue, setIntervalValue] = useState("1");
@@ -70,14 +95,15 @@ export function AutomationsDialog({ threads, categories, onClose, revision = 0 }
   const recurringMinutes = automationIntervalMinutes(Number.parseInt(intervalValue, 10), intervalUnit);
   const threadNames = useMemo(() => new Map(threads.map((thread) => [thread.id, thread.displayTitle])), [threads]);
   const threadsById = useMemo(() => new Map(threads.map((thread) => [thread.id, thread])), [threads]);
+  const scheduleThreads = useMemo(() => threads.filter((thread) => thread.category.toLocaleLowerCase() === "schedule"), [threads]);
   const taskProjects = useMemo(() => {
     const projects = new Map<string, string>();
-    for (const thread of threads) projects.set(thread.projectKey, thread.projectLabel);
+    for (const thread of scheduleThreads) projects.set(thread.projectKey, thread.projectLabel);
     return [...projects].sort((left, right) => left[1].localeCompare(right[1]));
-  }, [threads]);
-  const projectThreads = useMemo(() => threads
+  }, [scheduleThreads]);
+  const projectThreads = useMemo(() => scheduleThreads
     .filter((thread) => thread.projectKey === taskProjectKey)
-    .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)), [threads, taskProjectKey]);
+    .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)), [scheduleThreads, taskProjectKey]);
   const groups = useMemo<AutomationGroup[]>(() => {
     const grouped = new Map<string, AutomationGroup>();
     for (const automation of items) {
@@ -161,6 +187,7 @@ export function AutomationsDialog({ threads, categories, onClose, revision = 0 }
     {view !== "overview" ? <form className="automation-form automation-create-view" onSubmit={(event) => void submit(event)}>
       {creatingPipeline ? <div className="automation-tabs"><button type="button" className={pipelineTiming === "delay" ? "active" : ""} onClick={() => setPipelineTiming("delay")}>After time</button><button type="button" className={pipelineTiming === "scheduled" ? "active" : ""} onClick={() => setPipelineTiming("scheduled")}>Specific date</button></div> : <div className="automation-tabs automation-tabs-three"><button type="button" className={kind === "recurringMessage" ? "active" : ""} onClick={() => setKind("recurringMessage")}>Interval</button><button type="button" className={kind === "scheduledMessage" ? "active" : ""} onClick={() => setKind("scheduledMessage")}>Once</button><button type="button" className={kind === "calendarMessage" ? "active" : ""} onClick={() => setKind("calendarMessage")}>Calendar</button></div>}
       <label><span>Name</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Daily project check" /></label>
+      {!creatingPipeline && <ScheduleTaskPicker tasks={scheduleThreads} selectedId={threadId} onSelect={setThreadId}/>}
       {!creatingPipeline ? <><label><span>Project</span><select value={taskProjectKey} onChange={(event) => { const key = event.target.value; setTaskProjectKey(key); setThreadId(threads.find((thread) => thread.projectKey === key)?.id || ""); }}>{taskProjects.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><div className="automation-task-picker">{threadId && !threadsById.has(threadId) && <p className="automation-task-empty">Current task is unavailable ({threadId}). Select a task to change the target.</p>}<span className="automation-task-picker-label">Active tasks · {projectThreads.length}</span>{projectThreads.length ? <div className="automation-task-grid">{projectThreads.map((thread) => <button type="button" key={thread.id} className={`automation-task-option${threadId === thread.id ? " selected" : ""}`} aria-pressed={threadId === thread.id} onClick={() => setThreadId(thread.id)}><strong>{thread.displayTitle}</strong><small>{thread.category} · Updated {thread.updatedAt ? new Date(thread.updatedAt).toLocaleDateString() : "recently"}</small></button>)}</div> : <p className="automation-task-empty">No active tasks in this project.</p>}</div><label><span>Prompt</span><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Review progress and continue the next useful step" /></label></> : <div className="pipeline-fields"><label><span>From</span><select value={fromCategory} onChange={(event) => setFromCategory(event.target.value)}>{[...new Set([...categories, fromCategory, toCategory].filter(Boolean))].map((category) => <option key={category}>{category}</option>)}</select></label><b>→</b><label><span>To</span><select value={toCategory} onChange={(event) => setToCategory(event.target.value)}>{[...new Set([...categories, fromCategory, toCategory].filter(Boolean))].map((category) => <option key={category}>{category}</option>)}</select></label></div>}
       {!creatingPipeline && kind === "recurringMessage" && <label><span>Repeat every</span><div className="number-field"><input type="number" min="1" max={intervalUnit === "days" ? 365 : intervalUnit === "hours" ? 8_760 : 525_600} value={intervalValue} onChange={(event) => setIntervalValue(event.target.value)} /><select className="automation-interval-unit" value={intervalUnit} onChange={(event) => setIntervalUnit(event.target.value as AutomationIntervalUnit)}><option value="minutes">minutes</option><option value="hours">hours</option><option value="days">days</option></select></div></label>}
       {!creatingPipeline && kind === "scheduledMessage" && <label><span>Run once</span><input type="datetime-local" value={runAt} onChange={(event) => setRunAt(event.target.value)} /></label>}
@@ -172,6 +199,7 @@ export function AutomationsDialog({ threads, categories, onClose, revision = 0 }
     </form> : <div className="automation-list automation-overview">
       <div className="automation-list-heading"><div><span className="eyebrow">Orchestration</span><strong>Automation schedule</strong></div><div className="automation-list-actions"><select aria-label="Filter automations by project" value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}><option value={ALL_PROJECTS}>All projects</option>{projectOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><button className="automation-new" onClick={() => beginCreate("createAutomation")}>+ Automation</button><button className="pipeline-new" onClick={() => beginCreate("createPipeline")}>→ Pipeline</button></div></div>
       <div className="automation-stats"><div><strong>{items.length}</strong><span>Total</span></div><div><strong>{activeCount}</strong><span>Active</span></div><div><strong>{nextDayCount}</strong><span>Next 24h</span></div></div>
+      <div className="automation-bulk-actions"><RetrySelectedAutomations items={items} onAccepted={refresh}/></div>
       {error && <p role="alert" className="automation-form-error">{error}</p>}
       {items.length === 0 && <div className="automation-empty">No automations yet.</div>}
       {items.length > 0 && groups.length === 0 && <div className="automation-empty">No automations for this project.</div>}
