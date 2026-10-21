@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
-import type { QueuedMessage, ThreadDto } from "@codex-board/protocol";
+import type { ProjectCustomer, QueuedMessage, ThreadDto } from "@codex-board/protocol";
 import { colors } from "./theme";
 import { MobileIcon } from "./MobileIcon";
 import { MobileActionSheet } from "./MobileActionSheet";
@@ -11,6 +11,8 @@ interface MobileBoardHomeProps {
   loading: boolean;
   refreshing: boolean;
   projectLabel: string;
+  customerId: string | null;
+  customers: ProjectCustomer[];
   showProject: boolean;
   totalCount: number;
   workingCount: number;
@@ -25,6 +27,9 @@ interface MobileBoardHomeProps {
   onSearch: (value: string) => void;
   onBackToProjects: () => void;
   onCategory: (category: string) => void;
+  onCustomer: (customerId: string | null) => void;
+  onCreateCustomer: () => void;
+  onAssignCustomer: (thread: ThreadDto) => void;
   onOpen: (thread: ThreadDto) => void;
   onMove: (thread: ThreadDto) => void;
   onFork: (thread: ThreadDto) => void;
@@ -44,6 +49,11 @@ export function MobileBoardHome(props: MobileBoardHomeProps) {
       <View style={styles.heading}><Text style={styles.title} numberOfLines={1}>{props.projectLabel}</Text><Text style={styles.subtitle}>{props.totalCount} tasks{props.workingCount?` · ${props.workingCount} working`:""}{!props.connected?" · Reconnecting…":""}</Text></View>
       <Pressable style={[styles.iconButton,styles.newButton]} onPress={props.onNewTask} accessibilityRole="button" accessibilityLabel="New task"><MobileIcon name="plus" size={24} color="white"/></Pressable>
     </View>
+    {!props.showProject&&<ScrollView horizontal style={styles.customerScroll} contentContainerStyle={styles.customerChoices} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      <Pressable style={[styles.customerChoice,props.customerId===null&&styles.customerChoiceActive]} onPress={()=>props.onCustomer(null)} accessibilityRole="button" accessibilityState={{selected:props.customerId===null}}><Text style={[styles.customerChoiceText,props.customerId===null&&styles.customerChoiceTextActive]}>Project threads</Text></Pressable>
+      {props.customers.map(customer=><Pressable key={customer.id} style={[styles.customerChoice,props.customerId===customer.id&&styles.customerChoiceActive]} onPress={()=>props.onCustomer(customer.id)} accessibilityRole="button" accessibilityState={{selected:props.customerId===customer.id}}><Text style={[styles.customerChoiceText,props.customerId===customer.id&&styles.customerChoiceTextActive]}>{customer.name}</Text><Text style={[styles.customerChoiceCount,props.customerId===customer.id&&styles.customerChoiceTextActive]}>{customer.threadIds.length}</Text></Pressable>)}
+      <Pressable style={styles.customerAdd} onPress={props.onCreateCustomer} accessibilityRole="button" accessibilityLabel="Add customer"><MobileIcon name="plus" size={17} color={colors.primary}/><Text style={styles.customerAddText}>Customer</Text></Pressable>
+    </ScrollView>}
     <View style={[styles.search,compact&&styles.compactSearch]}>
       <MobileIcon name="search" color={colors.textMuted}/>
       <TextInput value={props.search} onChangeText={props.onSearch} style={styles.searchInput} placeholder="Search this project" placeholderTextColor={colors.textSoft} returnKeyType="search"/>
@@ -72,6 +82,7 @@ export function MobileBoardHome(props: MobileBoardHomeProps) {
     {actionThread&&<MobileActionSheet title={props.titleFor(actionThread)} onClose={()=>setActionThread(null)} actions={[
       {label:"Rename conversation",icon:"edit-2",onPress:()=>props.onRename(actionThread)},
       {label:"Move to category",icon:"repeat",onPress:()=>props.onMove(actionThread)},
+      {label:"Assign to customer",icon:"users",onPress:()=>props.onAssignCustomer(actionThread)},
       {label:"Fork conversation",icon:"git-branch",onPress:()=>props.onFork(actionThread)},
       ...(props.isWorking(actionThread)?[{label:"Stop Codex",icon:"stop-circle" as const,onPress:()=>props.onStop(actionThread)}]:[]),
       {label:"Archive conversation",icon:"archive",destructive:true,onPress:()=>props.onArchive(actionThread)},
@@ -84,6 +95,7 @@ const styles=StyleSheet.create({
   compactHeader:{minHeight:60,paddingVertical:6},compactSearch:{marginTop:8,marginBottom:4,minHeight:44},
   iconButton:{width:48,height:48,flexShrink:0,alignItems:"center",justifyContent:"center",borderRadius:15},newButton:{backgroundColor:colors.ink},heading:{flex:1,minWidth:0},title:{fontSize:21,fontWeight:"700",letterSpacing:-.5,color:colors.text},subtitle:{marginTop:5,fontSize:12,color:colors.textMuted},
   search:{margin:16,marginBottom:8,minHeight:48,paddingLeft:14,flexDirection:"row",alignItems:"center",gap:10,borderWidth:1,borderColor:colors.border,borderRadius:14,backgroundColor:colors.surface},searchInput:{flex:1,minWidth:0,paddingVertical:12,paddingRight:8,color:colors.text,fontSize:14},clearSearch:{width:44,height:44,alignItems:"center",justifyContent:"center"},
+  customerScroll:{flexGrow:0,flexShrink:0,maxHeight:52},customerChoices:{paddingHorizontal:14,paddingVertical:6,gap:7},customerChoice:{minHeight:38,paddingHorizontal:12,flexDirection:"row",alignItems:"center",gap:7,borderWidth:1,borderColor:colors.border,borderRadius:12,backgroundColor:colors.surface},customerChoiceActive:{backgroundColor:colors.ink,borderColor:colors.ink},customerChoiceText:{fontSize:12,fontWeight:"600",color:colors.textMuted},customerChoiceTextActive:{color:"white"},customerChoiceCount:{fontSize:11,color:colors.textSoft},customerAdd:{minHeight:38,paddingHorizontal:10,flexDirection:"row",alignItems:"center",gap:5,borderRadius:12,backgroundColor:colors.primarySoft},customerAddText:{fontSize:12,fontWeight:"600",color:colors.primary},
   categoryScroll:{flexGrow:0,flexShrink:0,maxHeight:64},categories:{paddingHorizontal:16,paddingVertical:8,gap:8},category:{minHeight:44,paddingHorizontal:14,flexDirection:"row",alignItems:"center",gap:9,borderRadius:14,backgroundColor:colors.surface},categoryActive:{backgroundColor:colors.ink},categoryText:{fontSize:13,fontWeight:"600",color:colors.textMuted},categoryTextActive:{color:"white"},categoryCount:{fontSize:12,color:colors.textSoft},
   list:{flex:1},listContent:{padding:16,paddingTop:8,paddingBottom:24,flexGrow:1},results:{marginBottom:14,fontSize:12,color:colors.textMuted},
   card:{marginBottom:10,flexDirection:"row",alignItems:"flex-start",borderWidth:1,borderColor:colors.border,borderRadius:18,backgroundColor:colors.surface,overflow:"hidden"},workingCard:{borderColor:"#BBBDF3"},cardMain:{flex:1,minWidth:0,padding:16,paddingRight:0},moreButton:{width:48,height:52,alignItems:"center",justifyContent:"center",flexShrink:0},cardMeta:{flexDirection:"row",alignItems:"center",gap:6,marginBottom:9},project:{maxWidth:"55%",marginRight:4,fontSize:11,color:colors.textMuted},statusDot:{width:6,height:6,borderRadius:3,backgroundColor:colors.textSoft},statusDotLive:{backgroundColor:colors.success},status:{fontSize:11,color:colors.textMuted},statusLive:{color:colors.success},cardTitle:{fontSize:17,lineHeight:23,fontWeight:"600",letterSpacing:-.2,color:colors.text},preview:{marginTop:8,fontSize:13,lineHeight:20,color:colors.textMuted},

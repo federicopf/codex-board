@@ -3,6 +3,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { CSSProperties } from "react";
 import type { BoardNotification } from "@codex-board/protocol";
+import type { ProjectCustomer } from "@codex-board/protocol";
 import type { ProjectInfo } from "./lib/projects";
 import { ALL_PROJECTS } from "./lib/projects";
 import type { BoardThread, JsonValue, QueuedMessage } from "./types";
@@ -30,12 +31,16 @@ function updatedLabel(updatedAt: number | null): string {
   return `Updated ${days}d ago`;
 }
 
-function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen, onMove, onFork, onRenameThread, onDelete, onStop, overlay = false }: {
+function projectPathKey(path: string) { return path.replaceAll("\\", "/").replace(/\/+$/, "").toLocaleLowerCase(); }
+
+function ThreadCard({ thread, pending, working, queuedCount, showProject, customers, onAssignCustomer, onOpen, onMove, onFork, onRenameThread, onDelete, onStop, overlay = false }: {
   thread: BoardThread;
   pending: boolean;
   working: boolean;
   queuedCount: number;
   showProject: boolean;
+  customers: ProjectCustomer[];
+  onAssignCustomer?: (threadId: string, customerId: string | null) => void;
   onOpen?: (threadId: string) => void;
   onMove?: (threadId: string) => void;
   onFork?: (threadId: string) => void;
@@ -64,6 +69,7 @@ function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen
       {thread.preview && thread.preview.trim() !== thread.displayTitle && <div className="card-preview">{thread.preview}</div>}
       <footer>
         {pending ? <span className="saving">Saving changes…</span> : <span className="card-updated">{updatedLabel(thread.updatedAt)}</span>}
+        {!overlay && customers.length > 0 && <label className="card-customer-control" onPointerDown={(event) => event.stopPropagation()}><span className="sr-only">Customer</span><select aria-label={`Assign ${thread.displayTitle} to customer`} value={customers.find((customer) => customer.threadIds.includes(thread.id))?.id || ""} onChange={(event) => onAssignCustomer?.(thread.id, event.target.value || null)}><option value="">Project thread</option>{customers.map((customer) => <option value={customer.id} key={customer.id}>{customer.name}</option>)}</select></label>}
         {!overlay && <button className="card-icon-action" type="button" aria-label={`Fork ${thread.displayTitle}`} title={working ? "Wait for the active turn to finish" : "Fork conversation"} disabled={working || pending} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onFork?.(thread.id); }}><Icon name="fork" /></button>}
         {!overlay && <button className="card-icon-action" type="button" aria-label={`Archive ${thread.displayTitle}`} title="Archive conversation" disabled={pending || working} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onDelete?.(thread.id); }}><Icon name="trash" /></button>}
         {!overlay && working && <button className="card-icon-action danger" type="button" aria-label={`Stop ${thread.displayTitle}`} title="Stop active turn" disabled={pending} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onStop?.(thread.id); }}><Icon name="stop" /></button>}
@@ -74,13 +80,15 @@ function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen
   );
 }
 
-function BoardColumn({ category, threads, pendingIds, workingIds, queues, showProject, onOpen, onMove, onFork, onRename, onRenameThread, onDelete, onStop }: {
+function BoardColumn({ category, threads, pendingIds, workingIds, queues, showProject, customers, onAssignCustomer, onOpen, onMove, onFork, onRename, onRenameThread, onDelete, onStop }: {
   category: string;
   threads: BoardThread[];
   pendingIds: Set<string>;
   workingIds: Set<string>;
   queues: Record<string, QueuedMessage[]>;
   showProject: boolean;
+  customers: ProjectCustomer[];
+  onAssignCustomer: (threadId: string, customerId: string | null) => void;
   onOpen: (threadId: string) => void;
   onMove: (threadId: string) => void;
   onFork: (threadId: string) => void;
@@ -103,7 +111,7 @@ function BoardColumn({ category, threads, pendingIds, workingIds, queues, showPr
         <button className="column-rename" type="button" aria-label={`Rename ${category}`} title="Rename category" onClick={() => onRename(category)}><Icon name="edit" /></button>
       </header>
       <div className="column-body">
-        {threads.map((thread) => <ThreadCard key={thread.id} thread={thread} pending={pendingIds.has(thread.id)} working={workingIds.has(thread.id)} queuedCount={queues[thread.id]?.length || 0} showProject={showProject} onOpen={onOpen} onMove={onMove} onFork={onFork} onRenameThread={onRenameThread} onDelete={onDelete} onStop={onStop} />)}
+        {threads.map((thread) => <ThreadCard key={thread.id} thread={thread} pending={pendingIds.has(thread.id)} working={workingIds.has(thread.id)} queuedCount={queues[thread.id]?.length || 0} showProject={showProject} customers={customers.filter((customer) => projectPathKey(customer.projectCwd) === projectPathKey(thread.cwd || ""))} onAssignCustomer={onAssignCustomer} onOpen={onOpen} onMove={onMove} onFork={onFork} onRenameThread={onRenameThread} onDelete={onDelete} onStop={onStop} />)}
       </div>
     </section>
   );
@@ -111,6 +119,8 @@ function BoardColumn({ category, threads, pendingIds, workingIds, queues, showPr
 
 export interface BoardWorkspaceProps {
   project: string;
+  customerId: string | null;
+  customers: ProjectCustomer[];
   statusFilter: string;
   search: string;
   projects: ProjectInfo[];
@@ -126,6 +136,9 @@ export interface BoardWorkspaceProps {
   notifications: BoardNotification[];
   refreshing: boolean;
   onProjectChange: (project: string) => void;
+  onCustomerChange: (project: string, customerId: string | null) => void;
+  onCreateCustomer: (project: string) => void;
+  onAssignCustomer: (threadId: string, customerId: string | null) => void;
   onStatusChange: (status: string) => void;
   onSearchChange: (search: string) => void;
   onRefresh: () => void;
@@ -162,6 +175,7 @@ function usageDetails(value: JsonValue | null): { used: number | null; resetsAt:
 
 export function BoardWorkspace(props: BoardWorkspaceProps) {
   const projectLabel = props.project === ALL_PROJECTS ? "All projects" : props.projects.find((item) => item.key === props.project)?.label || "Project";
+  const selectedCustomer = props.customers.find((customer) => customer.id === props.customerId);
   const unread = props.notifications.filter((item) => !item.read).length;
   const usage = usageDetails(props.rateLimits);
   const resetLabel = usage.resetsAt ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(usage.resetsAt * 1000)) : "Reset unavailable";
@@ -186,6 +200,7 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
                 {stats.working > 0 && <i className="project-live-dot" aria-label={`${stats.working} working`} />}
               </button>
               {item.key !== ALL_PROJECTS && <button type="button" className="sidebar-project-archive" aria-label={`Archive project ${item.label}`} title="Archive project" onClick={(event) => { event.stopPropagation(); props.onDeleteProject(item.key); }}><Icon name="trash" /></button>}
+              {item.key !== ALL_PROJECTS && props.customers.filter((customer) => projectPathKey(customer.projectCwd) === item.key).map((customer) => <button type="button" key={customer.id} className={`sidebar-customer${props.customerId === customer.id ? " active" : ""}`} onClick={() => props.onCustomerChange(item.key, customer.id)}><span aria-hidden="true">›</span><span>{customer.name}</span><small>{customer.threadIds.length}</small></button>)}
             </div>;
           })}
         </div>
@@ -198,10 +213,11 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
 
       <section className="workspace-view">
         <header className="workspace-titlebar">
-          <div><span className="eyebrow">Project board</span><h1>{projectLabel}</h1><p>{props.project === ALL_PROJECTS ? "A complete overview of work across every project." : "Move tasks through this project's workflow and continue any Codex conversation."}</p></div>
+          <div><span className="eyebrow">{selectedCustomer ? "Customer workspace" : "Project board"}</span><h1>{selectedCustomer?.name || projectLabel}</h1><p>{selectedCustomer ? `Conversations for ${selectedCustomer.name} in ${projectLabel}.` : props.project === ALL_PROJECTS ? "A complete overview of work across every project." : "Project threads stay general unless assigned to a customer."}</p></div>
           <div className="titlebar-actions">
             <button className="button secondary" disabled={props.refreshing} onClick={props.onRefresh}><Icon name="refresh" className={props.refreshing ? "spin" : ""} /> Refresh</button>
             <button className="button secondary" onClick={props.onCategories}><Icon name="categories" /> Categories</button>
+            {props.project !== ALL_PROJECTS && <button className="button secondary" onClick={() => props.onCreateCustomer(props.project)}><Icon name="plus" /> Add customer</button>}
             <button className="button primary" onClick={props.onNewTask}><Icon name="plus" /> New task</button>
           </div>
         </header>
@@ -218,7 +234,7 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
           <div className="empty-board"><div className="empty-illustration"><Icon name="search" /></div><h2>No tasks match this board</h2><p>Change the status or search to see more work in this project.</p>{(props.search || props.statusFilter !== ALL_STATUSES) && <button className="button secondary" onClick={() => { props.onSearchChange(""); props.onStatusChange(ALL_STATUSES); }}>Clear filters</button>}</div>
         ) : (
           <div className="board" aria-label="Task board">
-            {props.displayedCategories.map((category) => <BoardColumn key={category} category={category} threads={props.filteredThreads.filter((thread) => thread.category === category)} pendingIds={props.pendingIds} workingIds={props.workingIds} queues={props.queues} showProject={props.project === ALL_PROJECTS} onOpen={props.onOpen} onMove={props.onMove} onFork={props.onFork} onRename={props.onRename} onRenameThread={props.onRenameThread} onDelete={props.onDelete} onStop={props.onStop} />)}
+            {props.displayedCategories.map((category) => <BoardColumn key={category} category={category} threads={props.filteredThreads.filter((thread) => thread.category === category)} pendingIds={props.pendingIds} workingIds={props.workingIds} queues={props.queues} showProject={props.project === ALL_PROJECTS} customers={props.customers} onAssignCustomer={props.onAssignCustomer} onOpen={props.onOpen} onMove={props.onMove} onFork={props.onFork} onRename={props.onRename} onRenameThread={props.onRenameThread} onDelete={props.onDelete} onStop={props.onStop} />)}
           </div>
         )}
       </section>
@@ -227,5 +243,5 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
 }
 
 export function ThreadDragOverlay({ thread, pending, working, queuedCount, showProject }: { thread: BoardThread; pending: boolean; working: boolean; queuedCount: number; showProject: boolean }) {
-  return <ThreadCard thread={thread} pending={pending} working={working} queuedCount={queuedCount} showProject={showProject} overlay />;
+  return <ThreadCard thread={thread} pending={pending} working={working} queuedCount={queuedCount} showProject={showProject} customers={[]} overlay />;
 }

@@ -12,7 +12,7 @@ import {
 import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { asCodexError, clearNotifications, createThread, archiveThread, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, getRateLimits, interruptTurn, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameThread, sendMessage, setBoardConfig } from "./api";
-import type { BoardNotification } from "@codex-board/protocol";
+import type { BoardNotification, ProjectCustomer } from "@codex-board/protocol";
 import { turnPreferences } from "./lib/turnSettings";
 import { setTurnSettings } from "./api";
 import "./App.css";
@@ -22,6 +22,7 @@ import { RemoteDialog } from "./RemoteDialog";
 import { AutomationsDialog } from "./AutomationsDialog";
 import { NewTaskDialog } from "./NewTaskDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
+import { NewCustomerDialog } from "./NewCustomerDialog";
 import { ForkThreadDialog } from "./ForkThreadDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { loadThread } from "./api";
@@ -64,10 +65,12 @@ type CategoryDialogState = { mode: "create" } | { mode: "rename"; category: stri
 type ArchiveDialogState = { kind: "thread"; threadId: string; title: string } | { kind: "project"; projectKey: string; title: string; threadIds: string[] };
 interface Toast { id: number; threadId: string; title: string; message: string; kind: "done" | "error"; }
 const PROJECT_BOARD_KEY = "codex-board.project-board.v1";
+const PROJECT_CUSTOMER_KEY = "codex-board.project-customer.v1";
 
 function App() {
   const [threads, setThreads] = useState<BoardThread[]>([]);
   const [project, setProject] = useState(() => localStorage.getItem(PROJECT_BOARD_KEY) || ALL_PROJECTS);
+  const [customerId, setCustomerId] = useState<string | null>(() => localStorage.getItem(PROJECT_CUSTOMER_KEY));
   const [statusFilter, setStatusFilter] = useState(ALL_STATUSES);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -91,6 +94,8 @@ function App() {
   const [newTaskDialog, setNewTaskDialog] = useState(false);
   const [newProjectDialog, setNewProjectDialog] = useState(false);
   const [projectPaths, setProjectPaths] = useState<string[]>([]);
+  const [customers, setCustomers] = useState<ProjectCustomer[]>([]);
+  const [newCustomerProjectKey, setNewCustomerProjectKey] = useState<string | null>(null);
   const [productTour, setProductTour] = useState(() => localStorage.getItem("codex-board.tour.v1") !== "done");
   const [notifications, setNotifications] = useState<BoardNotification[]>([]);
   const [automationAlerts, setAutomationAlerts] = useState<BoardNotification[]>([]);
@@ -117,6 +122,7 @@ function App() {
   const toastSequence = useRef(0);
   const approvalModeRef = useRef(approvalMode);
   const projectPathsRef = useRef(projectPaths);
+  const customersRef = useRef(customers);
   const boardConfigReady = useRef(false);
   const notificationIdsRef = useRef<Set<string> | null>(null);
   const automationTurnIdsRef = useRef(new Set<string>());
@@ -180,6 +186,7 @@ function App() {
       const localCategories = loadCategoryOrder();
       const categories = config.categories.length ? config.categories : localCategories;
       const projects = [...(config.projects || [])];
+      const savedCustomers = config.customers || [];
       for (const thread of threadsRef.current) if (thread.cwd && !projects.some((cwd) => cwd.toLocaleLowerCase() === thread.cwd!.toLocaleLowerCase())) projects.push(thread.cwd);
       const mode = config.revision > 0 ? config.approvalMode : loadApprovalMode();
       const localTurnSettings: TurnSettings = {
@@ -196,11 +203,13 @@ function App() {
       }
       const turnSettings = turnPreferences.getSnapshot().settings;
       if (config.revision === 0 || projects.length !== (config.projects || []).length) {
-        await setBoardConfig({ categories, projects, approvalMode: mode, turnSettings, revision: config.revision });
+        await setBoardConfig({ categories, projects, customers: savedCustomers, approvalMode: mode, turnSettings, revision: config.revision });
       }
       if (cancelled) return;
       setCategoryOrder(categories);
       projectPathsRef.current = projects;
+      customersRef.current = savedCustomers;
+      setCustomers(savedCustomers);
       setProjectPaths(projects);
       setApprovalMode(mode);
       boardConfigReady.current = true;
@@ -237,11 +246,11 @@ function App() {
     const timer = window.setInterval(load, 2000);
     return () => window.clearInterval(timer);
   }, [chatThreadId]);
-  const persistBoardConfig = useCallback((categories: string[], mode: ApprovalMode, projects = projectPathsRef.current) => {
+  const persistBoardConfig = useCallback((categories: string[], mode: ApprovalMode, projects = projectPathsRef.current, nextCustomers = customersRef.current) => {
     saveCategoryOrder(categories);
     saveApprovalMode(mode);
     projectPathsRef.current = projects;
-    if (boardConfigReady.current) void setBoardConfig({ categories, projects, approvalMode: mode, turnSettings: turnPreferences.getSnapshot().settings, revision: 0 }).catch((cause) => setError(asCodexError(cause)));
+    if (boardConfigReady.current) void setBoardConfig({ categories, projects, customers: nextCustomers, approvalMode: mode, turnSettings: turnPreferences.getSnapshot().settings, revision: 0 }).catch((cause) => setError(asCodexError(cause)));
   }, []);
   useEffect(() => {
     approvalModeRef.current = approvalMode;
@@ -383,6 +392,8 @@ function App() {
 
   const selectProjectBoard = useCallback((key: string) => {
     setProject(key);
+    setCustomerId(null);
+    localStorage.removeItem(PROJECT_CUSTOMER_KEY);
     setStatusFilter(ALL_STATUSES);
     setSearch("");
     localStorage.setItem(PROJECT_BOARD_KEY, key);
@@ -397,10 +408,41 @@ function App() {
     selectProjectBoard(buildProjectMap([], [cwd]).keys().next().value || ALL_PROJECTS);
   }
 
-  const visibleThreads = useMemo(
-    () => (project === ALL_PROJECTS ? threads : threads.filter((item) => item.projectKey === project)),
-    [project, threads],
-  );
+  function selectCustomerBoard(projectKey: string, nextCustomerId: string | null) {
+    selectProjectBoard(projectKey);
+    setCustomerId(nextCustomerId);
+    if (nextCustomerId) localStorage.setItem(PROJECT_CUSTOMER_KEY, nextCustomerId);
+    else localStorage.removeItem(PROJECT_CUSTOMER_KEY);
+  }
+
+  function createCustomer(name: string) {
+    const projectInfo = projects.find((item) => item.key === newCustomerProjectKey);
+    if (!projectInfo) return;
+    const next = [...customersRef.current, { id: crypto.randomUUID(), projectCwd: projectInfo.cwd, name, threadIds: [] }];
+    customersRef.current = next; setCustomers(next);
+    persistBoardConfig(categoryOrder, approvalModeRef.current, projectPathsRef.current, next);
+    setCustomerId(next.at(-1)!.id);
+    localStorage.setItem(PROJECT_CUSTOMER_KEY, next.at(-1)!.id);
+    setNewCustomerProjectKey(null);
+  }
+
+  function assignThreadToCustomer(threadId: string, nextCustomerId: string | null) {
+    const next = customersRef.current.map((customer) => ({
+      ...customer,
+      threadIds: customer.id === nextCustomerId
+        ? [...new Set([...customer.threadIds.filter((id) => id !== threadId), threadId])]
+        : customer.threadIds.filter((id) => id !== threadId),
+    }));
+    customersRef.current = next; setCustomers(next);
+    persistBoardConfig(categoryOrder, approvalModeRef.current, projectPathsRef.current, next);
+  }
+
+  const projectThreads = useMemo(() => project === ALL_PROJECTS ? threads : threads.filter((item) => item.projectKey === project), [project, threads]);
+  const visibleThreads = useMemo(() => {
+    if (project === ALL_PROJECTS) return projectThreads;
+    const customer = customers.find((item) => item.id === customerId);
+    return customer ? projectThreads.filter((thread) => customer.threadIds.includes(thread.id)) : projectThreads.filter((thread) => !customers.some((item) => item.threadIds.includes(thread.id)));
+  }, [project, projectThreads, customerId, customers]);
   const filteredThreads = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     if (!query) return visibleThreads;
@@ -692,6 +734,8 @@ function App() {
       <SortableContext items={displayedCategories.map(categoryDragId)} strategy={horizontalListSortingStrategy}>
         <BoardWorkspace
           project={project}
+          customerId={customerId}
+          customers={customers}
           statusFilter={statusFilter}
           search={search}
           projects={projects}
@@ -708,6 +752,9 @@ function App() {
           refreshing={refreshing}
           rateLimits={rateLimits}
           onProjectChange={selectProjectBoard}
+          onCustomerChange={selectCustomerBoard}
+          onCreateCustomer={setNewCustomerProjectKey}
+          onAssignCustomer={assignThreadToCustomer}
           onStatusChange={setStatusFilter}
           onSearchChange={setSearch}
           onRefresh={() => void refresh(true)}
@@ -766,8 +813,9 @@ function App() {
       {settingsOpen && <BoardSettingsDialog approvalMode={approvalMode} onApprovalMode={setApprovalMode} onClose={() => setSettingsOpen(false)} />}
       {remoteDialog && <RemoteDialog onClose={() => setRemoteDialog(false)} />}
       {automationsDialog && <AutomationsDialog revision={automationRevision} threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}
-      {newTaskDialog && <NewTaskDialog threads={threads} projects={projects.filter((item) => item.cwd)} categories={categories} defaultProjectKey={project === ALL_PROJECTS ? undefined : project} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt, imageUrls) => { const created = await createThread(cwd, category, title, prompt, imageUrls); retainCreatedThread(created); setNewTaskDialog(false); void refresh(true); }} />}
+      {newTaskDialog && <NewTaskDialog threads={threads} projects={projects.filter((item) => item.cwd)} categories={categories} defaultProjectKey={project === ALL_PROJECTS ? undefined : project} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt, imageUrls) => { const created = await createThread(cwd, category, title, prompt, imageUrls); if (customerId) assignThreadToCustomer(created.id, customerId); retainCreatedThread(created); setNewTaskDialog(false); void refresh(true); }} />}
       {newProjectDialog && <NewProjectDialog existingPaths={projectPaths} onClose={() => setNewProjectDialog(false)} onCreate={createProject} />}
+      {newCustomerProjectKey && <NewCustomerDialog projectLabel={projects.find((item) => item.key === newCustomerProjectKey)?.label || "Project"} existingNames={customers.filter((customer) => customer.projectCwd.replaceAll("\\", "/").toLocaleLowerCase() === (projects.find((item) => item.key === newCustomerProjectKey)?.cwd || "").replaceAll("\\", "/").toLocaleLowerCase()).map((customer) => customer.name)} onClose={() => setNewCustomerProjectKey(null)} onCreate={createCustomer} />}
       {productTour && <ProductTour onClose={() => { localStorage.setItem("codex-board.tour.v1", "done"); setProductTour(false); }} />}
       {inboxOpen && <InboxDialog items={notifications} initialTab={inboxInitialTab} onClose={()=>setInboxOpen(false)} onReadAll={()=>void markNotificationsRead().then(()=>listNotifications().then(setNotifications))} onClear={()=>void clearNotifications().then(()=>setNotifications([]))} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item);if(!item.read)void markNotificationsRead(item.id);}} onOpen={(threadId)=>{setInboxOpen(false);setChatThreadId(threadId);const item=notifications.find(entry=>entry.threadId===threadId&&!entry.read);if(item)void markNotificationsRead(item.id);}} />}
       {resultNotification && <AutomationResultDialog notification={resultNotification} onClose={()=>setResultNotification(null)} onBackToList={()=>{setResultNotification(null);setInboxInitialTab("automations");setInboxOpen(true);}} onOpenThread={(threadId)=>{setResultNotification(null);setChatThreadId(threadId);}} />}

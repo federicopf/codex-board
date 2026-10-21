@@ -60,7 +60,10 @@ export class BoardApi {
     }
     return this.resolveBoard(await this.request<BoardConfig>("/v1/turn-settings", { method: "PUT", body: JSON.stringify(settings) }));
   }
-  thread(id: string) { return this.request<Record<string, JsonValue>>(`/v1/threads/${encodeURIComponent(id)}`); }
+  thread(id: string, page?: { limit: number; before?: number }) {
+    const query = page ? `?limit=${page.limit}${page.before === undefined ? "" : `&before=${page.before}`}` : "";
+    return this.request<Record<string, JsonValue>>(`/v1/threads/${encodeURIComponent(id)}${query}`);
+  }
   archive(id: string) { return this.request<void>(`/v1/threads/${encodeURIComponent(id)}/archive`, { method: "POST" }); }
   rename(id: string, newName: string) { return this.request<ThreadDto>(`/v1/threads/${encodeURIComponent(id)}/name`, { method: "PUT", body: JSON.stringify({ newName }) }); }
   send(id: string, text: string, imageUrls?: string[], settings?: TurnSettings) { return this.request<SendOutcome>(`/v1/threads/${encodeURIComponent(id)}/messages`, { method: "POST", body: JSON.stringify({ text, imageUrls: imageUrls?.length ? imageUrls : null, settings: settings || null }) }); }

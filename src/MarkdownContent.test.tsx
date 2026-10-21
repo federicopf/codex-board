@@ -37,4 +37,14 @@ describe("MarkdownContent", () => {
     const code = renderToStaticMarkup(<MarkdownContent>{"```\nC:\\Builds\\setup.exe\n```"}</MarkdownContent>);
     expect(code).not.toContain("file:///C:/Builds");
   });
+
+  it("makes WSL paths clickable using a Unix file URL", () => {
+    const html = renderToStaticMarkup(<MarkdownContent>{"Generated image: `/home/codex/output/rendered image.png`"}</MarkdownContent>);
+    expect(html).toContain('href="file:///home/codex/output/rendered%20image.png"');
+  });
+
+  it("routes Markdown images from WSL paths through the local image loader", () => {
+    const html = renderToStaticMarkup(<MarkdownContent>{"![Generated](/home/codex/output/rendered.png)"}</MarkdownContent>);
+    expect(html).toContain("chat-generated-image-placeholder");
+  });
 });

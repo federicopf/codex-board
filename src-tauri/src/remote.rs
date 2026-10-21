@@ -38,12 +38,24 @@ pub struct BoardConfig {
     pub categories: Vec<String>,
     #[serde(default)]
     pub projects: Vec<String>,
+    #[serde(default)]
+    pub customers: Vec<ProjectCustomer>,
     #[serde(default = "default_approval_mode")]
     pub approval_mode: String,
     #[serde(default)]
     pub turn_settings: TurnPreferences,
     #[serde(default)]
     pub revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectCustomer {
+    pub id: String,
+    pub project_cwd: String,
+    pub name: String,
+    #[serde(default)]
+    pub thread_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +99,7 @@ impl Default for BoardConfig {
         Self {
             categories: Vec::new(),
             projects: Vec::new(),
+            customers: Vec::new(),
             approval_mode: default_approval_mode(),
             turn_settings: TurnPreferences::default(),
             revision: 0,
@@ -244,6 +257,7 @@ impl RemoteGateway {
     pub fn set_board_config(&self, mut config: BoardConfig) -> Result<BoardConfig, String> {
         config.categories = unique_categories(config.categories)?;
         config.projects = unique_projects(config.projects)?;
+        config.customers = unique_customers(config.customers)?;
         if !matches!(config.approval_mode.as_str(), "auto" | "ask") {
             return Err("approvalMode must be auto or ask".into());
         }
@@ -498,6 +512,29 @@ fn unique_projects(projects: Vec<String>) -> Result<Vec<String>, String> {
     Ok(result)
 }
 
+fn unique_customers(customers: Vec<ProjectCustomer>) -> Result<Vec<ProjectCustomer>, String> {
+    let mut ids = std::collections::HashSet::new();
+    let mut assigned_threads = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for mut customer in customers {
+        customer.id = customer.id.trim().to_owned();
+        customer.project_cwd = customer.project_cwd.trim().to_owned();
+        if customer.project_cwd.len() > 3 {
+            customer.project_cwd = customer.project_cwd.trim_end_matches(['/', '\\']).to_owned();
+        }
+        customer.name = customer.name.trim().to_owned();
+        if customer.id.is_empty() || customer.name.is_empty() || customer.project_cwd.is_empty() {
+            return Err("Customers need an id, name, and project".into());
+        }
+        if !ids.insert(customer.id.to_lowercase()) {
+            return Err("Customer ids must be unique".into());
+        }
+        customer.thread_ids.retain(|id| !id.trim().is_empty() && assigned_threads.insert(id.clone()));
+        result.push(customer);
+    }
+    Ok(result)
+}
+
 fn persist_config(path: &Path, config: &BoardConfig) -> Result<(), String> {
     crate::persistence::write_json(path, config)
 }
@@ -508,6 +545,10 @@ fn save_board_config(
     mut config: BoardConfig,
 ) -> Result<BoardConfig, String> {
     let mut current = state.write().map_err(|error| error.to_string())?;
+    if config.customers.is_empty() && !current.customers.is_empty() {
+        config.customers = current.customers.clone();
+    }
+    config.customers = unique_customers(config.customers)?;
     // Board/category writes must never replace a newer model preference.
     config.turn_settings = current.turn_settings.clone();
     config.revision = current.revision.saturating_add(1);
@@ -559,17 +600,18 @@ async fn get_image(
 ) -> Result<Response, ApiError> {
     authorized(&headers, &state)?;
     let path = query.get("path").ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "Missing image path".into()))?;
-    let path = Path::new(path);
+    let path = crate::local_paths::resolve_local_path(path)
+        .map_err(|_| ApiError(StatusCode::NOT_FOUND, "Image not found".into()))?;
     let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
     let content_type = match extension.as_str() {
         "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "webp" => "image/webp", "gif" => "image/gif",
         _ => return Err(ApiError(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported image type".into())),
     };
-    let metadata = tokio::fs::metadata(path).await.map_err(|_| ApiError(StatusCode::NOT_FOUND, "Image not found".into()))?;
+    let metadata = tokio::fs::metadata(&path).await.map_err(|_| ApiError(StatusCode::NOT_FOUND, "Image not found".into()))?;
     if !metadata.is_file() || metadata.len() > 24 * 1024 * 1024 {
         return Err(ApiError(StatusCode::PAYLOAD_TOO_LARGE, "Image is too large".into()));
     }
-    let bytes = tokio::fs::read(path).await.map_err(|_| ApiError(StatusCode::NOT_FOUND, "Image not found".into()))?;
+    let bytes = tokio::fs::read(&path).await.map_err(|_| ApiError(StatusCode::NOT_FOUND, "Image not found".into()))?;
     Ok((StatusCode::OK, [(axum::http::header::CONTENT_TYPE, content_type), (axum::http::header::CACHE_CONTROL, "private, max-age=3600")], bytes).into_response())
 }
 
@@ -667,9 +709,32 @@ async fn load_thread(
     State(state): State<ApiState>,
     headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
+    Query(query): Query<ThreadPageQuery>,
 ) -> Result<Json<Value>, ApiError> {
     authorized(&headers, &state)?;
-    Ok(Json(state.client.load_thread(id).await?))
+    let mut thread = state.client.load_thread(id).await?;
+    if let Some(limit) = query.limit {
+        paginate_thread(&mut thread, query.before, limit)?;
+    }
+    Ok(Json(thread))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadPageQuery {
+    limit: Option<usize>,
+    before: Option<usize>,
+}
+
+fn paginate_thread(thread: &mut Value, before: Option<usize>, limit: usize) -> Result<(), ApiError> {
+    let turns = thread.get_mut("turns").and_then(Value::as_array_mut)
+        .ok_or_else(|| ApiError(StatusCode::BAD_GATEWAY, "Thread history is unavailable".into()))?;
+    let total = turns.len();
+    let end = before.unwrap_or(total).min(total);
+    let start = end.saturating_sub(limit.clamp(1, 20));
+    *turns = turns[start..end].to_vec();
+    thread["pagination"] = json!({ "start": start, "total": total, "hasOlder": start > 0 });
+    Ok(())
 }
 
 async fn archive_thread(
@@ -870,6 +935,8 @@ async fn put_board(
     config.categories = unique_categories(config.categories)
         .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error))?;
     config.projects = unique_projects(config.projects)
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error))?;
+    config.customers = unique_customers(config.customers)
         .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error))?;
     if !matches!(config.approval_mode.as_str(), "auto" | "ask") {
         return Err(ApiError(
@@ -1125,6 +1192,36 @@ mod tests {
         })).unwrap();
         assert!(config.turn_settings.model.is_empty());
         assert_eq!(config.turn_settings.summary, "auto");
+        assert!(config.customers.is_empty());
+    }
+
+    #[test]
+    fn customer_assignments_are_validated_and_unique() {
+        let customers = unique_customers(vec![
+            ProjectCustomer { id: " client-a ".into(), project_cwd: " C:\\work\\demo\\ ".into(), name: " Acme ".into(), thread_ids: vec!["thread-1".into(), "thread-2".into()] },
+            ProjectCustomer { id: "client-b".into(), project_cwd: "C:\\work\\demo".into(), name: "Other".into(), thread_ids: vec!["thread-2".into(), "thread-3".into()] },
+        ]).unwrap();
+        assert_eq!(customers[0].id, "client-a");
+        assert_eq!(customers[0].project_cwd, "C:\\work\\demo");
+        assert_eq!(customers[0].name, "Acme");
+        assert_eq!(customers[0].thread_ids, vec!["thread-1", "thread-2"]);
+        assert_eq!(customers[1].thread_ids, vec!["thread-3"]);
+        assert!(unique_customers(vec![ProjectCustomer { id: "".into(), project_cwd: "C:\\work".into(), name: "Acme".into(), thread_ids: vec![] }]).is_err());
+    }
+
+    #[test]
+    fn thread_pagination_returns_the_last_ten_turns_and_older_windows() {
+        let turns: Vec<Value> = (0..27).map(|index| json!({ "id": format!("turn-{index}") })).collect();
+        let mut latest = json!({ "turns": turns });
+        paginate_thread(&mut latest, None, 10).unwrap();
+        assert_eq!(latest["pagination"]["start"], 17);
+        assert_eq!(latest["turns"][0]["id"], "turn-17");
+        assert_eq!(latest["turns"][9]["id"], "turn-26");
+        let mut older = json!({ "turns": (0..27).map(|index| json!({ "id": format!("turn-{index}") })).collect::<Vec<_>>() });
+        paginate_thread(&mut older, Some(17), 10).unwrap();
+        assert_eq!(older["pagination"]["start"], 7);
+        assert_eq!(older["turns"][0]["id"], "turn-7");
+        assert_eq!(older["turns"][9]["id"], "turn-16");
     }
 
     #[test]
@@ -1196,6 +1293,7 @@ mod tests {
                 gateway.set_board_config(BoardConfig {
                     categories: vec![category.into()],
                     projects: vec!["C:\\work\\demo".into()],
+                    customers: Vec::new(),
                     approval_mode: "auto".into(),
                     turn_settings: TurnPreferences::default(),
                     revision: 0,

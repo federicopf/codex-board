@@ -2,12 +2,37 @@ import ReactMarkdown from "react-markdown";
 import { invoke } from "@tauri-apps/api/core";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { useEffect, useState } from "react";
 import { formatCodexDirectives } from "@codex-board/protocol";
 export { formatCodexDirectives } from "@codex-board/protocol";
 
+function fileUrlPath(href: string): string | null {
+  try {
+    const url = new URL(href);
+    if (url.protocol !== "file:") return null;
+    const pathname = decodeURIComponent(url.pathname);
+    return url.hostname && url.hostname !== "localhost"
+      ? `\\\\${url.hostname}${pathname.replaceAll("/", "\\")}`
+      : /^\/[A-Za-z]:\//.test(pathname) ? pathname.slice(1).replaceAll("/", "\\") : pathname;
+  } catch { return null; }
+}
+
+function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
+  const path = src?.startsWith("file://") ? fileUrlPath(src) : src && (/^(?:\/|[A-Za-z]:\\|\\\\)/.test(src) ? src : null);
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!path) return;
+    let active = true;
+    void invoke<string>("read_chat_image", { path }).then(value => { if (active) setDataUrl(value); }).catch(() => { if (active) setDataUrl(null); });
+    return () => { active = false; };
+  }, [path]);
+  if (!path) return src ? <img src={src} alt={alt || ""} /> : null;
+  return dataUrl ? <img className="chat-markdown-image" src={dataUrl} alt={alt || "Image from Codex"} /> : <span className="chat-generated-image-placeholder">Image unavailable</span>;
+}
+
 function localPathToFileUrl(path: string) {
   const normalized = path.trim().replaceAll("\\", "/");
-  return `file:///${encodeURI(normalized.replace(/^([A-Za-z]):/, "$1:"))}`;
+  return normalized.startsWith("/") ? `file://${encodeURI(normalized)}` : `file:///${encodeURI(normalized)}`;
 }
 
 function linkifyLocalPaths(source: string) {
@@ -18,10 +43,18 @@ function linkifyLocalPaths(source: string) {
       return line;
     }
     if (fenced || line.includes("](") || line.includes("<http")) return line;
-    return line.replace(/(^|[\s(:])([A-Za-z]:\\[^<>\"|?*\r\n]+|\\\\[^<>\"|?*\r\n]+)/g, (match, prefix, rawPath) => {
+    const windowsPaths = line.replace(/(^|[\s(:])([A-Za-z]:\\[^<>\"|?*\r\n]+|\\\\[^<>\"|?*\r\n]+)/g, (match, prefix, rawPath) => {
       const path = rawPath.replace(/[.,;:)]+$/, "");
       if (!path || path.includes("\\n")) return match;
       return `${prefix}[${path}](${localPathToFileUrl(path)})`;
+    });
+    const quotedUnixPaths = windowsPaths.replace(/`((?:\/mnt\/[A-Za-z](?:\/|$)|\/(?:home|tmp|workspace|workspaces|root|opt|var)\/)[^`\r\n]+)`/g, (_match, rawPath) => {
+      const path = rawPath.replace(/[.,;:)]+$/, "");
+      return `[${path}](${localPathToFileUrl(path)})`;
+    });
+    return quotedUnixPaths.replace(/(^|[\s(:])((?:\/mnt\/[A-Za-z](?:\/|$)|\/(?:home|tmp|workspace|workspaces|root|opt|var)\/)[^<>\"|?*\s]+)/g, (match, prefix, rawPath) => {
+      const path = rawPath.replace(/[.,;:)]+$/, "");
+      return path ? `${prefix}[${path}](${localPathToFileUrl(path)})` : match;
     });
   }).join("\n");
 }
@@ -29,7 +62,17 @@ function linkifyLocalPaths(source: string) {
 export function MarkdownContent({ children }: { children: string }) {
   const openLink = (href: string | undefined) => {
     if (!href) return;
+    if (href.startsWith("/") || /^[A-Za-z]:\\/.test(href) || href.startsWith("\\\\")) {
+      void invoke("open_local_path", { path: href }).catch(() => undefined);
+      return;
+    }
     if (href.startsWith("file://")) {
+      const localPath = fileUrlPath(href);
+      if (!localPath) return;
+      if (!/^[A-Za-z]:\\/.test(localPath) && !localPath.startsWith("\\\\")) {
+        void invoke("open_local_path", { path: localPath }).catch(() => undefined);
+        return;
+      }
       void invoke("open_external_url", { url: href }).catch(() => {
         window.open(href, "_blank", "noopener,noreferrer");
       });
@@ -61,6 +104,7 @@ export function MarkdownContent({ children }: { children: string }) {
               {label}
             </a>
           ),
+          img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
         }}
       >
         {linkifyLocalPaths(formatCodexDirectives(children))}

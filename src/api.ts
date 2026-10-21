@@ -1,11 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { CodexError, CodexEvent, CodexThread, JsonValue, QueuedMessage, SendOutcome, ThreadDto, TurnSettings } from "./types";
 import type { Automation, CreateAutomationInput } from "@codex-board/protocol";
-import type { BoardNotification } from "@codex-board/protocol";
+import type { BoardNotification, ProjectCustomer } from "@codex-board/protocol";
 
 export interface GatewayInfo { running: boolean; port: number; token: string; error?: string | null; }
 export interface TailscaleInfo { installed: boolean; online: boolean; dnsName?: string | null; baseUrl?: string | null; error?: string | null; }
-export interface BoardConfig { categories: string[]; projects: string[]; approvalMode: "auto" | "ask"; turnSettings: TurnSettings; revision: number; }
+export interface BoardConfig { categories: string[]; projects: string[]; customers: ProjectCustomer[]; approvalMode: "auto" | "ask"; turnSettings: TurnSettings; revision: number; }
 
 export async function listThreads(): Promise<ThreadDto[]> {
   return invoke<ThreadDto[]>("list_threads");

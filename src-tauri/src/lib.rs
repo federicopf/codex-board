@@ -4,6 +4,7 @@ mod codex;
 mod notifications;
 mod persistence;
 mod remote;
+mod local_paths;
 
 use automations::{Automation, AutomationEnabledInput, AutomationStore, CreateAutomationInput};
 use codex::{
@@ -26,15 +27,7 @@ fn open_external_url(url: String) -> Result<(), String> {
 
 #[tauri::command]
 fn open_local_path(path: String) -> Result<(), String> {
-    let path = if let Some(rest) = path.strip_prefix("/") {
-        #[cfg(windows)]
-        { rest.to_owned() }
-        #[cfg(not(windows))]
-        { format!("/{rest}") }
-    } else {
-        path
-    };
-    let path = std::path::PathBuf::from(path);
+    let path = local_paths::resolve_local_path(&path)?;
     if !path.is_absolute() {
         return Err("Only absolute local paths can be opened".into());
     }
@@ -43,7 +36,7 @@ fn open_local_path(path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn read_chat_image(path: String) -> Result<String, String> {
-    let path = std::path::PathBuf::from(path);
+    let path = local_paths::resolve_local_path(&path)?;
     if !path.is_absolute() { return Err("Image path must be absolute".into()); }
     let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
     let mime = match extension.as_str() { "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "webp" => "image/webp", "gif" => "image/gif", _ => return Err("Unsupported image type".into()) };
