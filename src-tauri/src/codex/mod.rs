@@ -27,6 +27,10 @@ fn turn_input(text: &str, image_urls: Vec<String>) -> Vec<Value> {
     input
 }
 
+fn collaboration_mode(mode: String, model: Value, reasoning_effort: Value) -> Value {
+    json!({ "mode": mode, "settings": { "model": model, "reasoningEffort": reasoning_effort, "developerInstructions": null } })
+}
+
 fn fork_params(thread_id: &str, last_turn_id: Option<&str>) -> Value {
     let mut params = json!({ "threadId": thread_id });
     if let Some(last_turn_id) = last_turn_id.filter(|value| !value.trim().is_empty()) {
@@ -402,6 +406,11 @@ impl CodexClient {
                 if let Some(effort) = settings.effort.filter(|value| !value.trim().is_empty()) { object.insert("effort".into(), json!(effort)); }
                 if let Some(summary) = settings.summary.filter(|value| !value.trim().is_empty()) { object.insert("summary".into(), json!(summary)); }
                 if let Some(service_tier) = settings.service_tier.filter(|value| !value.trim().is_empty()) { object.insert("serviceTier".into(), json!(service_tier)); }
+                if let Some(mode) = settings.mode.filter(|value| matches!(value.as_str(), "default" | "plan")) {
+                    let model = object.get("model").cloned().unwrap_or_else(|| json!(""));
+                    let reasoning_effort = object.get("effort").cloned().unwrap_or(Value::Null);
+                    object.insert("collaborationMode".into(), collaboration_mode(mode, model, reasoning_effort));
+                }
             }
         }
         if let Some(schema) = output_schema { params["outputSchema"] = schema; }
@@ -472,6 +481,14 @@ impl Default for CodexClient {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn collaboration_mode_request_uses_codex_v2_turn_shape() {
+        assert_eq!(super::collaboration_mode("plan".into(), serde_json::json!("gpt-fixture"), serde_json::json!("high")), serde_json::json!({
+            "mode": "plan",
+            "settings": { "model": "gpt-fixture", "reasoningEffort": "high", "developerInstructions": null }
+        }));
+    }
+
     #[test]
     fn image_inputs_match_codex_v2_schema_for_new_existing_and_queued_turns() {
         let data = "data:image/jpeg;base64,/9j/AA==";

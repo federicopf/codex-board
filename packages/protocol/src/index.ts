@@ -24,6 +24,7 @@ export interface TurnSettings {
   effort?: string;
   summary?: string;
   serviceTier?: string;
+  mode?: "default" | "plan";
 }
 
 export interface CodexEvent {

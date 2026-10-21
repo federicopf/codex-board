@@ -13,7 +13,6 @@ import {
   type Automation, type BoardConfig, type BoardNotification, type CreateAutomationInput, type JsonValue, type PairingCredential,
   type PendingRemoteRequest, type QueuedMessage, type ThreadDto, type TurnSettings,
 } from "@codex-board/protocol";
-const displayTitle = (name?: string | null, preview?: string | null) => formatTaskTitle(name ?? null, preview ?? null);
 import { BoardApi } from "./src/api";
 import { ChatDraftStore } from "@codex-board/protocol";
 import { createMobileDrafts } from "./src/chatDrafts";
@@ -27,6 +26,8 @@ import { ProjectHome } from "./src/ProjectHome";
 import { colors } from "./src/theme";
 import { MobileNavigation } from "./src/MobileNavigation";
 import { MobileActionSheet } from "./src/MobileActionSheet";
+
+const displayTitle = (name?: string | null, preview?: string | null) => formatTaskTitle(name ?? null, preview ?? null);
 
 type JsonObject = Record<string, JsonValue>;
 const object = (value: JsonValue | undefined): JsonObject => value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
@@ -48,6 +49,7 @@ function ChatMessage({ line }: { line: ChatLine }) {
 }
 
 const threadCache = new Map<string, JsonObject>();
+const threadWorkModes = new Map<string, "default" | "plan">();
 
 function conversation(thread: JsonObject | null): ChatLine[] {
   const turns = Array.isArray(thread?.turns) ? thread.turns : [];
@@ -267,6 +269,7 @@ function MobileChatComposer({ threadId, api, working, preferences, onChanged, on
   const [busy, setBusy] = useState(false);
   const { settings, ready, saving, error: settingsError } = useSyncExternalStore(preferences.subscribe, preferences.getSnapshot);
   const { model = "", effort = "", summary = "auto", serviceTier: tier = "" } = settings;
+  const [workMode, setWorkMode] = useState<"default" | "plan">(() => threadWorkModes.get(threadId) || "default");
   const [models, setModels] = useState<Array<{ id: string; name: string; efforts: string[]; tiers: Array<{ id: string; name: string }> }>>([]);
   const [activeTool, setActiveTool] = useState<"model" | "attachments" | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -284,7 +287,7 @@ function MobileChatComposer({ threadId, api, working, preferences, onChanged, on
     try {
       const confirmed = await preferences.flush();
       if (!confirmed.model && api.sharedTurnSettings !== false) { setActiveTool("model"); return; }
-      const outcome = await api.send(threadId, text, attachments.map((attachment) => attachment.dataUrl), confirmed.model ? confirmed : undefined);
+      const outcome = await api.send(threadId, text, attachments.map((attachment) => attachment.dataUrl), confirmed.model ? { ...confirmed, mode: workMode } : undefined);
       if (outcome.queued) onQueueChanged();
       drafts.accepted(threadId, saved); onChanged();
     }
@@ -315,6 +318,7 @@ function MobileChatComposer({ threadId, api, working, preferences, onChanged, on
 
   return <View>
     <View style={styles.composerShell}><View style={styles.composerCard}>
+      <View style={styles.workModeRow} accessibilityLabel="Work mode"><Text style={styles.workModeLabel}>MODE</Text>{(["default", "plan"] as const).map(mode=><Pressable key={mode} accessibilityRole="button" accessibilityState={{selected:workMode===mode}} style={[styles.workModeButton,workMode===mode&&styles.workModeButtonActive]} onPress={()=>{threadWorkModes.set(threadId,mode);setWorkMode(mode);}}><Text style={[styles.workModeText,workMode===mode&&styles.workModeTextActive]}>{mode==="plan"?"Plan":"Default"}</Text></Pressable>)}</View>
       <TextInput value={draft} onChangeText={text => drafts.update(threadId, current => ({ ...current, text }))} editable={draftReady} scrollEnabled style={styles.composerInput} placeholder={working ? "Add to queue…" : "Message Codex…"} multiline />
       {!ready ? <Text style={styles.modelRequiredHint}>Loading conversation settings…</Text> : !model && api.sharedTurnSettings !== false ? <Text style={styles.modelRequiredHint}>Choose a model to start.</Text> : null}
       {draftError && <Text accessibilityRole="alert" style={styles.modelRequiredHint}>{draftError}</Text>}
@@ -878,6 +882,7 @@ function Root() {
 export default function App() { return <SafeAreaProvider><Root /></SafeAreaProvider>; }
 
 const styles = StyleSheet.create({
+  workModeRow: { minHeight: 34, marginBottom: 5, flexDirection: "row", alignItems: "center", gap: 6 }, workModeLabel: { marginRight: 3, color: "#8A8F9B", fontSize: 8, fontWeight: "800", letterSpacing: 1 }, workModeButton: { minWidth: 62, height: 28, paddingHorizontal: 10, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 9, backgroundColor: "#FAFAFC" }, workModeButtonActive: { borderColor: "#8588EC", backgroundColor: "#EEEFFF" }, workModeText: { color: "#696E7B", fontSize: 10, fontWeight: "700" }, workModeTextActive: { color: "#5559D8" },
   taskPickerButton: { minHeight: 44, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 11, backgroundColor: "white" }, taskPickerButtonText: { flex: 1, marginRight: 10, color: "#292C36", fontSize: 12, fontWeight: "600" }, taskPickerBackdrop: { flex: 1, padding: 20, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(20,22,30,.45)" }, taskPickerModal: { width: "100%", maxWidth: 460, maxHeight: "75%", padding: 18, borderRadius: 18, backgroundColor: "white" }, taskPickerOption: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#ECEEF2" }, retryManyButton: { minHeight: 42, marginVertical: 10, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", alignSelf: "flex-end", gap: 8, borderWidth: 1, borderColor: "#DADCF2", borderRadius: 11, backgroundColor: "white" }, retryManyText: { color: "#5559D8", fontSize: 11, fontWeight: "700" }, retryManyActions: { marginTop: 14, flexDirection: "row", justifyContent: "flex-end", gap: 20 },
   connectionBanner: { minHeight: 40, paddingHorizontal: 16, justifyContent: "center", backgroundColor: "#FFF0ED" },
   connectionBannerText: { color: "#A4493D", fontSize: 12, fontWeight: "600" },

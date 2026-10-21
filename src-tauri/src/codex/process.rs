@@ -197,7 +197,8 @@ impl RunningClient {
                     "name": "codex_board",
                     "title": "Codex Board",
                     "version": env!("CARGO_PKG_VERSION")
-                }
+                },
+                "capabilities": { "experimentalApi": true }
             }),
         )
         .await
