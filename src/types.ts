@@ -78,13 +78,14 @@ export interface SendOutcome {
   turn?: JsonValue;
 }
 
-export type ChatItemKind = "user" | "assistant" | "reasoning" | "plan" | "activity" | "notice";
+export type ChatItemKind = "user" | "assistant" | "reasoning" | "plan" | "activity" | "notice" | "image";
 
 export interface ChatItem {
   id: string;
   kind: ChatItemKind;
   title?: string;
   text: string;
+  imagePath?: string;
   status?: string;
 }
 

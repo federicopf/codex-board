@@ -8,7 +8,7 @@ use std::{
 use axum::{
     Json, Router,
     extract::{
-        Path as AxumPath, State, WebSocketUpgrade,
+        Path as AxumPath, Query, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
     http::{HeaderMap, StatusCode},
@@ -295,6 +295,7 @@ impl RemoteGateway {
                 .route("/v1/threads", get(list_threads))
                 .route("/v1/threads/new", post(create_thread).layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)))
                 .route("/v1/threads/{id}", get(load_thread))
+                .route("/v1/image", get(get_image))
                 .route("/v1/threads/{id}/archive", axum::routing::post(archive_thread))
                 .route("/v1/threads/{id}/fork", post(fork_thread))
                 .route("/v1/threads/{id}/name", put(rename_thread))
@@ -549,6 +550,27 @@ fn authorized(headers: &HeaderMap, state: &ApiState) -> Result<(), ApiError> {
             "Invalid remote credential".into(),
         ))
     }
+}
+
+async fn get_image(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Result<Response, ApiError> {
+    authorized(&headers, &state)?;
+    let path = query.get("path").ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "Missing image path".into()))?;
+    let path = Path::new(path);
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+    let content_type = match extension.as_str() {
+        "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "webp" => "image/webp", "gif" => "image/gif",
+        _ => return Err(ApiError(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported image type".into())),
+    };
+    let metadata = tokio::fs::metadata(path).await.map_err(|_| ApiError(StatusCode::NOT_FOUND, "Image not found".into()))?;
+    if !metadata.is_file() || metadata.len() > 24 * 1024 * 1024 {
+        return Err(ApiError(StatusCode::PAYLOAD_TOO_LARGE, "Image is too large".into()));
+    }
+    let bytes = tokio::fs::read(path).await.map_err(|_| ApiError(StatusCode::NOT_FOUND, "Image not found".into()))?;
+    Ok((StatusCode::OK, [(axum::http::header::CONTENT_TYPE, content_type), (axum::http::header::CACHE_CONTROL, "private, max-age=3600")], bytes).into_response())
 }
 
 fn start_request_worker(state: ApiState) {

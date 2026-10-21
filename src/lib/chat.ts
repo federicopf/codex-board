@@ -61,6 +61,10 @@ export function threadItemToChatItem(value: JsonValue): ChatItem | null {
   if (type === "agentMessage") {
     return { id, kind: "assistant", text: string(item.text) };
   }
+  if (type === "imageView" || type === "imageGeneration") {
+    const imagePath = string(item.path) || string(item.savedPath);
+    if (imagePath) return { id, kind: "image", text: string(item.revisedPrompt) || string(item.result), imagePath, status: string(item.status) };
+  }
   if (type === "plan") {
     return { id, kind: "plan", title: "Plan", text: string(item.text) };
   }

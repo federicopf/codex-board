@@ -16,6 +16,17 @@ describe("chat session", () => {
     expect(session.running).toBe(false);
   });
 
+  it("preserves generated-image paths from image view and generation items", () => {
+    const session = createChatSession({ id: "thr_1", turns: [{ id: "turn_1", status: "completed", items: [
+      { id: "view_1", type: "imageView", path: "C:/project/output.png" },
+      { id: "image_1", type: "imageGeneration", savedPath: "C:/project/generated.webp", result: "Generated", revisedPrompt: "A blue bird", status: "completed" },
+    ] }] });
+    expect(session.items.map(({ kind, imagePath, text }) => ({ kind, imagePath, text }))).toEqual([
+      { kind: "image", imagePath: "C:/project/output.png", text: "" },
+      { kind: "image", imagePath: "C:/project/generated.webp", text: "A blue bird" },
+    ]);
+  });
+
   it("streams an agent response and completes the turn", () => {
     const empty = createChatSession({ id: "thr_1", turns: [] });
     const started = applyCodexEvent(empty, { method: "turn/started", params: { threadId: "thr_1", turn: { id: "turn_2" } } }, "thr_1");

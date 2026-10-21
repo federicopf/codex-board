@@ -42,6 +42,19 @@ fn open_local_path(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn read_chat_image(path: String) -> Result<String, String> {
+    let path = std::path::PathBuf::from(path);
+    if !path.is_absolute() { return Err("Image path must be absolute".into()); }
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+    let mime = match extension.as_str() { "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "webp" => "image/webp", "gif" => "image/gif", _ => return Err("Unsupported image type".into()) };
+    let metadata = std::fs::metadata(&path).map_err(|error| error.to_string())?;
+    if !metadata.is_file() || metadata.len() > 24 * 1024 * 1024 { return Err("Image is too large or unavailable".into()); }
+    use base64::Engine;
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+#[tauri::command]
 async fn list_threads(
     client: tauri::State<'_, Arc<CodexClient>>,
 ) -> Result<Vec<ThreadDto>, CodexErrorDto> {
@@ -370,6 +383,7 @@ pub fn run() {
             clear_notifications,
             open_external_url
             ,open_local_path
+            ,read_chat_image
         ])
         .build(tauri::generate_context!())
         .expect("error while building Codex Board");

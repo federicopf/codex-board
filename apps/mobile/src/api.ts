@@ -41,6 +41,7 @@ export class BoardApi {
   }
 
   health() { return this.request<RemoteHealth>("/v1/health"); }
+  imageSource(path: string) { return { uri: `${this.credential.baseUrl}/v1/image?path=${encodeURIComponent(path)}`, headers: { Authorization: `Bearer ${this.credential.token}` } }; }
   threads() { return this.request<ThreadDto[]>("/v1/threads"); }
   rateLimits() { return this.request<JsonValue>("/v1/rate-limits"); }
   models() { return this.request<JsonValue>("/v1/models"); }
