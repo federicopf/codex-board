@@ -4,6 +4,7 @@ import {
   KeyboardSensor,
   PointerSensor,
   closestCenter,
+  pointerWithin,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -35,11 +36,14 @@ import { BoardSettingsDialog } from "./BoardSettingsDialog";
 import { AutomationResultDialog } from "./AutomationResultDialog";
 import { ConfirmArchiveDialog } from "./ConfirmArchiveDialog";
 import {
-  ALL_STATUSES,
   BoardWorkspace,
   CATEGORY_DRAG_PREFIX,
+  PROJECT_DROP_PREFIX,
   categoryDragId,
   categoryFromDragId,
+  projectFromDropId,
+  CUSTOMER_DROP_PREFIX,
+  customerFromDropId,
   THREAD_DRAG_PREFIX,
   ThreadDragOverlay,
 } from "./BoardWorkspace";
@@ -71,7 +75,6 @@ function App() {
   const [threads, setThreads] = useState<BoardThread[]>([]);
   const [project, setProject] = useState(() => localStorage.getItem(PROJECT_BOARD_KEY) || ALL_PROJECTS);
   const [customerId, setCustomerId] = useState<string | null>(() => localStorage.getItem(PROJECT_CUSTOMER_KEY));
-  const [statusFilter, setStatusFilter] = useState(ALL_STATUSES);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -394,7 +397,6 @@ function App() {
     setProject(key);
     setCustomerId(null);
     localStorage.removeItem(PROJECT_CUSTOMER_KEY);
-    setStatusFilter(ALL_STATUSES);
     setSearch("");
     localStorage.setItem(PROJECT_BOARD_KEY, key);
   }, []);
@@ -461,12 +463,11 @@ function App() {
     });
   }, [discoveredCategories, persistBoardConfig]);
   const categories = categoryOrder;
-  const populatedCategories = useMemo(() => categories.filter((category) => visibleThreads.some((thread) => thread.category === category)), [categories, visibleThreads]);
   const dashboardCategories = useMemo(
     () => categories.filter((category) => filteredThreads.some((thread) => thread.category === category)),
     [categories, filteredThreads],
   );
-  const displayedCategories = statusFilter === ALL_STATUSES ? dashboardCategories : dashboardCategories.filter((category) => category === statusFilter);
+  const displayedCategories = dashboardCategories;
   const projectStats = useMemo(() => {
     const stats: Record<string, { tasks: number; working: number }> = {
       [ALL_PROJECTS]: { tasks: threads.length, working: threads.filter((thread) => workingIds.has(thread.id)).length },
@@ -541,9 +542,6 @@ function App() {
     }
   }
 
-  useEffect(() => {
-    if (statusFilter !== ALL_STATUSES && !populatedCategories.includes(statusFilter)) setStatusFilter(ALL_STATUSES);
-  }, [populatedCategories, statusFilter]);
 
   function createLocalCategory(name: string) {
     setCategoryOrder((current) => {
@@ -708,10 +706,28 @@ function App() {
       });
       return;
     }
-    if (!activeDragId.startsWith(THREAD_DRAG_PREFIX) || !overId.startsWith(CATEGORY_DRAG_PREFIX)) return;
+    if (!activeDragId.startsWith(THREAD_DRAG_PREFIX)) return;
     const threadId = activeDragId.slice(THREAD_DRAG_PREFIX.length);
-    const targetCategory = categoryFromDragId(overId);
-    await moveBoardThread(threadId, targetCategory);
+    if (overId.startsWith(CATEGORY_DRAG_PREFIX)) {
+      const targetCategory = categoryFromDragId(overId);
+      await moveBoardThread(threadId, targetCategory);
+      return;
+    }
+    if (overId.startsWith(CUSTOMER_DROP_PREFIX)) {
+      const targetCustomer = customers.find((customer) => customer.id === customerFromDropId(overId));
+      const targetThread = threads.find((thread) => thread.id === threadId);
+      const normalizePath = (path: string) => path.replaceAll("\\", "/").replace(/\/+$/, "").toLocaleLowerCase();
+      if (!targetCustomer || !targetThread || normalizePath(targetCustomer.projectCwd) !== normalizePath(targetThread.cwd || "")) return;
+      assignThreadToCustomer(threadId, targetCustomer.id);
+      return;
+    }
+    if (overId.startsWith(PROJECT_DROP_PREFIX)) {
+      const targetProject = projectFromDropId(overId);
+      const targetThread = threads.find((thread) => thread.id === threadId);
+      const normalizePath = (path: string) => path.replaceAll("\\", "/").replace(/\/+$/, "").toLocaleLowerCase();
+      if (targetProject === ALL_PROJECTS || !targetThread || normalizePath(targetThread.cwd || "") !== targetProject) return;
+      assignThreadToCustomer(threadId, null);
+    }
   }
 
   if (loading) {
@@ -730,17 +746,19 @@ function App() {
   }
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={(event) => void handleDragEnd(event)}>
+    <DndContext sensors={sensors} collisionDetection={(args) => {
+      const pointerCollisions = pointerWithin(args);
+      const customerTarget = pointerCollisions.find((collision) => String(collision.id).startsWith(CUSTOMER_DROP_PREFIX));
+      return customerTarget ? [customerTarget] : pointerCollisions.length ? pointerCollisions : closestCenter(args);
+    }} onDragStart={handleDragStart} onDragEnd={(event) => void handleDragEnd(event)}>
       <SortableContext items={displayedCategories.map(categoryDragId)} strategy={horizontalListSortingStrategy}>
         <BoardWorkspace
           project={project}
           customerId={customerId}
           customers={customers}
-          statusFilter={statusFilter}
           search={search}
           projects={projects}
           projectStats={projectStats}
-          populatedCategories={populatedCategories}
           displayedCategories={displayedCategories}
           filteredThreads={filteredThreads}
           visibleThreadCount={visibleThreads.length}
@@ -755,7 +773,6 @@ function App() {
           onCustomerChange={selectCustomerBoard}
           onCreateCustomer={setNewCustomerProjectKey}
           onAssignCustomer={assignThreadToCustomer}
-          onStatusChange={setStatusFilter}
           onSearchChange={setSearch}
           onRefresh={() => void refresh(true)}
           onCategories={() => setCategoryManager(true)}
