@@ -31,7 +31,11 @@ fn open_local_path(path: String) -> Result<(), String> {
     if !path.is_absolute() {
         return Err("Only absolute local paths can be opened".into());
     }
-    opener::open(path).map_err(|error| error.to_string())
+    opener::open(&path).or_else(|open_error| {
+        opener::reveal(&path).map_err(|reveal_error| {
+            format!("Could not open the file ({open_error}) or show it in the file manager ({reveal_error})")
+        })
+    })
 }
 
 #[tauri::command]

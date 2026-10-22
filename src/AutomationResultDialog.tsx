@@ -25,7 +25,16 @@ export function AutomationResultDialog({ notification, onClose, onOpenThread, on
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Close">×</button>
         </header>
-        <div className="automation-result-body"><MarkdownContent>{result.result}</MarkdownContent></div>
+        <div className="automation-result-body">
+          <section className="automation-report-section" aria-labelledby="automation-summary-heading">
+            <h3 id="automation-summary-heading">Summary</h3>
+            <MarkdownContent>{result.result}</MarkdownContent>
+          </section>
+          <section className="automation-report-section automation-noteworthy" aria-labelledby="automation-noteworthy-heading">
+            <h3 id="automation-noteworthy-heading">Worth noting</h3>
+            {result.noteworthy?.length ? <ul>{result.noteworthy.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ul> : <p>Nothing else needs attention.</p>}
+          </section>
+        </div>
         <footer>
           <time>{new Date(notification.createdAt).toLocaleString()}</time>
           <div>

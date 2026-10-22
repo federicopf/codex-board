@@ -146,7 +146,7 @@ impl AutomationStore {
         for item in &mut state.automations {
             if item.last_result.is_none() {
                 if let Some(error) = item.last_error.as_ref() {
-                    item.last_result = Some(AutomationRunResult { status: "failed".into(), summary: error.clone(), finished_at: item.last_run_at.unwrap_or(0) });
+                    item.last_result = Some(AutomationRunResult { status: "failed".into(), summary: error.clone(), noteworthy: Vec::new(), finished_at: item.last_run_at.unwrap_or(0) });
                 }
             }
             item.run_state = None;
@@ -175,8 +175,10 @@ impl AutomationStore {
                         let raw = event.params.get("status").and_then(serde_json::Value::as_str).unwrap_or("unknown");
                         let status = if raw == "completed" { "success" } else if raw == "interrupted" { "failed" } else { raw };
                         let summary = event.params.get("result").and_then(serde_json::Value::as_str).unwrap_or("Esito non verificabile.");
+                        let noteworthy = event.params.get("noteworthy").and_then(serde_json::Value::as_array).map(|items| items.iter()
+                            .filter_map(serde_json::Value::as_str).take(4).map(|item| item.chars().take(240).collect()).collect()).unwrap_or_default();
                         let finished = event.params.get("finishedAt").and_then(serde_json::Value::as_i64).unwrap_or_else(now_ms);
-                        let _ = outcomes.record_completion(id, status, summary, finished).await;
+                        let _ = outcomes.record_completion(id, status, summary, noteworthy, finished).await;
                     }
                 }
             }
@@ -220,13 +222,13 @@ impl AutomationStore {
         Ok(automation)
     }
 
-    async fn record_completion(&self, id: &str, status: &str, summary: &str, finished_at: i64) -> Result<(), String> {
+    async fn record_completion(&self, id: &str, status: &str, summary: &str, noteworthy: Vec<String>, finished_at: i64) -> Result<(), String> {
         let mut state = self.state.lock().await;
         let mut next = state.clone();
         let Some(item) = next.automations.iter_mut().find(|item| item.id == id) else { return Ok(()) };
         if item.last_result.as_ref().is_some_and(|previous| previous.finished_at > finished_at) { return Ok(()) }
         let status = match status { "success" | "failed" => status, _ => "unknown" };
-        item.last_result = Some(AutomationRunResult { status: status.into(), summary: summary.chars().take(500).collect(), finished_at });
+        item.last_result = Some(AutomationRunResult { status: status.into(), summary: summary.chars().take(500).collect(), noteworthy: noteworthy.into_iter().take(4).map(|item| item.chars().take(240).collect()).collect(), finished_at });
         item.last_error = (status != "success").then(|| summary.to_owned());
         item.last_run_at = Some(finished_at);
         self.persist(&next)?;
@@ -254,7 +256,7 @@ impl AutomationStore {
                 match self.coordinator.send_automation(thread_id.clone(), prompt.clone(), id.into(), automation.name.clone()).await {
                     Ok(_) => { self.emit_updated().await; Ok(()) },
                     Err(error) => {
-                        self.record_completion(id, "failed", &error.message, now_ms()).await?;
+                        self.record_completion(id, "failed", &error.message, Vec::new(), now_ms()).await?;
                         self.emit_failed(&automation, Some(thread_id), error.message.clone()).await;
                         Err(error.message)
                     }
@@ -265,23 +267,33 @@ impl AutomationStore {
                 let threads = self.client.list_threads().await.map_err(|error| error.message)?;
                 let mut moved = 0;
                 let mut failed = 0;
+                let mut noteworthy = Vec::new();
                 for thread in threads.iter().filter(|thread| title_category(thread.name.as_deref()) == *from_category) {
                     if let AutomationAction::CategoryPipeline { after_minutes, .. } = &automation.action {
                         let entered = self.state.lock().await.entered_at.get(&format!("{id}:{}", thread.id)).copied();
                         if !entered.is_some_and(|entered| now_ms().saturating_sub(entered) >= minutes_ms(*after_minutes, "Pipeline delay").unwrap_or(i64::MAX)) { continue; }
                     }
                     let title = display_title(thread.name.as_deref(), thread.preview.as_deref());
-                    if self.client.rename_thread(thread.id.clone(), format!("{to_category} - {title}")).await.is_ok() {
-                        moved += 1;
-                        self.state.lock().await.entered_at.remove(&format!("{id}:{}", thread.id));
+                    match self.client.rename_thread(thread.id.clone(), format!("{to_category} - {title}")).await {
+                        Ok(_) => {
+                            moved += 1;
+                            self.state.lock().await.entered_at.remove(&format!("{id}:{}", thread.id));
+                        }
+                        Err(error) => {
+                            failed += 1;
+                            noteworthy.push(format!("{title}: {}", error.message));
+                        }
                     }
-                    else { failed += 1; }
                 }
                 let status = if failed == 0 { "success" } else { "failed" };
-                let summary = format!("{moved} task spostati da {from_category} a {to_category}; {failed} non riusciti.");
-                self.record_completion(id, status, &summary, now_ms()).await?;
+                let summary = if failed == 0 {
+                    format!("Spostate {moved} attività da {from_category} a {to_category}. Tutte le modifiche richieste sono riuscite.")
+                } else {
+                    format!("Spostate {moved} attività da {from_category} a {to_category}; {failed} non completate. L'automazione è fallita perché il risultato è parziale.")
+                };
+                self.record_completion(id, status, &summary, noteworthy.clone(), now_ms()).await?;
                 self.client.emit_local_event("board/automation/completed", json!({
-                    "automationId": id, "automationName": automation.name, "status": status, "result": summary
+                    "automationId": id, "automationName": automation.name, "status": status, "result": summary, "noteworthy": noteworthy
                 })).await;
                 Ok(())
             }
@@ -587,7 +599,7 @@ impl AutomationStore {
                     let Some(threads) = threads.as_ref() else {
                         continue;
                     };
-                    let mut errors = Vec::new();
+                    let mut noteworthy = Vec::new();
                     let mut moved = 0_u64;
                     for thread in threads {
                         if title_category(thread.name.as_deref()) != from_category {
@@ -600,12 +612,12 @@ impl AutomationStore {
                             .rename_thread(thread.id.clone(), format!("{to_category} - {title}"))
                             .await
                         {
-                            errors.push(error);
+                            noteworthy.push(format!("{title}: {}", error.message));
                         } else {
                             moved += 1;
                         }
                     }
-                    let error_count = errors.len();
+                    let error_count = noteworthy.len();
                     let mut state = self.state.lock().await;
                     if let Some(current) = state
                         .automations
@@ -613,12 +625,12 @@ impl AutomationStore {
                         .find(|item| item.id == automation.id)
                     {
                         current.last_run_at = Some(now);
-                        current.last_error = if errors.is_empty() {
+                        current.last_error = if noteworthy.is_empty() {
                             None
                         } else {
-                            Some(format!("{} task(s) could not be moved", errors.len()))
+                            Some(format!("{} attività non spostate", noteworthy.len()))
                         };
-                        if errors.is_empty() {
+                        if noteworthy.is_empty() {
                             current.enabled = false;
                         } else if let AutomationAction::ScheduledCategoryPipeline {
                             run_at, ..
@@ -637,10 +649,11 @@ impl AutomationStore {
                                 "automationName": automation.name.clone(),
                                 "status": if error_count > 0 { "failed" } else { "completed" },
                                 "result": if error_count > 0 {
-                                    format!("Moved {moved} task(s) from {from_category} to {to_category}; {error_count} failed.")
+                                    format!("Spostate {moved} attività da {from_category} a {to_category}; {error_count} non completate. Il risultato è parziale.")
                                 } else {
-                                    format!("Moved {moved} task(s) from {from_category} to {to_category}.")
+                                    format!("Spostate {moved} attività da {from_category} a {to_category}. Tutte le modifiche richieste sono riuscite.")
                                 },
+                                "noteworthy": noteworthy,
                             }),
                         )
                         .await;
@@ -1073,8 +1086,8 @@ mod tests {
         let store = AutomationStore::new(path.clone(), client.clone(), coordinator);
         let created = store.create(edit_input(json!({"kind":"recurringMessage","threadId":"t","prompt":"Check","everyMinutes":60,"startInMinutes":60}))).await.unwrap();
         store.set_enabled(&created.id, false).await.unwrap();
-        store.record_completion(&created.id, "failed", "Missing access.", 200).await.unwrap();
-        store.record_completion(&created.id, "success", "Stale", 100).await.unwrap();
+        store.record_completion(&created.id, "failed", "Missing access.", Vec::new(), 200).await.unwrap();
+        store.record_completion(&created.id, "success", "Stale", Vec::new(), 100).await.unwrap();
         store.update(&created.id, edit_input(json!({"kind":"recurringMessage","threadId":"t","prompt":"New","everyMinutes":60,"startInMinutes":60}))).await.unwrap();
         persistence::write_json(&queue_path, &json!({"t":[{"id":"manual","text":"Earlier manual instruction"},{"id":"q","text":"New","automation":{"id":created.id,"name":"Review"}}]})).unwrap();
         let coordinator = TurnCoordinator::new(client.clone(), queue_path);

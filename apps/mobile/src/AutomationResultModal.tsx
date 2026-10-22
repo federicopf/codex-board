@@ -27,7 +27,16 @@ export function AutomationResultModal({ notification, onClose, onOpenThread, onB
             <View style={styles.headerCopy}><Text style={styles.eyebrow}>AUTOMATION RESULT</Text><Text style={styles.title}>{result.name}</Text><Text style={styles.meta}>{outcome.label}{result.durationMs?` · ${Math.max(1,Math.round(result.durationMs/1000))}s`:""}</Text></View>
             <Pressable hitSlop={10} style={styles.close} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close result"><MobileIcon name="x" size={22} color={colors.textMuted}/></Pressable>
           </View>
-          <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}><Markdown style={markdownStyles}>{formatCodexDirectives(result.result)}</Markdown></ScrollView>
+          <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
+            <View style={styles.reportSection}>
+              <Text style={styles.sectionHeading}>SUMMARY</Text>
+              <Markdown style={markdownStyles}>{formatCodexDirectives(result.result)}</Markdown>
+            </View>
+            <View style={[styles.reportSection, styles.noteworthySection]}>
+              <Text style={styles.sectionHeading}>WORTH NOTING</Text>
+              {result.noteworthy?.length ? result.noteworthy.map((item, index) => <Text key={`${index}-${item}`} style={styles.noteItem}>•  {item}</Text>) : <Text style={styles.emptyNotes}>Nothing else needs attention.</Text>}
+            </View>
+          </ScrollView>
           <View style={styles.footer}>
             {outcome.retryable && onRetry && <RetryAutomationAction onRetry={onRetry} onAccepted={onClose}/>}
             {onBackToList?<Pressable style={styles.secondary} onPress={onBackToList}><Text style={styles.secondaryText}>Back to results</Text></Pressable>:null}
@@ -46,7 +55,7 @@ const styles=StyleSheet.create({
   header:{padding:spacing.lg,flexDirection:"row",alignItems:"center",gap:spacing.md,borderBottomWidth:StyleSheet.hairlineWidth,borderColor:colors.border},
   statusIcon:{width:42,height:42,alignItems:"center",justifyContent:"center",borderRadius:13,backgroundColor:"#E8F8F0"},statusIconFailed:{backgroundColor:"#FFF0ED"},statusSymbol:{color:colors.success,fontSize:18,fontWeight:"800"},statusSymbolFailed:{color:colors.danger},
   headerCopy:{minWidth:0,flex:1},eyebrow:{color:colors.primary,fontSize:8,fontWeight:"800",letterSpacing:1},title:{marginTop:4,color:colors.text,fontSize:18,fontWeight:"800",letterSpacing:-.5},meta:{marginTop:4,color:colors.textMuted,fontSize:9},close:{width:48,height:48,alignItems:"center",justifyContent:"center",borderRadius:11,backgroundColor:colors.surfaceMuted},closeText:{color:colors.textMuted,fontSize:23,lineHeight:25},
-  body:{maxHeight:390},bodyContent:{padding:spacing.xl},footer:{padding:spacing.md,flexDirection:"row",flexWrap:"wrap",justifyContent:"flex-end",gap:spacing.sm,borderTopWidth:StyleSheet.hairlineWidth,borderColor:colors.border},secondary:{minHeight:42,paddingHorizontal:spacing.lg,alignItems:"center",justifyContent:"center",borderWidth:1,borderColor:colors.border,borderRadius:radius.md},secondaryText:{color:colors.text,fontSize:11,fontWeight:"700"},primary:{minHeight:42,paddingHorizontal:spacing.lg,alignItems:"center",justifyContent:"center",borderRadius:radius.md,backgroundColor:colors.ink},primaryText:{color:"white",fontSize:11,fontWeight:"700"},
+  body:{maxHeight:390},bodyContent:{padding:spacing.xl},reportSection:{},noteworthySection:{marginTop:spacing.lg,paddingTop:spacing.lg,borderTopWidth:StyleSheet.hairlineWidth,borderColor:colors.border},sectionHeading:{marginBottom:spacing.sm,color:colors.textMuted,fontSize:9,fontWeight:"800",letterSpacing:1},noteItem:{marginTop:6,color:colors.text,fontSize:12,lineHeight:18},emptyNotes:{color:colors.textMuted,fontSize:12},footer:{padding:spacing.md,flexDirection:"row",flexWrap:"wrap",justifyContent:"flex-end",gap:spacing.sm,borderTopWidth:StyleSheet.hairlineWidth,borderColor:colors.border},secondary:{minHeight:42,paddingHorizontal:spacing.lg,alignItems:"center",justifyContent:"center",borderWidth:1,borderColor:colors.border,borderRadius:radius.md},secondaryText:{color:colors.text,fontSize:11,fontWeight:"700"},primary:{minHeight:42,paddingHorizontal:spacing.lg,alignItems:"center",justifyContent:"center",borderRadius:radius.md,backgroundColor:colors.ink},primaryText:{color:"white",fontSize:11,fontWeight:"700"},
 });
 
 const markdownStyles=StyleSheet.create({body:{color:colors.text,fontSize:13,lineHeight:20},paragraph:{marginTop:0,marginBottom:8},heading1:{color:colors.text,fontSize:18,fontWeight:"800"},heading2:{color:colors.text,fontSize:16,fontWeight:"800"},bullet_list:{marginVertical:4},ordered_list:{marginVertical:4},code_inline:{color:"#3E4380",backgroundColor:colors.surfaceMuted},fence:{padding:10,borderRadius:10,color:"white",backgroundColor:colors.ink}});

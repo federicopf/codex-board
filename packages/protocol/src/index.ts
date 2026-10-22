@@ -60,12 +60,14 @@ export interface AutomationResultDetails {
   id: string;
   name: string;
   result: string;
+  noteworthy?: string[];
   status: "completed" | "failed" | "interrupted" | string;
   durationMs: number | null;
 }
 export interface AutomationRunResult {
   status: "success" | "failed" | "unknown";
   summary: string;
+  noteworthy?: string[];
   finishedAt: number;
 }
 export function automationOutcome(status: string | null | undefined): { label: string; tone: "success" | "failed" | "unknown"; retryable: boolean } {

@@ -389,7 +389,7 @@ dependencies = [
 
 [[package]]
 name = "codex-board"
-version = "0.2.16"
+version = "0.2.17"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -2225,6 +2225,7 @@ dependencies = [
  "bstr",
  "dbus",
  "normpath",
+ "url",
  "windows-sys 0.59.0",
 ]
 

@@ -60,17 +60,23 @@ function linkifyLocalPaths(source: string) {
 }
 
 export function MarkdownContent({ children }: { children: string }) {
+  const [pathError, setPathError] = useState<string | null>(null);
   const openLink = (href: string | undefined) => {
     if (!href) return;
+    setPathError(null);
     if (href.startsWith("/") || /^[A-Za-z]:\\/.test(href) || href.startsWith("\\\\")) {
-      void invoke("open_local_path", { path: href }).catch(() => undefined);
+      void invoke("open_local_path", { path: href }).catch((error: unknown) => {
+        setPathError(error instanceof Error ? error.message : String(error));
+      });
       return;
     }
     if (href.startsWith("file://")) {
       const localPath = fileUrlPath(href);
       if (!localPath) return;
       if (!/^[A-Za-z]:\\/.test(localPath) && !localPath.startsWith("\\\\")) {
-        void invoke("open_local_path", { path: localPath }).catch(() => undefined);
+        void invoke("open_local_path", { path: localPath }).catch((error: unknown) => {
+          setPathError(error instanceof Error ? error.message : String(error));
+        });
         return;
       }
       void invoke("open_external_url", { url: href }).catch(() => {
@@ -109,6 +115,7 @@ export function MarkdownContent({ children }: { children: string }) {
       >
         {linkifyLocalPaths(formatCodexDirectives(children))}
       </ReactMarkdown>
+      {pathError && <div className="local-path-error" role="alert">Could not open this file from Windows: {pathError}</div>}
     </div>
   );
 }

@@ -627,7 +627,8 @@ mod tests {
         let submitted = automation_text("Run the report", Some(&context));
         assert!(submitted.starts_with("Run the report\n\n<!-- codex-board-automation:"));
         assert!(submitted.contains("ONLY one JSON object"));
-        assert!(submitted.contains("at most 40 words total"));
+        assert!(submitted.contains("at most 60 words"));
+        assert!(submitted.contains("noteworthy"));
         assert!(submitted.contains("missing access"));
         assert_eq!(automation_text("Manual prompt", None), "Manual prompt");
     }

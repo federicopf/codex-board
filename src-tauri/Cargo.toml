@@ -1,6 +1,6 @@
 [package]
 name = "codex-board"
-version = "0.2.16"
+version = "0.2.17"
 description = "A native Windows board for organizing Codex threads"
 authors = ["Federico Germani"]
 edition = "2024"
@@ -28,4 +28,4 @@ axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 futures-util = "0.3"
 rand = "0.9"
-opener = "0.7"
+opener = { version = "0.7", features = ["reveal"] }

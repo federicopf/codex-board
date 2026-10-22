@@ -30,6 +30,8 @@ pub struct AutomationResultDetails {
     pub id: String,
     pub name: String,
     pub result: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub noteworthy: Vec<String>,
     pub status: String,
     pub duration_ms: Option<i64>,
 }
@@ -111,6 +113,7 @@ impl NotificationStore {
                     client.emit_local_event("board/automation/completed", json!({
                         "threadId": thread_id, "automationId": result.id, "automationName": result.name,
                         "status": result.status, "result": result.result, "durationMs": result.duration_ms,
+                        "noteworthy": result.noteworthy,
                         "finishedAt": item.created_at
                     })).await;
                     continue;
@@ -191,6 +194,8 @@ fn from_event(
                     .to_owned(),
                 name: name.to_owned(),
                 result: truncate(result, 2_000),
+                noteworthy: params.get("noteworthy").and_then(Value::as_array).map(|items| items.iter()
+                    .filter_map(Value::as_str).take(4).map(|item| truncate(item, 240)).collect()).unwrap_or_default(),
                 status: status.to_owned(),
                 duration_ms: params.get("durationMs").and_then(Value::as_i64),
             }),
@@ -209,6 +214,7 @@ fn from_event(
                 id: pending.id.clone(),
                 name: pending.name.clone(),
                 result: report.summary,
+                noteworthy: report.noteworthy,
                 status: report.status,
                 duration_ms: turn.get("durationMs").and_then(Value::as_i64),
             }),
@@ -332,7 +338,7 @@ mod tests {
                     "durationMs": 1500,
                     "items": [
                         { "type": "userMessage", "text": "Run" },
-                        { "type": "agentMessage", "text": r#"{"status":"success","summary":"Found 3 records. Updated the report."}"# }
+                        { "type": "agentMessage", "text": r#"{"status":"success","summary":"Found 3 records. Updated the report.","noteworthy":["A retry recovered a timeout."]}"# }
                     ]
                 }
             }),
@@ -344,13 +350,14 @@ mod tests {
         let result = notification.automation.expect("automation details");
         assert_eq!(result.name, "Daily report");
         assert_eq!(result.result, "Found 3 records. Updated the report.");
+        assert_eq!(result.noteworthy, vec!["A retry recovered a timeout."]);
         assert_eq!(result.duration_ms, Some(1500));
     }
 
     #[test]
     fn empty_completed_turn_uses_captured_final_message_not_commentary() {
         let pending = PendingAutomation { id: "a".into(), name: "Review".into(),
-            final_text: Some(r#"{"status":"failed","summary":"Test non superati."}"#.into()) };
+            final_text: Some(r#"{"status":"failed","summary":"Test non superati.","noteworthy":[]}"#.into()) };
         let item = from_event("turn/completed", &json!({
             "threadId":"t", "turn": {"id":"turn", "status":"completed", "items":[]}
         }), false, Some(&pending)).unwrap();
@@ -369,7 +376,7 @@ mod tests {
         // Synthetic local events only: no Codex process, task or model turn is started.
         client.emit_local_event("board/automation/submitting", json!({"threadId":"t","automationId":"a","automationName":"Review"})).await;
         client.emit_local_event("item/completed", json!({"threadId":"t","item":{"type":"agentMessage","phase":"commentary","text":"Working..."}})).await;
-        client.emit_local_event("item/completed", json!({"threadId":"t","item":{"type":"agentMessage","phase":"final_answer","text":r#"{"status":"success","summary":"Tutto verificato."}"#}})).await;
+        client.emit_local_event("item/completed", json!({"threadId":"t","item":{"type":"agentMessage","phase":"final_answer","text":r#"{"status":"success","summary":"Tutto verificato.","noteworthy":["Un warning non bloccante."]}"#}})).await;
         client.emit_local_event("turn/completed", json!({"threadId":"t","turn":{"id":"fast","status":"completed","items":[]}})).await;
         client.emit_local_event("board/automation/turn-started", json!({"threadId":"t","turnId":"fast","automationId":"a","automationName":"Review"})).await;
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -379,6 +386,7 @@ mod tests {
                     assert_eq!(items.len(), 1);
                     assert_eq!(items[0].automation.as_ref().unwrap().status, "success");
                     assert_eq!(items[0].automation.as_ref().unwrap().result, "Tutto verificato.");
+                    assert_eq!(items[0].automation.as_ref().unwrap().noteworthy, vec!["Un warning non bloccante."]);
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
