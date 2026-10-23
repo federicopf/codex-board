@@ -61,6 +61,7 @@ export async function getTailscaleStatus(): Promise<TailscaleInfo> { return invo
 export async function configureTailscaleServe(): Promise<TailscaleInfo> { return invoke<TailscaleInfo>("configure_tailscale_serve"); }
 export async function getBoardConfig(): Promise<BoardConfig> { return invoke<BoardConfig>("get_board_config"); }
 export async function setBoardConfig(config: BoardConfig): Promise<BoardConfig> { return invoke<BoardConfig>("set_board_config", { config }); }
+export async function deleteCustomer(customerId: string): Promise<BoardConfig> { return invoke<BoardConfig>("delete_customer", { customerId }); }
 export async function setTurnSettings(settings: TurnSettings, initializeOnly = false): Promise<BoardConfig> { return invoke<BoardConfig>("set_turn_settings", { settings: { ...settings, initializeOnly } }); }
 export async function listAutomations(): Promise<Automation[]> { return invoke<Automation[]>("list_automations"); }
 export async function createAutomation(input: CreateAutomationInput): Promise<Automation> { return invoke<Automation>("create_automation", { input }); }

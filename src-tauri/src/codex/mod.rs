@@ -1,10 +1,11 @@
+mod attachments;
 mod coordinator;
 mod process;
 mod protocol;
 mod types;
 
 use std::sync::Arc;
-use std::{fs::File, io::{Read, Seek, SeekFrom}, path::Path};
+use std::{fs::File, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}};
 
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast};
@@ -18,8 +19,17 @@ pub use types::{CodexErrorDto, CodexEventDto, ThreadDto};
 pub struct CodexClient {
     running: Mutex<Option<Arc<RunningClient>>>,
     events: EventQueue,
+    attachment_dir: PathBuf,
 }
 
+fn with_attachment_paths(text: &str, paths: &[PathBuf]) -> String {
+    if paths.is_empty() { return text.to_owned(); }
+    let mut prompt = text.trim().to_owned();
+    if !prompt.is_empty() { prompt.push_str("\n\n"); }
+    prompt.push_str("Attached image files are also available locally on this computer:\n");
+    for path in paths { prompt.push_str(&format!("- {}\n", path.display())); }
+    prompt
+}
 
 fn turn_input(text: &str, image_urls: Vec<String>) -> Vec<Value> {
     let mut input = Vec::new();
@@ -175,9 +185,14 @@ fn read_rollout_page(path: &Path, before: Option<usize>, limit: usize) -> std::i
 
 impl CodexClient {
     pub fn new() -> Self {
+        Self::with_attachment_dir(std::env::temp_dir().join("codex-board-attachments"))
+    }
+
+    pub fn with_attachment_dir(attachment_dir: PathBuf) -> Self {
         Self {
             running: Mutex::new(None),
             events: EventQueue::new(),
+            attachment_dir,
         }
     }
 
@@ -351,6 +366,10 @@ impl CodexClient {
                 json!({ "threadId": thread_id, "name": name }),
             )
             .await?;
+        let attachment_paths = attachments::persist_inline_images(&self.attachment_dir, &image_urls)
+            .map_err(|error| CodexErrorDto::new(CodexErrorCode::RequestFailed, "Could not save image attachment")
+                .with_details(error.to_string()))?;
+        let prompt = with_attachment_paths(&prompt, &attachment_paths);
         let input = turn_input(&prompt, image_urls);
         client
             .request(
@@ -534,6 +553,10 @@ impl CodexClient {
             }
             return Err(error);
         }
+        let attachment_paths = attachments::persist_inline_images(&self.attachment_dir, &image_urls)
+            .map_err(|error| CodexErrorDto::new(CodexErrorCode::RequestFailed, "Could not save image attachment")
+                .with_details(error.to_string()))?;
+        let text = with_attachment_paths(&text, &attachment_paths);
         let input = turn_input(&text, image_urls);
         let mut params = json!({ "threadId": thread_id, "input": input });
         if let Some(settings) = settings {
@@ -636,6 +659,18 @@ mod tests {
             ]).as_array().unwrap().to_vec());
         assert_eq!(super::turn_input("", vec![data.into()]), serde_json::json!([{"type":"image","url":data}]).as_array().unwrap().to_vec());
         assert!(super::turn_input("Text", vec![])[0].get("image").is_none());
+    }
+
+    #[test]
+    fn image_prompt_keeps_the_visual_attachment_and_exposes_its_local_file() {
+        let path = PathBuf::from(r"C:\Users\Asus\AppData\Codex Board\attachments\image.jpg");
+        let prompt = with_attachment_paths("Upload this image", &[path]);
+        assert!(prompt.starts_with("Upload this image\n\n"));
+        assert!(prompt.contains("available locally on this computer"));
+        assert!(prompt.contains(r"C:\Users\Asus\AppData\Codex Board\attachments\image.jpg"));
+        let input = turn_input(&prompt, vec!["data:image/jpeg;base64,/9j/AA==".into()]);
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[1]["type"], "image");
     }
     use super::*;
 

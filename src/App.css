@@ -547,11 +547,16 @@ body { min-width: 980px; }
 .sidebar-project-toggle:hover { color: white; background: rgba(255,255,255,.1); }
 .sidebar-project-toggle svg { width: 13px; height: 13px; transition: transform .15s; }
 .sidebar-project-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
-.sidebar-customer { flex: 0 0 calc(100% - 18px); width: calc(100% - 18px); min-height: 34px; display: flex; align-items: center; gap: 8px; margin: 2px 0 2px 18px; padding: 5px 9px; border: 1px solid transparent; border-radius: 8px; color: var(--sidebar-muted); background: transparent; text-align: left; font-size: 10px; transition: color .15s, background .15s, border-color .15s; }
+.sidebar-customer-row { flex: 0 0 calc(100% - 18px); min-width: 0; display: flex; align-items: center; gap: 2px; margin: 2px 0 2px 18px; }
+.sidebar-customer { flex: 1 1 auto; width: auto; min-width: 0; min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 5px 9px; border: 1px solid transparent; border-radius: 8px; color: var(--sidebar-muted); background: transparent; text-align: left; font-size: 10px; transition: color .15s, background .15s, border-color .15s; }
 .sidebar-customer:hover, .sidebar-customer.active { color: white; background: rgba(255,255,255,.08); }
 .sidebar-customer > span:first-child { color: #9699ff; font-size: 16px; }
 .sidebar-customer > span:nth-child(2) { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-customer small { color: var(--sidebar-muted); font-size: 9px; }
+.sidebar-customer-delete { flex: 0 0 28px; width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 7px; color: #e19b95; background: transparent; opacity: 0; transition: opacity .15s, color .15s, background .15s; }
+.sidebar-customer-row:hover .sidebar-customer-delete, .sidebar-customer-row:focus-within .sidebar-customer-delete { opacity: 1; }
+.sidebar-customer-delete:hover { color: #ffb5ad; background: rgba(228,94,80,.16); }
+.sidebar-customer-delete svg { width: 13px; height: 13px; }
 .sidebar-customer.is-customer-drop-target { border-color: #999bff; color: white; background: rgba(133,136,255,.24); box-shadow: 0 0 0 2px rgba(133,136,255,.12); }
 .sidebar-project-archive { position: absolute; z-index: 2; top: 13px; right: 8px; width: 27px; height: 27px; display: grid; place-items: center; border: 0; border-radius: 7px; color: var(--sidebar-muted); background: transparent; opacity: 0; transition: opacity .15s, color .15s, background .15s; }
 .sidebar-project-row:hover .sidebar-project-archive, .sidebar-project-row:focus-within .sidebar-project-archive { opacity: 1; }

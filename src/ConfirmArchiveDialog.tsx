@@ -4,6 +4,7 @@ export function ConfirmArchiveDialog({
   title,
   description,
   confirmLabel,
+  busyLabel = "Archiving…",
   busy,
   onCancel,
   onConfirm,
@@ -11,6 +12,7 @@ export function ConfirmArchiveDialog({
   title: string;
   description: string;
   confirmLabel: string;
+  busyLabel?: string;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
@@ -25,7 +27,7 @@ export function ConfirmArchiveDialog({
         <p id="archive-confirm-description">{description}</p>
         <div className="dialog-actions">
           <button type="button" className="secondary" disabled={busy} onClick={onCancel}>Cancel</button>
-          <button type="button" className="archive-confirm-button" disabled={busy} onClick={onConfirm}>{busy ? "Archiving…" : confirmLabel}</button>
+          <button type="button" className="archive-confirm-button" disabled={busy} onClick={onConfirm}>{busy ? busyLabel : confirmLabel}</button>
         </div>
       </section>
     </div>

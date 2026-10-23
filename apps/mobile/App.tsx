@@ -882,6 +882,15 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     if (items.length === 0) { Alert.alert("Empty project", "This project has no conversations and will remain available."); return; }
     Alert.alert("Archive project", `Archive ${items.length} tasks from “${project.label}”?`, [{ text: "Cancel", style: "cancel" }, { text: "Archive", style: "destructive", onPress: () => void Promise.all(items.map((thread) => api.archive(thread.id))).then(() => { setProjectOpen(false); setSelectedProject(ALL_PROJECTS); return refresh(); }).catch((error) => Alert.alert("Could not archive project", String(error))) }]);
   }
+  function deleteCustomer(customer: ProjectCustomer) {
+    Alert.alert("Delete customer", `Remove “${customer.name}”? Assigned conversations will return to the project board; their history will remain.`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: () => void api.deleteCustomer(customer.id).then((saved) => {
+        setConfig(saved);
+        if (selectedCustomerId === customer.id) setSelectedCustomerId(null);
+      }).catch((error) => Alert.alert("Could not delete customer", error instanceof Error ? error.message : String(error))) },
+    ]);
+  }
   async function stopThread(thread: ThreadDto) {
     try { const loaded = await api.thread(thread.id); const turnId = activeTurnId(loaded); if (turnId) await api.interrupt(thread.id, turnId); else Alert.alert("Thread changed", "The active turn is no longer available."); await refresh(); }
     catch (error) { Alert.alert("Could not stop task", error instanceof Error ? error.message : String(error)); }
@@ -964,6 +973,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
       onBackToProjects={()=>setProjectOpen(false)}
       onCategory={setActiveCategory}
       onCustomer={(id)=>{setSelectedCustomerId(id);setSearch("");setActiveCategory(null)}}
+      onDeleteCustomer={deleteCustomer}
       onCreateCustomer={()=>setCreatingCustomer(true)}
       onAssignCustomer={setAssigningCustomerThread}
       onOpen={setSelected}

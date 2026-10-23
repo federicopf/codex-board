@@ -13,7 +13,7 @@ use axum::{
     },
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
@@ -264,6 +264,11 @@ impl RemoteGateway {
         save_board_config(&self.config, &self.config_path, config)
     }
 
+    pub fn delete_customer(&self, customer_id: &str) -> Result<BoardConfig, String> {
+        delete_customer_config(&self.config, &self.config_path, customer_id)?
+            .ok_or_else(|| "Customer not found".into())
+    }
+
     pub fn set_turn_settings(&self, patch: TurnPreferencesPatch) -> Result<BoardConfig, String> {
         save_turn_settings(&self.config, &self.config_path, patch)
     }
@@ -324,6 +329,7 @@ impl RemoteGateway {
                 .route("/v1/requests/respond", post(respond_to_request))
                 .route("/v1/requests", get(pending_requests))
                 .route("/v1/board", get(get_board).put(put_board))
+                .route("/v1/customers/{id}", delete(delete_customer))
                 .route("/v1/turn-settings", put(put_turn_settings))
                 .route(
                     "/v1/automations",
@@ -557,6 +563,23 @@ fn save_board_config(
     Ok(config)
 }
 
+fn delete_customer_config(
+    state: &Arc<RwLock<BoardConfig>>,
+    path: &Path,
+    customer_id: &str,
+) -> Result<Option<BoardConfig>, String> {
+    let mut current = state.write().map_err(|error| error.to_string())?;
+    if !current.customers.iter().any(|customer| customer.id == customer_id) {
+        return Ok(None);
+    }
+    let mut next = current.clone();
+    next.customers.retain(|customer| customer.id != customer_id);
+    next.revision = current.revision.saturating_add(1);
+    persist_config(path, &next)?;
+    *current = next.clone();
+    Ok(Some(next))
+}
+
 fn save_turn_settings(
     state: &Arc<RwLock<BoardConfig>>,
     path: &Path,
@@ -605,6 +628,7 @@ async fn get_image(
     let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
     let content_type = match extension.as_str() {
         "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "webp" => "image/webp", "gif" => "image/gif",
+        "heic" => "image/heic", "heif" => "image/heif", "avif" => "image/avif", "bmp" => "image/bmp", "tiff" => "image/tiff",
         _ => return Err(ApiError(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported image type".into())),
     };
     let metadata = tokio::fs::metadata(&path).await.map_err(|_| ApiError(StatusCode::NOT_FOUND, "Image not found".into()))?;
@@ -999,6 +1023,23 @@ async fn put_board(
     Ok(Json(config))
 }
 
+async fn delete_customer(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<BoardConfig>, ApiError> {
+    authorized(&headers, &state)?;
+    let config = delete_customer_config(&state.config, &state.config_path, &id)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Customer not found".into()))?;
+    state.client.emit_local_event(
+        "board/config/updated",
+        serde_json::to_value(&config)
+            .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
+    ).await;
+    Ok(Json(config))
+}
+
 async fn put_turn_settings(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -1290,6 +1331,32 @@ mod tests {
         assert_eq!(older["pagination"]["start"], 12);
         assert_eq!(older["messages"][0]["item"]["id"], "item-1-4");
         assert_eq!(older["pagination"]["hasOlder"], true);
+    }
+
+    #[test]
+    fn deleting_last_customer_persists_empty_customer_list() {
+        let directory = std::env::temp_dir().join(format!(
+            "codex-board-delete-customer-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let gateway = RemoteGateway::prepare(&directory).unwrap();
+        let mut config = gateway.board_config();
+        config.customers = vec![ProjectCustomer {
+            id: "customer-1".into(),
+            project_cwd: "C:\\work\\demo".into(),
+            name: "Acme".into(),
+            thread_ids: vec!["thread-1".into()],
+        }];
+        gateway.set_board_config(config).unwrap();
+
+        let saved = gateway.delete_customer("customer-1").unwrap();
+        assert!(saved.customers.is_empty());
+        assert!(gateway.board_config().customers.is_empty());
+        let disk: BoardConfig = crate::persistence::load_json_or_default(&directory.join("board-config.json"));
+        assert!(disk.customers.is_empty());
+        assert!(gateway.delete_customer("customer-1").is_err());
+
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

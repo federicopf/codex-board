@@ -49,6 +49,7 @@ export class BoardApi {
   forkThread(id: string, input: ForkThreadInput) { return this.request<ThreadDto>(`/v1/threads/${encodeURIComponent(id)}/fork`, { method: "POST", body: JSON.stringify(input) }); }
   async board() { return this.resolveBoard(await this.request<BoardConfig>("/v1/board")); }
   async updateBoard(config: BoardConfig) { return this.resolveBoard(await this.request<BoardConfig>("/v1/board", { method: "PUT", body: JSON.stringify(config) })); }
+  async deleteCustomer(id: string) { return this.resolveBoard(await this.request<BoardConfig>(`/v1/customers/${encodeURIComponent(id)}`, { method: "DELETE" })); }
   async updateTurnSettings(settings: TurnSettings) {
     if (this.sharedTurnSettings === null) await this.board();
     if (this.sharedTurnSettings === false) {

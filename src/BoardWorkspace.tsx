@@ -154,6 +154,7 @@ export interface BoardWorkspaceProps {
   onStop: (threadId: string) => void;
 
   onDeleteProject: (projectKey: string) => void;
+  onDeleteCustomer: (customerId: string) => void;
   rateLimits: JsonValue | null;
 }
 
@@ -203,7 +204,10 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
               </button>
               {item.key !== ALL_PROJECTS && <button type="button" className="sidebar-project-toggle" aria-label={`${expanded ? "Collapse" : "Expand"} ${item.label} customers`} aria-expanded={expanded} onClick={() => setExpandedProjects((current) => { const next = new Set(current); if (next.has(item.key)) next.delete(item.key); else next.add(item.key); return next; })}><Icon name="chevronDown" /></button>}
               {item.key !== ALL_PROJECTS && <button type="button" className="sidebar-project-archive" aria-label={`Archive project ${item.label}`} title="Archive project" onClick={(event) => { event.stopPropagation(); props.onDeleteProject(item.key); }}><Icon name="trash" /></button>}
-              {item.key !== ALL_PROJECTS && expanded && projectCustomers.map((customer) => <CustomerSidebarItem key={customer.id} customer={customer} active={props.customerId === customer.id} onClick={() => { setExpandedProjects((current) => new Set(current).add(item.key)); props.onCustomerChange(item.key, customer.id); }} />)}
+              {item.key !== ALL_PROJECTS && expanded && projectCustomers.map((customer) => <div className="sidebar-customer-row" key={customer.id}>
+                <CustomerSidebarItem customer={customer} active={props.customerId === customer.id} onClick={() => { setExpandedProjects((current) => new Set(current).add(item.key)); props.onCustomerChange(item.key, customer.id); }} />
+                <button type="button" className="sidebar-customer-delete" aria-label={`Delete customer ${customer.name}`} title="Delete customer" onClick={(event) => { event.stopPropagation(); props.onDeleteCustomer(customer.id); }}><Icon name="trash" /></button>
+              </div>)}
             </div>;
           })}
         </div>

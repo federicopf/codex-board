@@ -224,6 +224,20 @@ async fn set_board_config(
 }
 
 #[tauri::command]
+async fn delete_customer(
+    gateway: tauri::State<'_, RemoteGateway>,
+    client: tauri::State<'_, Arc<CodexClient>>,
+    customer_id: String,
+) -> Result<BoardConfig, String> {
+    let saved = gateway.delete_customer(&customer_id)?;
+    client.emit_local_event(
+        "board/config/updated",
+        serde_json::to_value(&saved).map_err(|error| error.to_string())?,
+    ).await;
+    Ok(saved)
+}
+
+#[tauri::command]
 async fn set_turn_settings(
     gateway: tauri::State<'_, RemoteGateway>,
     client: tauri::State<'_, Arc<CodexClient>>,
@@ -315,12 +329,12 @@ async fn clear_notifications(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let client = Arc::new(CodexClient::new());
     let app = tauri::Builder::default()
-        .manage(client.clone())
         .setup(move |app| {
             let directory = app.path().app_data_dir()?;
             std::fs::create_dir_all(&directory)?;
+            let client = Arc::new(CodexClient::with_attachment_dir(directory.join("attachments")));
+            app.manage(client.clone());
             let coordinator =
                 TurnCoordinator::new(client.clone(), directory.join("message-queues.json"));
             coordinator.start();
@@ -366,6 +380,7 @@ pub fn run() {
             gateway_info,
             get_board_config,
             set_board_config,
+            delete_customer,
             set_turn_settings,
             tailscale_status,
             configure_tailscale_serve,
