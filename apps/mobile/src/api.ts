@@ -60,8 +60,8 @@ export class BoardApi {
     }
     return this.resolveBoard(await this.request<BoardConfig>("/v1/turn-settings", { method: "PUT", body: JSON.stringify(settings) }));
   }
-  thread(id: string, page?: { limit: number; before?: number }) {
-    const query = page ? `?limit=${page.limit}${page.before === undefined ? "" : `&before=${page.before}`}` : "";
+  thread(id: string, page?: { limit: number; before?: number; unit?: "items" }) {
+    const query = page ? `?limit=${page.limit}${page.before === undefined ? "" : `&before=${page.before}`}${page.unit ? `&unit=${page.unit}` : ""}` : "";
     return this.request<Record<string, JsonValue>>(`/v1/threads/${encodeURIComponent(id)}${query}`);
   }
   archive(id: string) { return this.request<void>(`/v1/threads/${encodeURIComponent(id)}/archive`, { method: "POST" }); }

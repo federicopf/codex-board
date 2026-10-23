@@ -5,7 +5,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import type { BoardNotification } from "@codex-board/protocol";
 import type { ProjectCustomer } from "@codex-board/protocol";
 import type { ProjectInfo } from "./lib/projects";
-import { ALL_PROJECTS } from "./lib/projects";
+import { ALL_PROJECTS, normalizeProjectPath } from "./lib/projects";
 import type { BoardThread, JsonValue, QueuedMessage } from "./types";
 import { Icon } from "./ui/Icon";
 
@@ -35,8 +35,6 @@ function updatedLabel(updatedAt: number | null): string {
   const days = Math.floor(hours / 24);
   return `Updated ${days}d ago`;
 }
-
-function projectPathKey(path: string) { return path.replaceAll("\\", "/").replace(/\/+$/, "").toLocaleLowerCase(); }
 
 function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen, onMove, onFork, onRenameThread, onDelete, onStop, overlay = false }: {
   thread: BoardThread;
@@ -194,7 +192,7 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
         <div className="sidebar-project-list" role="navigation" aria-label="Project boards">
           {[{ key: ALL_PROJECTS, label: "All projects" }, ...props.projects].map((item) => {
             const stats = props.projectStats[item.key] || { tasks: 0, working: 0 };
-            const projectCustomers = props.customers.filter((customer) => projectPathKey(customer.projectCwd) === item.key);
+            const projectCustomers = props.customers.filter((customer) => normalizeProjectPath(customer.projectCwd) === item.key);
             const expanded = expandedProjects.has(item.key);
             return <div key={item.key} className="sidebar-project-row">
               {item.key !== ALL_PROJECTS && <ProjectDropTarget projectKey={item.key} />}

@@ -4,6 +4,7 @@ mod protocol;
 mod types;
 
 use std::sync::Arc;
+use std::{fs::File, io::{Read, Seek, SeekFrom}, path::Path};
 
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast};
@@ -67,6 +68,109 @@ fn native_cwd(cwd: &str) -> String {
         return converted;
     }
     cwd.to_owned()
+}
+
+fn camelize_keys(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(camelize_keys).collect()),
+        Value::Object(object) => {
+            let mut normalized = serde_json::Map::new();
+            for (key, value) in object {
+                let mut key_camel = String::with_capacity(key.len());
+                let mut uppercase_next = false;
+                for character in key.chars() {
+                    if character == '_' { uppercase_next = true; }
+                    else if uppercase_next { key_camel.extend(character.to_uppercase()); uppercase_next = false; }
+                    else { key_camel.push(character); }
+                }
+                normalized.insert(key_camel, camelize_keys(value));
+            }
+            Value::Object(normalized)
+        }
+        _ => value.clone(),
+    }
+}
+
+fn normalize_rollout_item(value: &Value) -> Option<Value> {
+    let mut item = camelize_keys(value);
+    let name = item.get("type")?.as_str()?;
+    let normalized = match name {
+        "UserMessage" => "userMessage",
+        "AgentMessage" => "agentMessage",
+        "ImageView" => "imageView",
+        "ImageGeneration" => "imageGeneration",
+        "Plan" => "plan",
+        "Reasoning" => "reasoning",
+        "CommandExecution" => "commandExecution",
+        "FileChange" => "fileChange",
+        "McpToolCall" => "mcpToolCall",
+        "DynamicToolCall" => "dynamicToolCall",
+        "WebSearch" => "webSearch",
+        other => other,
+    };
+    if !matches!(normalized, "userMessage" | "agentMessage" | "imageView" | "imageGeneration" | "plan" | "reasoning" | "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" | "webSearch") { return None; }
+    item["type"] = json!(normalized);
+    Some(item)
+}
+
+fn previous_jsonl_line(file: &mut File, cursor: &mut u64) -> std::io::Result<Option<(u64, Vec<u8>)>> {
+    if *cursor == 0 { return Ok(None); }
+    let mut end = *cursor;
+    let mut segments = Vec::<Vec<u8>>::new();
+    loop {
+        let start = end.saturating_sub(8192);
+        let mut block = vec![0; (end - start) as usize];
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut block)?;
+        if let Some(separator) = block.iter().rposition(|byte| *byte == b'\n') {
+            if separator + 1 < block.len() { segments.push(block[separator + 1..].to_vec()); }
+            let mut line = Vec::new();
+            for segment in segments.iter().rev() { line.extend_from_slice(segment); }
+            *cursor = start + separator as u64;
+            return Ok(Some((start + separator as u64 + 1, line)));
+        }
+        if !block.is_empty() { segments.push(block); }
+        if start == 0 {
+            let mut line = Vec::new();
+            for segment in segments.iter().rev() { line.extend_from_slice(segment); }
+            *cursor = 0;
+            return Ok(Some((0, line)));
+        }
+        end = start;
+    }
+}
+
+fn read_rollout_page(path: &Path, before: Option<usize>, limit: usize) -> std::io::Result<(Vec<Value>, usize, usize, Option<String>)> {
+    let mut file = File::open(path)?;
+    let file_len = file.metadata()?.len();
+    let need_active_turn = before.is_none();
+    let mut cursor = (before.unwrap_or(file_len as usize) as u64).min(file_len);
+    let mut messages = Vec::with_capacity(limit.clamp(1, 20));
+    let mut active_turn: Option<Option<String>> = None;
+    while let Some((offset, line)) = previous_jsonl_line(&mut file, &mut cursor)? {
+        if line.is_empty() { continue; }
+        let Ok(row) = serde_json::from_slice::<Value>(&line) else { continue; };
+        let payload = &row["payload"];
+        let event_type = payload["type"].as_str().unwrap_or_default();
+        if need_active_turn && active_turn.is_none() {
+            match event_type {
+                "task_started" | "turn_started" => active_turn = Some(payload["turn_id"].as_str().map(str::to_owned)),
+                "task_complete" | "turn_completed" => active_turn = Some(None),
+                _ => {}
+            }
+        }
+        if row["type"].as_str() == Some("event_msg") && event_type == "item_completed" {
+            if let Some(item) = normalize_rollout_item(&payload["item"]) {
+                messages.push(json!({ "index": offset, "turnId": payload["turn_id"], "item": item }));
+            }
+        }
+        if messages.len() >= limit.clamp(1, 20) && (!need_active_turn || active_turn.is_some()) { break; }
+        if cursor == 0 { break; }
+    }
+    messages.reverse();
+    let start = messages.first().and_then(|item| item["index"].as_u64()).unwrap_or(0) as usize;
+    let active_turn = active_turn.flatten();
+    Ok((messages, start, file_len as usize, active_turn))
 }
 
 impl CodexClient {
@@ -350,6 +454,38 @@ impl CodexClient {
         })
     }
 
+    pub async fn load_thread_message_page(
+        &self,
+        thread_id: String,
+        before: Option<usize>,
+        limit: usize,
+    ) -> Result<Option<Value>, CodexErrorDto> {
+        let client = self.ensure_running().await?;
+        let result = client.request("thread/read", json!({ "threadId": thread_id, "includeTurns": false })).await?;
+        let Some(mut thread) = result.get("thread").cloned() else {
+            return Err(CodexErrorDto::new(CodexErrorCode::ProtocolError, "Unexpected thread/read response")
+                .with_details(result.to_string()));
+        };
+        let Some(path) = thread.get("path").and_then(Value::as_str).map(str::to_owned) else { return Ok(None); };
+        let rollout = crate::local_paths::resolve_local_path(&path)
+            .map_err(|error| CodexErrorDto::new(CodexErrorCode::RequestFailed, "Could not locate conversation history")
+                .with_details(error))?;
+        if !rollout.is_file() { return Ok(None); }
+        let page = tokio::task::spawn_blocking(move || read_rollout_page(&rollout, before, limit)).await
+            .map_err(|error| CodexErrorDto::new(CodexErrorCode::RequestFailed, "Could not read conversation history")
+                .with_details(error.to_string()))?
+            .map_err(|error| CodexErrorDto::new(CodexErrorCode::RequestFailed, "Could not read conversation history")
+                .with_details(error.to_string()))?;
+        let (messages, start, total, active_turn) = page;
+        thread["turns"] = json!([]);
+        thread["messages"] = json!(messages);
+        if before.is_none() {
+            thread["activeTurn"] = active_turn.map(|id| json!({ "id": id, "status": "inProgress" })).unwrap_or(Value::Null);
+        }
+        thread["pagination"] = json!({ "unit": "items", "start": start, "total": total, "hasOlder": start > 0 });
+        Ok(Some(thread))
+    }
+
     pub async fn list_models(&self) -> Result<Value, CodexErrorDto> {
         let client = self.ensure_running().await?;
         client.request("model/list", json!({ "includeHidden": false })).await
@@ -556,5 +692,39 @@ mod tests {
         );
         assert_eq!(windows_cwd_from_wsl("C:\\work\\project"), None);
         assert_eq!(windows_cwd_from_wsl("/home/user/project"), None);
+    }
+
+    #[test]
+    fn rollout_message_pages_read_newest_items_then_older_items() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-board-rollout-page-{}.jsonl",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let content = concat!(
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"t1\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"turn_id\":\"t1\",\"item\":{\"type\":\"UserMessage\",\"id\":\"u1\",\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"turn_id\":\"t1\",\"item\":{\"type\":\"AgentMessage\",\"id\":\"a1\",\"text\":\"world\"}}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"t1\"}}\n"
+        );
+        std::fs::write(&path, content).unwrap();
+
+        let (latest, latest_start, total, active) = read_rollout_page(&path, None, 1).unwrap();
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0]["item"]["type"], "agentMessage");
+        assert_eq!(latest[0]["item"]["id"], "a1");
+        assert_eq!(latest[0]["turnId"], "t1");
+        assert_eq!(latest_start, latest[0]["index"].as_u64().unwrap() as usize);
+        assert_eq!(total, content.len());
+        assert_eq!(active, None);
+
+        let (older, _, _, _) = read_rollout_page(&path, Some(latest_start), 1).unwrap();
+        assert_eq!(older.len(), 1);
+        assert_eq!(older[0]["item"]["type"], "userMessage");
+        assert_eq!(older[0]["item"]["content"][0]["text"], "hello");
+
+        std::fs::remove_file(path).unwrap();
     }
 }

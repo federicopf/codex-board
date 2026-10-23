@@ -712,10 +712,20 @@ async fn load_thread(
     Query(query): Query<ThreadPageQuery>,
 ) -> Result<Json<Value>, ApiError> {
     authorized(&headers, &state)?;
-    let mut thread = state.client.load_thread(id).await?;
-    if let Some(limit) = query.limit {
-        paginate_thread(&mut thread, query.before, limit)?;
-    }
+    let mut thread = if let (Some(limit), Some("items")) = (query.limit, query.unit.as_deref()) {
+        if let Some(page) = state.client.load_thread_message_page(id.clone(), query.before, limit).await? { page }
+        else {
+            let mut full = state.client.load_thread(id).await?;
+            paginate_thread_items(&mut full, query.before, limit)?;
+            full
+        }
+    } else {
+        let mut full = state.client.load_thread(id).await?;
+        if let Some(limit) = query.limit { paginate_thread(&mut full, query.before, limit)?; }
+        full
+    };
+    // The rollout path is internal to the PC and is not needed by the paired mobile client.
+    thread["path"] = Value::Null;
     Ok(Json(thread))
 }
 
@@ -724,6 +734,38 @@ async fn load_thread(
 struct ThreadPageQuery {
     limit: Option<usize>,
     before: Option<usize>,
+    unit: Option<String>,
+}
+
+fn paginate_thread_items(thread: &mut Value, before: Option<usize>, limit: usize) -> Result<(), ApiError> {
+    let turns = thread.get("turns").and_then(Value::as_array)
+        .ok_or_else(|| ApiError(StatusCode::BAD_GATEWAY, "Thread history is unavailable".into()))?;
+    let total: usize = turns.iter().filter_map(|turn| turn.get("items").and_then(Value::as_array)).map(Vec::len).sum();
+    let end = before.unwrap_or(total).min(total);
+    let start = end.saturating_sub(limit.clamp(1, 20));
+    let mut messages = Vec::with_capacity(end - start);
+    let mut index = 0usize;
+    let mut active_turn = None;
+    for turn in turns {
+        let turn_id = turn.get("id").cloned().unwrap_or(Value::Null);
+        let status = turn.get("status").cloned().unwrap_or(Value::Null);
+        if status.as_str() == Some("inProgress") {
+            active_turn = Some(json!({ "id": turn_id, "status": status }));
+        }
+        if let Some(items) = turn.get("items").and_then(Value::as_array) {
+            for item in items {
+                if (start..end).contains(&index) {
+                    messages.push(json!({ "index": index, "turnId": turn_id, "turnStatus": status, "item": item }));
+                }
+                index += 1;
+            }
+        }
+    }
+    thread["turns"] = json!([]);
+    thread["messages"] = json!(messages);
+    thread["activeTurn"] = active_turn.unwrap_or(Value::Null);
+    thread["pagination"] = json!({ "unit": "items", "start": start, "total": total, "hasOlder": start > 0 });
+    Ok(())
 }
 
 fn paginate_thread(thread: &mut Value, before: Option<usize>, limit: usize) -> Result<(), ApiError> {
@@ -1222,6 +1264,32 @@ mod tests {
         assert_eq!(older["pagination"]["start"], 7);
         assert_eq!(older["turns"][0]["id"], "turn-7");
         assert_eq!(older["turns"][9]["id"], "turn-16");
+    }
+
+    #[test]
+    fn mobile_item_pagination_returns_only_ten_timeline_entries_per_page() {
+        let turns: Vec<Value> = (0..4).map(|turn| json!({
+            "id": format!("turn-{turn}"),
+            "status": if turn == 3 { "inProgress" } else { "completed" },
+            "items": (0..8).map(|item| json!({ "id": format!("item-{turn}-{item}"), "type": "agentMessage", "text": "x" })).collect::<Vec<_>>()
+        })).collect();
+        let mut latest = json!({ "turns": turns });
+        paginate_thread_items(&mut latest, None, 10).unwrap();
+        assert_eq!(latest["messages"].as_array().unwrap().len(), 10);
+        assert_eq!(latest["pagination"]["start"], 22);
+        assert_eq!(latest["pagination"]["total"], 32);
+        assert_eq!(latest["messages"][0]["item"]["id"], "item-2-6");
+        assert_eq!(latest["activeTurn"]["id"], "turn-3");
+        assert_eq!(latest["turns"].as_array().unwrap().len(), 0);
+
+        let mut older = json!({ "turns": (0..4).map(|turn| json!({
+            "id": format!("turn-{turn}"), "status": "completed",
+            "items": (0..8).map(|item| json!({ "id": format!("item-{turn}-{item}"), "type": "userMessage" })).collect::<Vec<_>>()
+        })).collect::<Vec<_>>() });
+        paginate_thread_items(&mut older, Some(22), 10).unwrap();
+        assert_eq!(older["pagination"]["start"], 12);
+        assert_eq!(older["messages"][0]["item"]["id"], "item-1-4");
+        assert_eq!(older["pagination"]["hasOlder"], true);
     }
 
     #[test]

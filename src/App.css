@@ -539,7 +539,7 @@ body { min-width: 980px; }
 .button.danger { color: #b42318; border-color: #f0b8b2; background: #fff7f6; }
 .button.danger:hover { background: #feeceb; border-color: #d92d20; }
 .card-icon-action:has(svg) { flex: 0 0 auto; }
-.sidebar-project-row { position: relative; display: flex; align-items: stretch; }
+.sidebar-project-row { position: relative; display: flex; flex-wrap: wrap; align-items: stretch; }
 .sidebar-project-drop { position: absolute; z-index: 0; inset: 0; border: 1px solid transparent; border-radius: 11px; pointer-events: none; }
 .sidebar-project-drop.is-over { border-color: #999bff; background: rgba(133,136,255,.18); box-shadow: 0 0 0 2px rgba(133,136,255,.1); }
 .sidebar-project-row .sidebar-project { position: relative; z-index: 1; flex: 1; min-width: 0; padding-right: 72px; }
@@ -547,7 +547,7 @@ body { min-width: 980px; }
 .sidebar-project-toggle:hover { color: white; background: rgba(255,255,255,.1); }
 .sidebar-project-toggle svg { width: 13px; height: 13px; transition: transform .15s; }
 .sidebar-project-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
-.sidebar-customer { width: calc(100% - 18px); min-height: 34px; display: flex; align-items: center; gap: 8px; margin: 2px 0 2px 18px; padding: 5px 9px; border: 1px solid transparent; border-radius: 8px; color: var(--sidebar-muted); background: transparent; text-align: left; font-size: 10px; transition: color .15s, background .15s, border-color .15s; }
+.sidebar-customer { flex: 0 0 calc(100% - 18px); width: calc(100% - 18px); min-height: 34px; display: flex; align-items: center; gap: 8px; margin: 2px 0 2px 18px; padding: 5px 9px; border: 1px solid transparent; border-radius: 8px; color: var(--sidebar-muted); background: transparent; text-align: left; font-size: 10px; transition: color .15s, background .15s, border-color .15s; }
 .sidebar-customer:hover, .sidebar-customer.active { color: white; background: rgba(255,255,255,.08); }
 .sidebar-customer > span:first-child { color: #9699ff; font-size: 16px; }
 .sidebar-customer > span:nth-child(2) { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -54,9 +54,28 @@ const threadWorkModes = new Map<string, "default" | "plan">();
 const CHAT_HISTORY_PAGE_SIZE = 10;
 
 function mergeThreadPage(existing: JsonObject | null, page: JsonObject): JsonObject {
-  const incomingTurns = Array.isArray(page.turns) ? page.turns : [];
   const metadata = object(page.pagination);
+  const incomingMessages = Array.isArray(page.messages) ? page.messages : null;
+  const incomingTurns = Array.isArray(page.turns) ? page.turns : [];
   const incomingStart = typeof metadata.start === "number" ? metadata.start : 0;
+  if (incomingMessages) {
+    const total = typeof metadata.total === "number" ? metadata.total : incomingStart + incomingMessages.length;
+    if (!existing || !Array.isArray(existing.messages)) return { ...page, _pagination: { start: incomingStart, total, hasOlder: incomingStart > 0 } };
+    const previousMetadata = object(existing._pagination);
+    const previousStart = typeof previousMetadata.start === "number" ? previousMetadata.start : 0;
+    const messagesByIndex = new Map<number, JsonValue>();
+    (existing.messages as JsonValue[]).forEach((message, index) => {
+      const messageIndex = object(message).index;
+      messagesByIndex.set(typeof messageIndex === "number" ? messageIndex : previousStart + index, message);
+    });
+    incomingMessages.forEach((message, index) => {
+      const messageIndex = object(message).index;
+      messagesByIndex.set(typeof messageIndex === "number" ? messageIndex : incomingStart + index, message);
+    });
+    const start = Math.min(previousStart, incomingStart);
+    const messages = [...messagesByIndex.entries()].sort(([left], [right]) => left - right).map(([, message]) => message);
+    return { ...existing, ...page, messages, _pagination: { start, total: Math.max(total, typeof previousMetadata.total === "number" ? previousMetadata.total : 0), hasOlder: start > 0 } };
+  }
   const total = typeof metadata.total === "number" ? metadata.total : incomingStart + incomingTurns.length;
   if (!existing) return { ...page, _pagination: { start: incomingStart, total, hasOlder: incomingStart > 0 } };
 
@@ -72,7 +91,9 @@ function mergeThreadPage(existing: JsonObject | null, page: JsonObject): JsonObj
 }
 
 function conversation(thread: JsonObject | null): ChatLine[] {
-  const turns = Array.isArray(thread?.turns) ? thread.turns : [];
+  const turns = Array.isArray(thread?.messages)
+    ? [{ items: (thread.messages as JsonValue[]).map((message) => object(message).item) }]
+    : Array.isArray(thread?.turns) ? thread.turns : [];
   const lines: ChatLine[] = [];
   for (const rawTurn of turns) {
     const items = object(rawTurn).items;
@@ -108,6 +129,8 @@ function conversation(thread: JsonObject | null): ChatLine[] {
 }
 
 function activeTurnId(thread: JsonObject | null): string | null {
+  const activeTurn = object(thread?.activeTurn);
+  if (string(activeTurn.status) === "inProgress") return string(activeTurn.id) || null;
   const turns = Array.isArray(thread?.turns) ? thread.turns : [];
   const active = [...turns].reverse().find((turn) => string(object(turn).status) === "inProgress");
   return active ? string(object(active).id) || null : null;
@@ -385,7 +408,7 @@ function Chat({ thread, api, queue, requests, eventRevision, preferences, onClos
   const refresh = useCallback(() => {
     const request = ++historyRequest.current;
     if (hasHistory.current) setHistoryRefreshing(true);
-    void api.thread(thread.id, { limit: CHAT_HISTORY_PAGE_SIZE })
+    void api.thread(thread.id, { limit: CHAT_HISTORY_PAGE_SIZE, unit: "items" })
       .then((next) => {
         if (request !== historyRequest.current) return;
         const merged = mergeThreadPage(loadedRef.current, next);
@@ -405,7 +428,7 @@ function Chat({ thread, api, queue, requests, eventRevision, preferences, onClos
     allowOlderPageRef.current = false;
     loadingOlderRef.current = true;
     setHistoryLoadingOlder(true);
-    void api.thread(thread.id, { limit: CHAT_HISTORY_PAGE_SIZE, before })
+    void api.thread(thread.id, { limit: CHAT_HISTORY_PAGE_SIZE, before, unit: "items" })
       .then((page) => {
         const merged = mergeThreadPage(loadedRef.current, page);
         threadCache.set(thread.id, merged); loadedRef.current = merged; hasHistory.current = true; setLoaded(merged);
@@ -738,6 +761,8 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [eventRevision, setEventRevision] = useState(0);
+  const selectedThreadIdRef = useRef<string | null>(null);
+  selectedThreadIdRef.current = selected?.id || null;
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notificationIds = useRef<Set<string> | null>(null);
   const pendingCreatedThreads = useRef(new Map<string, ThreadDto>());
@@ -779,7 +804,6 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     if (refreshTimer.current) return;
     refreshTimer.current = setTimeout(() => {
       refreshTimer.current = null;
-      setEventRevision((value) => value + 1);
       void refresh();
     }, 250);
   }, [refresh]);
@@ -787,6 +811,10 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   useEffect(() => {
     void refresh();
     const unsubscribe = api.subscribe(event=>{
+      const eventThreadId = string(object(event.params).threadId);
+      if (eventThreadId && eventThreadId === selectedThreadIdRef.current && (event.method === "turn/started" || event.method === "turn/completed")) {
+        setEventRevision((value) => value + 1);
+      }
       if (event.method === "board/queue/updated") {
         const value = object(event.params);
         if (typeof value.threadId === "string" && Array.isArray(value.messages)) {
@@ -803,8 +831,8 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
         }
       }
       scheduleRefresh();
-    }, (online)=>{setConnected(online);if(online)scheduleRefresh();});
-    const foreground = AppState.addEventListener("change", state=>{if(state==="active")scheduleRefresh();});
+    }, (online)=>{setConnected(online);if(online){if(selectedThreadIdRef.current)setEventRevision(value=>value+1);scheduleRefresh();}});
+    const foreground = AppState.addEventListener("change", state=>{if(state==="active"){if(selectedThreadIdRef.current)setEventRevision(value=>value+1);scheduleRefresh();}});
     return () => {
       unsubscribe();
       foreground.remove();
