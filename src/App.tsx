@@ -484,12 +484,11 @@ function App() {
   );
   const displayedCategories = dashboardCategories;
   const projectStats = useMemo(() => {
-    const stats: Record<string, { tasks: number; working: number }> = {
-      [ALL_PROJECTS]: { tasks: threads.length, working: threads.filter((thread) => workingIds.has(thread.id)).length },
+    const stats: Record<string, { working: number }> = {
+      [ALL_PROJECTS]: { working: threads.filter((thread) => workingIds.has(thread.id)).length },
     };
     for (const item of projects) {
-      const projectThreads = threads.filter((thread) => thread.projectKey === item.key);
-      stats[item.key] = { tasks: projectThreads.length, working: projectThreads.filter((thread) => workingIds.has(thread.id)).length };
+      stats[item.key] = { working: threads.filter((thread) => thread.projectKey === item.key && workingIds.has(thread.id)).length };
     }
     return stats;
   }, [projects, threads, workingIds]);

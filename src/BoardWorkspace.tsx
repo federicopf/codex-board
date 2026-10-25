@@ -121,7 +121,7 @@ export interface BoardWorkspaceProps {
   customers: ProjectCustomer[];
   search: string;
   projects: ProjectInfo[];
-  projectStats: Record<string, { tasks: number; working: number }>;
+  projectStats: Record<string, { working: number }>;
   displayedCategories: string[];
   filteredThreads: BoardThread[];
   visibleThreadCount: number;
@@ -192,15 +192,15 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
         <div className="sidebar-section-label sidebar-project-heading"><span>Project boards</span><button type="button" aria-label="Create project" title="Create project" onClick={props.onNewProject}>＋</button></div>
         <div className="sidebar-project-list" role="navigation" aria-label="Project boards">
           {[{ key: ALL_PROJECTS, label: "All projects" }, ...props.projects].map((item) => {
-            const stats = props.projectStats[item.key] || { tasks: 0, working: 0 };
+            const stats = props.projectStats[item.key] || { working: 0 };
             const projectCustomers = props.customers.filter((customer) => normalizeProjectPath(customer.projectCwd) === item.key);
             const expanded = expandedProjects.has(item.key);
             return <div key={item.key} className="sidebar-project-row">
               {item.key !== ALL_PROJECTS && <ProjectDropTarget projectKey={item.key} />}
               <button type="button" className={`sidebar-project${props.project === item.key ? " active" : ""}`} aria-current={props.project === item.key ? "page" : undefined} onClick={() => { setExpandedProjects((current) => new Set(current).add(item.key)); props.onProjectChange(item.key); }}>
                 <span>{item.key === ALL_PROJECTS ? "ALL" : item.label.slice(0, 2).toUpperCase()}</span>
-                <div><strong>{item.label}</strong><small>{stats.tasks} {stats.tasks === 1 ? "task" : "tasks"}{stats.working > 0 ? ` · ${stats.working} working` : ""}</small></div>
-                {stats.working > 0 && <i className="project-live-dot" aria-label={`${stats.working} working`} />}
+                <div><strong>{item.label}</strong></div>
+                {stats.working > 0 && <i className="project-live-dot" aria-label="Work in progress" title="Work in progress" />}
               </button>
               {item.key !== ALL_PROJECTS && <button type="button" className="sidebar-project-toggle" aria-label={`${expanded ? "Collapse" : "Expand"} ${item.label} customers`} aria-expanded={expanded} onClick={() => setExpandedProjects((current) => { const next = new Set(current); if (next.has(item.key)) next.delete(item.key); else next.add(item.key); return next; })}><Icon name="chevronDown" /></button>}
               {item.key !== ALL_PROJECTS && <button type="button" className="sidebar-project-archive" aria-label={`Archive project ${item.label}`} title="Archive project" onClick={(event) => { event.stopPropagation(); props.onDeleteProject(item.key); }}><Icon name="trash" /></button>}
@@ -252,7 +252,7 @@ export function ThreadDragOverlay({ thread, pending, working, queuedCount, showP
 
 function CustomerSidebarItem({ customer, active, onClick }: { customer: ProjectCustomer; active: boolean; onClick: () => void }) {
   const drop = useDroppable({ id: customerDropId(customer.id) });
-  return <button ref={drop.setNodeRef} type="button" className={`sidebar-customer${active ? " active" : ""}${drop.isOver ? " is-customer-drop-target" : ""}`} onClick={onClick}><span aria-hidden="true">›</span><span>{customer.name}</span><small>{customer.threadIds.length}</small></button>;
+  return <button ref={drop.setNodeRef} type="button" className={`sidebar-customer${active ? " active" : ""}${drop.isOver ? " is-customer-drop-target" : ""}`} onClick={onClick}><span aria-hidden="true">›</span><span>{customer.name}</span></button>;
 }
 
 function ProjectDropTarget({ projectKey }: { projectKey: string }) {
