@@ -92,6 +92,20 @@ describe("workflow editing", () => {
     expect(updateAutomation).not.toHaveBeenCalled();
   });
 
+  it("lets a new automation target an existing chat outside Schedule", async () => {
+    vi.mocked(createAutomation).mockResolvedValue(recurring);
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "+ Automation" }));
+    fireEvent.click(screen.getByRole("button", { name: /Choose a chat/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Test.*Review/ }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Check existing chat" } });
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Review progress" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
+    await waitFor(() => expect(createAutomation).toHaveBeenCalledWith({
+      name: "Check existing chat", action: { kind: "recurringMessage", threadId: "t", prompt: "Review progress", everyMinutes: 60, startInMinutes: 60 },
+    }));
+  });
+
   it("allows metadata edits for completed one-off schedules", async () => {
     vi.mocked(listAutomations).mockResolvedValue([{ ...recurring, action: { kind: "scheduledMessage", threadId: "t", prompt: "Original prompt", runAt: 1700000004321 } }]);
     mount();

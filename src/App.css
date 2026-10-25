@@ -580,8 +580,6 @@ body { min-width: 980px; }
 .automation-retry { margin-top: 8px; }
 .automation-retry-confirm { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; line-height: 1.5; }
 .automation-retry-confirm span { flex-basis: 100%; }
-.automation-create-view > label + .automation-task-picker { display: none; }
-.automation-create-view > label:has(select) { display: none; }
 .automation-task-select { display:flex; width:100%; min-height:42px; align-items:center; justify-content:space-between; padding:0 12px; border:1px solid var(--border); border-radius:10px; color:var(--text); background:var(--panel); text-align:left; }
 .automation-task-modal { z-index: 120; }
 .automation-task-modal .automations-dialog { width:min(520px, calc(100vw - 32px)); max-height:min(620px, calc(100vh - 32px)); overflow:auto; }
