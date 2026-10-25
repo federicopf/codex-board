@@ -20,6 +20,7 @@ pub struct CodexClient {
     running: Mutex<Option<Arc<RunningClient>>>,
     events: EventQueue,
     attachment_dir: PathBuf,
+    rollout_paths: Mutex<std::collections::HashMap<String, String>>,
 }
 
 fn with_attachment_paths(text: &str, paths: &[PathBuf]) -> String {
@@ -120,7 +121,28 @@ fn normalize_rollout_item(value: &Value) -> Option<Value> {
     };
     if !matches!(normalized, "userMessage" | "agentMessage" | "imageView" | "imageGeneration" | "plan" | "reasoning" | "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" | "webSearch") { return None; }
     item["type"] = json!(normalized);
+    sanitize_mobile_history_value(&mut item);
     Some(item)
+}
+
+const MOBILE_HISTORY_STRING_LIMIT: usize = 12_000;
+const MOBILE_HISTORY_TRUNCATION: &str = "\n\n[Content shortened in mobile history. Open the conversation on desktop for the full output.]";
+
+pub(crate) fn sanitize_mobile_history_value(value: &mut Value) {
+    match value {
+        Value::String(text) if text.trim_start().starts_with("data:image/") => {
+            *text = "[Image attachment omitted from mobile history]".into();
+        }
+        Value::String(text) if text.len() > MOBILE_HISTORY_STRING_LIMIT => {
+            let mut end = MOBILE_HISTORY_STRING_LIMIT;
+            while !text.is_char_boundary(end) { end -= 1; }
+            text.truncate(end);
+            text.push_str(MOBILE_HISTORY_TRUNCATION);
+        }
+        Value::Array(items) => items.iter_mut().for_each(sanitize_mobile_history_value),
+        Value::Object(items) => items.values_mut().for_each(sanitize_mobile_history_value),
+        _ => {}
+    }
 }
 
 fn previous_jsonl_line(file: &mut File, cursor: &mut u64) -> std::io::Result<Option<(u64, Vec<u8>)>> {
@@ -193,6 +215,7 @@ impl CodexClient {
             running: Mutex::new(None),
             events: EventQueue::new(),
             attachment_dir,
+            rollout_paths: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -251,7 +274,15 @@ impl CodexClient {
                 )
                 .with_details(error.to_string())
             })?;
-            threads.extend(page.data.into_iter().map(ThreadDto::from));
+            {
+                let mut paths = self.rollout_paths.lock().await;
+                for thread in page.data {
+                    if let Some(path) = thread.path.as_ref() {
+                        paths.insert(thread.id.clone(), path.clone());
+                    }
+                    threads.push(ThreadDto::from(thread));
+                }
+            }
             cursor = page.next_cursor;
             if cursor.is_none() {
                 break;
@@ -480,12 +511,19 @@ impl CodexClient {
         limit: usize,
     ) -> Result<Option<Value>, CodexErrorDto> {
         let client = self.ensure_running().await?;
-        let result = client.request("thread/read", json!({ "threadId": thread_id, "includeTurns": false })).await?;
-        let Some(mut thread) = result.get("thread").cloned() else {
-            return Err(CodexErrorDto::new(CodexErrorCode::ProtocolError, "Unexpected thread/read response")
-                .with_details(result.to_string()));
+        let cached_path = self.rollout_paths.lock().await.get(&thread_id).cloned();
+        let (mut thread, path) = if let Some(path) = cached_path {
+            (json!({ "id": thread_id }), path)
+        } else {
+            let result = client.request("thread/read", json!({ "threadId": thread_id, "includeTurns": false })).await?;
+            let Some(thread) = result.get("thread").cloned() else {
+                return Err(CodexErrorDto::new(CodexErrorCode::ProtocolError, "Unexpected thread/read response")
+                    .with_details(result.to_string()));
+            };
+            let Some(path) = thread.get("path").and_then(Value::as_str).map(str::to_owned) else { return Ok(None); };
+            self.rollout_paths.lock().await.insert(thread_id.clone(), path.clone());
+            (thread, path)
         };
-        let Some(path) = thread.get("path").and_then(Value::as_str).map(str::to_owned) else { return Ok(None); };
         let rollout = crate::local_paths::resolve_local_path(&path)
             .map_err(|error| CodexErrorDto::new(CodexErrorCode::RequestFailed, "Could not locate conversation history")
                 .with_details(error))?;
@@ -573,8 +611,17 @@ impl CodexClient {
             }
         }
         if let Some(schema) = output_schema { params["outputSchema"] = schema; }
-        client.request("turn/start", params)
-            .await
+        client.request("turn/start", params).await.map_err(|error| {
+            if error.message == "Codex request timed out" {
+                CodexErrorDto::new(
+                    CodexErrorCode::RequestFailed,
+                    "Codex turn start acknowledgement timed out",
+                )
+                .with_details("The turn may have been accepted; awaiting its completion event.")
+            } else {
+                error
+            }
+        })
     }
 
     pub async fn interrupt_turn(
@@ -641,6 +688,23 @@ impl Default for CodexClient {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn mobile_history_removes_inline_images_and_caps_large_text() {
+        let item = serde_json::json!({
+            "type": "UserMessage",
+            "content": [
+                { "type": "image", "url": "data:image/jpeg;base64,AAAA" },
+                { "type": "text", "text": "x".repeat(super::MOBILE_HISTORY_STRING_LIMIT + 50) }
+            ]
+        });
+        let normalized = super::normalize_rollout_item(&item).unwrap();
+        let content = normalized["content"].as_array().unwrap();
+        assert_eq!(content[0]["url"], "[Image attachment omitted from mobile history]");
+        let text = content[1]["text"].as_str().unwrap();
+        assert!(text.len() < super::MOBILE_HISTORY_STRING_LIMIT + 150);
+        assert!(text.ends_with("Open the conversation on desktop for the full output.]"));
+    }
+
+    #[test]
     fn collaboration_mode_request_uses_codex_v2_turn_shape() {
         assert_eq!(super::collaboration_mode("plan".into(), serde_json::json!("gpt-fixture"), serde_json::json!("high")), serde_json::json!({
             "mode": "plan",
@@ -682,6 +746,7 @@ mod tests {
                 "name": "To Plan - Test",
                 "preview": "Test",
                 "cwd": "C:\\work",
+                "path": "C:\\sessions\\rollout.jsonl",
                 "updatedAt": 42,
                 "forkedFromId": "thr_parent"
             }],
@@ -691,6 +756,7 @@ mod tests {
         assert_eq!(page.data.len(), 1);
         assert_eq!(page.next_cursor.as_deref(), Some("next"));
         assert_eq!(page.data[0].forked_from_id.as_deref(), Some("thr_parent"));
+        assert_eq!(page.data[0].path.as_deref(), Some("C:\\sessions\\rollout.jsonl"));
     }
 
     #[test]

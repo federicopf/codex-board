@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { useRef, useState } from "react";
+import { ActivityIndicator, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
 import type { ProjectCustomer, QueuedMessage, ThreadDto } from "@codex-board/protocol";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors } from "./theme";
 import { MobileIcon } from "./MobileIcon";
 import { MobileActionSheet } from "./MobileActionSheet";
@@ -13,6 +14,7 @@ interface MobileBoardHomeProps {
   projectLabel: string;
   customerId: string | null;
   customers: ProjectCustomer[];
+  customerThreadCount: number;
   showProject: boolean;
   totalCount: number;
   workingCount: number;
@@ -43,18 +45,31 @@ interface MobileBoardHomeProps {
 
 export function MobileBoardHome(props: MobileBoardHomeProps) {
   const compact = useWindowDimensions().height < 500;
+  const insets = useSafeAreaInsets();
   const [actionThread, setActionThread] = useState<ThreadDto | null>(null);
+  const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
+  const deferredPickerAction = useRef<(() => void) | null>(null);
+  const selectedCustomer = props.customers.find(customer => customer.id === props.customerId);
+  function chooseCustomer(action: () => void) {
+    if (Platform.OS === "ios") {
+      deferredPickerAction.current = action;
+      setCustomerPickerOpen(false);
+    } else {
+      setCustomerPickerOpen(false);
+      action();
+    }
+  }
   return <View style={styles.page}>
     <View style={[styles.header,compact&&styles.compactHeader]}>
       <Pressable style={styles.iconButton} onPress={props.onBackToProjects} accessibilityRole="button" accessibilityLabel="Back to projects"><MobileIcon name="chevron-left" size={25} color={colors.text}/></Pressable>
       <View style={styles.heading}><Text style={styles.title} numberOfLines={1}>{props.projectLabel}</Text><Text style={styles.subtitle}>{props.totalCount} tasks{props.workingCount?` · ${props.workingCount} working`:""}{!props.connected?" · Reconnecting…":""}</Text></View>
       <Pressable style={[styles.iconButton,styles.newButton]} onPress={props.onNewTask} accessibilityRole="button" accessibilityLabel="New task"><MobileIcon name="plus" size={24} color="white"/></Pressable>
     </View>
-    {!props.showProject&&<ScrollView horizontal style={styles.customerScroll} contentContainerStyle={styles.customerChoices} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-      <Pressable style={[styles.customerChoice,props.customerId===null&&styles.customerChoiceActive]} onPress={()=>props.onCustomer(null)} accessibilityRole="button" accessibilityState={{selected:props.customerId===null}}><Text style={[styles.customerChoiceText,props.customerId===null&&styles.customerChoiceTextActive]}>Project threads</Text></Pressable>
-      {props.customers.map(customer=>{const active=props.customerId===customer.id;return <View key={customer.id} style={[styles.customerChoice,active&&styles.customerChoiceActive]}><Pressable style={styles.customerChoiceSelect} onPress={()=>props.onCustomer(customer.id)} accessibilityRole="button" accessibilityState={{selected:active}}><Text numberOfLines={1} style={[styles.customerChoiceText,active&&styles.customerChoiceTextActive]}>{customer.name}</Text><Text style={[styles.customerChoiceCount,active&&styles.customerChoiceTextActive]}>{customer.threadIds.length}</Text></Pressable><Pressable style={styles.customerDelete} onPress={()=>props.onDeleteCustomer(customer)} accessibilityRole="button" accessibilityLabel={`Delete customer ${customer.name}`}><MobileIcon name="trash-2" size={14} color={active?"#F4B9B2":colors.textSoft}/></Pressable></View>;})}
-      <Pressable style={styles.customerAdd} onPress={props.onCreateCustomer} accessibilityRole="button" accessibilityLabel="Add customer"><MobileIcon name="plus" size={17} color={colors.primary}/><Text style={styles.customerAddText}>Customer</Text></Pressable>
-    </ScrollView>}
+    {!props.showProject&&<Pressable style={styles.customerPickerButton} onPress={()=>setCustomerPickerOpen(true)} accessibilityRole="button" accessibilityLabel={`Choose customer board, currently ${selectedCustomer?.name||"Project threads"}`}>
+      <View style={styles.customerPickerIcon}><MobileIcon name={selectedCustomer?"users":"folder"} size={17} color={colors.primary}/></View>
+      <View style={styles.customerPickerCopy}><Text style={styles.customerPickerLabel}>{selectedCustomer?"CUSTOMER":"PROJECT BOARD"}</Text><Text numberOfLines={1} style={styles.customerPickerValue}>{selectedCustomer?.name||"Project threads"}</Text></View>
+      <Text style={styles.customerPickerCount}>{props.totalCount}</Text><MobileIcon name="chevron-down" size={18} color={colors.textMuted}/>
+    </Pressable>}
     <View style={[styles.search,compact&&styles.compactSearch]}>
       <MobileIcon name="search" color={colors.textMuted}/>
       <TextInput value={props.search} onChangeText={props.onSearch} style={styles.searchInput} placeholder="Search this project" placeholderTextColor={colors.textSoft} returnKeyType="search"/>
@@ -88,6 +103,30 @@ export function MobileBoardHome(props: MobileBoardHomeProps) {
       ...(props.isWorking(actionThread)?[{label:"Stop Codex",icon:"stop-circle" as const,onPress:()=>props.onStop(actionThread)}]:[]),
       {label:"Archive conversation",icon:"archive",destructive:true,onPress:()=>props.onArchive(actionThread)},
     ]}/>}
+    {!props.showProject&&<Modal visible={customerPickerOpen} transparent animationType="fade" onRequestClose={()=>setCustomerPickerOpen(false)} onDismiss={()=>{
+      const action=deferredPickerAction.current;
+      if(action){deferredPickerAction.current=null;action();}
+    }}>
+      <View style={styles.customerPickerBackdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={()=>setCustomerPickerOpen(false)} accessibilityRole="button" accessibilityLabel="Close customer selector"/>
+        <View accessibilityViewIsModal style={[styles.customerPickerSheet,{paddingBottom:Math.max(insets.bottom,20)}]}>
+          <View style={styles.customerPickerHeading}><View style={styles.customerPickerHeadingCopy}><Text style={styles.customerPickerTitle}>Project boards</Text><Text style={styles.customerPickerSubtitle}>{props.projectLabel}</Text></View><Pressable style={styles.pickerClose} onPress={()=>setCustomerPickerOpen(false)} accessibilityRole="button" accessibilityLabel="Close"><MobileIcon name="x" size={22} color={colors.text}/></Pressable></View>
+          <ScrollView keyboardShouldPersistTaps="handled">
+            <Pressable style={[styles.customerPickerRow, !selectedCustomer&&styles.customerPickerRowSelected]} onPress={()=>chooseCustomer(()=>props.onCustomer(null))} accessibilityRole="button" accessibilityState={{selected:!selectedCustomer}}>
+              <View style={[styles.customerRowIcon,!selectedCustomer&&styles.customerRowIconSelected]}><MobileIcon name="folder" size={18} color={!selectedCustomer?"white":colors.textMuted}/></View><View style={styles.customerRowCopy}><Text style={styles.customerRowName}>Project threads</Text><Text style={styles.customerRowMeta}>Shared conversations for this project</Text></View><Text style={styles.customerRowCount}>{props.customerThreadCount}</Text>{!selectedCustomer&&<MobileIcon name="check" size={19} color={colors.primary}/>}
+            </Pressable>
+            {props.customers.length>0&&<Text style={styles.customerListLabel}>CUSTOMERS</Text>}
+            {props.customers.map(customer=>{const active=customer.id===props.customerId;return <View key={customer.id} style={[styles.customerPickerRow,active&&styles.customerPickerRowSelected]}>
+              <Pressable style={styles.customerRowMain} onPress={()=>chooseCustomer(()=>props.onCustomer(customer.id))} accessibilityRole="button" accessibilityState={{selected:active}}>
+                <View style={[styles.customerRowIcon,active&&styles.customerRowIconSelected]}><MobileIcon name="users" size={18} color={active?"white":colors.textMuted}/></View><View style={styles.customerRowCopy}><Text numberOfLines={1} style={styles.customerRowName}>{customer.name}</Text><Text style={styles.customerRowMeta}>Customer conversations</Text></View><Text style={styles.customerRowCount}>{customer.threadIds.length}</Text>{active&&<MobileIcon name="check" size={19} color={colors.primary}/>}
+              </Pressable>
+              <Pressable style={styles.customerDelete} onPress={()=>chooseCustomer(()=>props.onDeleteCustomer(customer))} accessibilityRole="button" accessibilityLabel={`Delete customer ${customer.name}`}><MobileIcon name="trash-2" size={17} color={colors.textSoft}/></Pressable>
+            </View>;})}
+            <Pressable style={styles.customerAddRow} onPress={()=>chooseCustomer(props.onCreateCustomer)} accessibilityRole="button"><View style={styles.customerAddIcon}><MobileIcon name="plus" size={19} color={colors.primary}/></View><Text style={styles.customerAddLabel}>Add customer</Text></Pressable>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>}
   </View>;
 }
 
@@ -96,7 +135,7 @@ const styles=StyleSheet.create({
   compactHeader:{minHeight:60,paddingVertical:6},compactSearch:{marginTop:8,marginBottom:4,minHeight:44},
   iconButton:{width:48,height:48,flexShrink:0,alignItems:"center",justifyContent:"center",borderRadius:15},newButton:{backgroundColor:colors.ink},heading:{flex:1,minWidth:0},title:{fontSize:21,fontWeight:"700",letterSpacing:-.5,color:colors.text},subtitle:{marginTop:5,fontSize:12,color:colors.textMuted},
   search:{margin:16,marginBottom:8,minHeight:48,paddingLeft:14,flexDirection:"row",alignItems:"center",gap:10,borderWidth:1,borderColor:colors.border,borderRadius:14,backgroundColor:colors.surface},searchInput:{flex:1,minWidth:0,paddingVertical:12,paddingRight:8,color:colors.text,fontSize:14},clearSearch:{width:44,height:44,alignItems:"center",justifyContent:"center"},
-  customerScroll:{flexGrow:0,flexShrink:0,maxHeight:52},customerChoices:{paddingHorizontal:14,paddingVertical:6,gap:7},customerChoice:{maxWidth:220,minHeight:38,paddingLeft:12,paddingRight:5,flexDirection:"row",alignItems:"center",gap:7,borderWidth:1,borderColor:colors.border,borderRadius:12,backgroundColor:colors.surface},customerChoiceActive:{backgroundColor:colors.ink,borderColor:colors.ink},customerChoiceSelect:{maxWidth:185,minHeight:36,flexDirection:"row",alignItems:"center",gap:7},customerChoiceText:{flexShrink:1,fontSize:12,fontWeight:"600",color:colors.textMuted},customerChoiceTextActive:{color:"white"},customerChoiceCount:{fontSize:11,color:colors.textSoft},customerDelete:{width:30,height:32,alignItems:"center",justifyContent:"center",borderRadius:8},customerAdd:{minHeight:38,paddingHorizontal:10,flexDirection:"row",alignItems:"center",gap:5,borderRadius:12,backgroundColor:colors.primarySoft},customerAddText:{fontSize:12,fontWeight:"600",color:colors.primary},
+  customerPickerButton:{minHeight:60,marginHorizontal:16,marginTop:4,marginBottom:4,paddingHorizontal:12,flexDirection:"row",alignItems:"center",gap:10,borderWidth:1,borderColor:colors.border,borderRadius:15,backgroundColor:colors.surface},customerPickerIcon:{width:34,height:34,alignItems:"center",justifyContent:"center",borderRadius:11,backgroundColor:colors.primarySoft},customerPickerCopy:{flex:1,minWidth:0},customerPickerLabel:{fontSize:9,fontWeight:"800",letterSpacing:.8,color:colors.textSoft},customerPickerValue:{marginTop:3,fontSize:13,fontWeight:"700",color:colors.text},customerPickerCount:{minWidth:26,textAlign:"right",fontSize:12,fontWeight:"700",color:colors.textMuted},customerPickerBackdrop:{flex:1,justifyContent:"flex-end",backgroundColor:"rgba(18,20,28,.42)"},customerPickerSheet:{maxHeight:"82%",paddingHorizontal:18,paddingBottom:24,borderTopLeftRadius:24,borderTopRightRadius:24,backgroundColor:colors.surface},customerPickerHeading:{minHeight:76,flexDirection:"row",alignItems:"center",gap:12,borderBottomWidth:StyleSheet.hairlineWidth,borderColor:colors.border,marginBottom:8},customerPickerHeadingCopy:{flex:1,minWidth:0},customerPickerTitle:{fontSize:18,fontWeight:"700",color:colors.text},customerPickerSubtitle:{marginTop:4,fontSize:12,color:colors.textMuted},pickerClose:{width:44,height:44,alignItems:"center",justifyContent:"center"},customerPickerRow:{minHeight:68,marginVertical:3,paddingHorizontal:10,flexDirection:"row",alignItems:"center",gap:10,borderRadius:14},customerPickerRowSelected:{backgroundColor:colors.primarySoft},customerRowMain:{flex:1,minWidth:0,minHeight:64,flexDirection:"row",alignItems:"center",gap:10},customerRowIcon:{width:38,height:38,flexShrink:0,alignItems:"center",justifyContent:"center",borderRadius:12,backgroundColor:colors.surfaceMuted},customerRowIconSelected:{backgroundColor:colors.primary},customerRowCopy:{flex:1,minWidth:0},customerRowName:{fontSize:14,fontWeight:"600",color:colors.text},customerRowMeta:{marginTop:4,fontSize:11,color:colors.textMuted},customerRowCount:{minWidth:20,textAlign:"right",fontSize:12,color:colors.textMuted},customerListLabel:{marginTop:14,marginBottom:5,paddingHorizontal:10,fontSize:9,fontWeight:"800",letterSpacing:.9,color:colors.textSoft},customerDelete:{width:42,height:42,alignItems:"center",justifyContent:"center",borderRadius:12},customerAddRow:{minHeight:58,marginTop:8,paddingHorizontal:10,flexDirection:"row",alignItems:"center",gap:12,borderTopWidth:StyleSheet.hairlineWidth,borderColor:colors.border},customerAddIcon:{width:38,height:38,alignItems:"center",justifyContent:"center",borderRadius:12,backgroundColor:colors.primarySoft},customerAddLabel:{fontSize:14,fontWeight:"600",color:colors.primary},
   categoryScroll:{flexGrow:0,flexShrink:0,maxHeight:64},categories:{paddingHorizontal:16,paddingVertical:8,gap:8},category:{minHeight:44,paddingHorizontal:14,flexDirection:"row",alignItems:"center",gap:9,borderRadius:14,backgroundColor:colors.surface},categoryActive:{backgroundColor:colors.ink},categoryText:{fontSize:13,fontWeight:"600",color:colors.textMuted},categoryTextActive:{color:"white"},categoryCount:{fontSize:12,color:colors.textSoft},
   list:{flex:1},listContent:{padding:16,paddingTop:8,paddingBottom:24,flexGrow:1},results:{marginBottom:14,fontSize:12,color:colors.textMuted},
   card:{marginBottom:10,flexDirection:"row",alignItems:"flex-start",borderWidth:1,borderColor:colors.border,borderRadius:18,backgroundColor:colors.surface,overflow:"hidden"},workingCard:{borderColor:"#BBBDF3"},cardMain:{flex:1,minWidth:0,padding:16,paddingRight:0},moreButton:{width:48,height:52,alignItems:"center",justifyContent:"center",flexShrink:0},cardMeta:{flexDirection:"row",alignItems:"center",gap:6,marginBottom:9},project:{maxWidth:"55%",marginRight:4,fontSize:11,color:colors.textMuted},statusDot:{width:6,height:6,borderRadius:3,backgroundColor:colors.textSoft},statusDotLive:{backgroundColor:colors.success},status:{fontSize:11,color:colors.textMuted},statusLive:{color:colors.success},cardTitle:{fontSize:17,lineHeight:23,fontWeight:"600",letterSpacing:-.2,color:colors.text},preview:{marginTop:8,fontSize:13,lineHeight:20,color:colors.textMuted},

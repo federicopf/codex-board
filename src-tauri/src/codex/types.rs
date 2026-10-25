@@ -74,6 +74,8 @@ pub(crate) struct ThreadReadResponse {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RawThread {
     pub id: String,
+    #[serde(default)]
+    pub path: Option<String>,
     pub name: Option<String>,
     pub preview: Option<String>,
     pub cwd: Option<String>,

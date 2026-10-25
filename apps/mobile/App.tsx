@@ -16,6 +16,7 @@ import {
 import { BoardApi } from "./src/api";
 import { ChatDraftStore } from "@codex-board/protocol";
 import { createMobileDrafts } from "./src/chatDrafts";
+import { readChatHistoryCache, writeChatHistoryCache } from "./src/chatHistoryCache";
 import { ChatKeyboardFrame } from "./src/ChatKeyboardFrame";
 import { RetryAutomationAction } from "./src/RetryAutomationAction";
 import { clearCredential, hasSeenTour, loadCredential, loadSelectedBoard, markTourSeen, saveCredential, saveSelectedBoard } from "./src/connection";
@@ -403,22 +404,40 @@ function Chat({ thread, api, queue, requests, eventRevision, preferences, onClos
   const loadingOlderRef = useRef(false);
   const allowOlderPageRef = useRef(false);
   const historyRequest = useRef(0);
+  const historyNetworkPendingRef = useRef(false);
   const lines = useMemo(() => conversation(loaded), [loaded]);
   const timeline = useMemo(() => [...lines].reverse(), [lines]);
   const refresh = useCallback(() => {
     const request = ++historyRequest.current;
+    historyNetworkPendingRef.current = true;
     if (hasHistory.current) setHistoryRefreshing(true);
     void api.thread(thread.id, { limit: CHAT_HISTORY_PAGE_SIZE, unit: "items" })
       .then((next) => {
         if (request !== historyRequest.current) return;
-        const merged = mergeThreadPage(loadedRef.current, next);
+        const merged = loadedRef.current?._staleCache === true ? next : mergeThreadPage(loadedRef.current, next);
         threadCache.set(thread.id, merged); loadedRef.current = merged; hasHistory.current = true; setLoaded(merged); setHistoryError(null);
+        void writeChatHistoryCache(api.historyCacheScope(), thread.id, merged);
       })
       .catch((error) => { if (request === historyRequest.current) setHistoryError(error instanceof Error ? error.message : String(error)); })
       .finally(() => {
         if (request !== historyRequest.current) return;
+        historyNetworkPendingRef.current = false;
         setHistoryLoading(false); setHistoryRefreshing(false);
       });
+  }, [api, thread.id]);
+  useEffect(() => {
+    if (loadedRef.current) return;
+    let active = true;
+    void readChatHistoryCache(api.historyCacheScope(), thread.id).then((cached) => {
+      if (!active || loadedRef.current || !cached) return;
+      threadCache.set(thread.id, cached);
+      loadedRef.current = cached;
+      hasHistory.current = true;
+      setLoaded(cached);
+      if (historyNetworkPendingRef.current) setHistoryRefreshing(true);
+      setHistoryLoading(false);
+    });
+    return () => { active = false; };
   }, [api, thread.id]);
   const loadOlder = useCallback(() => {
     const current = loadedRef.current;
@@ -860,6 +879,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   const projectThreads = selectedProject === ALL_PROJECTS ? projectBaseThreads : currentCustomer
     ? projectBaseThreads.filter((thread) => currentCustomer.threadIds.includes(thread.id))
     : projectBaseThreads.filter((thread) => !currentProjectCustomers.some((customer) => customer.threadIds.includes(thread.id)));
+  const projectThreadCount = projectBaseThreads.filter((thread) => !currentProjectCustomers.some((customer) => customer.threadIds.includes(thread.id))).length;
   const dashboardCategories = categories.filter((category) => projectThreads.some((thread) => categoryFromTitle(thread.name) === category));
   useEffect(() => { if (config && boardRestored && !loading && selectedProject !== ALL_PROJECTS && !projects.some((project) => project.key === selectedProject)) { setSelectedProject(ALL_PROJECTS); void saveSelectedBoard(ALL_PROJECTS); } }, [config, boardRestored, loading, selectedProject, projects]);
   useEffect(() => {
@@ -872,7 +892,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     return !query || [displayTitle(thread.name, thread.preview), thread.preview || "", projectLabel(thread.cwd)].some((value) => value.toLocaleLowerCase().includes(query));
   }).sort((left,right)=>(right.updatedAt||0)-(left.updatedAt||0));
   const workingCount = projectThreads.filter(isWorking).length;
-  const selectedProjectLabel = currentCustomer?.name || (selectedProject === ALL_PROJECTS ? "All projects" : projects.find((project) => project.key === selectedProject)?.label || "Project");
+  const selectedProjectLabel = selectedProject === ALL_PROJECTS ? "All projects" : projects.find((project) => project.key === selectedProject)?.label || "Project";
   async function archiveThread(thread: ThreadDto) {
     const title = displayTitle(thread.name, thread.preview);
     Alert.alert("Archive task", `Archive “${title}”?`, [{ text: "Cancel", style: "cancel" }, { text: "Archive", style: "destructive", onPress: () => void api.archive(thread.id).then(() => { if (selected?.id === thread.id) setSelected(null); return refresh(); }).catch((error) => Alert.alert("Could not archive task", String(error))) }]);
@@ -958,6 +978,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
       projectLabel={selectedProjectLabel}
       customerId={currentCustomer?.id || null}
       customers={currentProjectCustomers}
+      customerThreadCount={projectThreadCount}
       showProject={selectedProject === ALL_PROJECTS}
       totalCount={projectThreads.length}
       workingCount={workingCount}

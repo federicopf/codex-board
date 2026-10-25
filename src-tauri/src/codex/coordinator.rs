@@ -332,6 +332,17 @@ impl TurnCoordinator {
                 })
             }
             Err(error) => {
+                // A turn/start timeout is ambiguous: app-server may have accepted
+                // the turn and only lost/delayed its acknowledgement. Keep the
+                // automation correlated with turn/completed; failing or retrying
+                // here can report a false failure or execute the prompt twice.
+                if automation.is_some() && is_ambiguous_turn_start_timeout(&error) {
+                    return Ok(SendOutcome {
+                        queued: false,
+                        message_id: None,
+                        turn: None,
+                    });
+                }
                 self.active_automations.lock().await.remove(&thread_id);
                 self.client.emit_local_event("board/automation/submission-cancelled", json!({"threadId":thread_id})).await;
                 let should_drain = {
@@ -413,6 +424,22 @@ impl TurnCoordinator {
                     return;
                 }
                 Err(error) => {
+                    if message.automation.is_some() && is_ambiguous_turn_start_timeout(&error) {
+                        let (snapshot, persisted) = {
+                            let mut threads = self.threads.lock().await;
+                            acknowledge_started(&mut threads, &thread_id, &message.id);
+                            let state = threads.entry(thread_id.clone()).or_default();
+                            (
+                                state.queue.iter().cloned().collect::<Vec<_>>(),
+                                queue_snapshot(&threads),
+                            )
+                        };
+                        self.persist(persisted);
+                        self.emit_queue(&thread_id, snapshot).await;
+                        // Preserve active_automations: notifications still own
+                        // this run and will resolve it when turn/completed arrives.
+                        return;
+                    }
                     last_error = Some(error.message);
                     if attempt < 3 {
                         tokio::time::sleep(std::time::Duration::from_millis(
@@ -523,6 +550,10 @@ impl TurnCoordinator {
     }
 }
 
+fn is_ambiguous_turn_start_timeout(error: &CodexErrorDto) -> bool {
+    error.message == "Codex turn start acknowledgement timed out"
+}
+
 fn queue_snapshot(
     threads: &HashMap<String, ThreadState>,
 ) -> HashMap<String, VecDeque<QueuedMessage>> {
@@ -594,6 +625,22 @@ fn random_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_request_timeouts_are_treated_as_ambiguous_turn_starts() {
+        assert!(is_ambiguous_turn_start_timeout(&CodexErrorDto::new(
+            CodexErrorCode::RequestFailed,
+            "Codex turn start acknowledgement timed out",
+        )));
+        assert!(!is_ambiguous_turn_start_timeout(&CodexErrorDto::new(
+            CodexErrorCode::RequestFailed,
+            "Codex request timed out",
+        )));
+        assert!(!is_ambiguous_turn_start_timeout(&CodexErrorDto::new(
+            CodexErrorCode::RequestFailed,
+            "Model unavailable",
+        )));
+    }
 
     #[test]
     fn persisted_snapshot_omits_empty_queues() {

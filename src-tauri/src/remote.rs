@@ -779,6 +779,8 @@ fn paginate_thread_items(thread: &mut Value, before: Option<usize>, limit: usize
         if let Some(items) = turn.get("items").and_then(Value::as_array) {
             for item in items {
                 if (start..end).contains(&index) {
+                    let mut item = item.clone();
+                    crate::codex::sanitize_mobile_history_value(&mut item);
                     messages.push(json!({ "index": index, "turnId": turn_id, "turnStatus": status, "item": item }));
                 }
                 index += 1;
@@ -1331,6 +1333,15 @@ mod tests {
         assert_eq!(older["pagination"]["start"], 12);
         assert_eq!(older["messages"][0]["item"]["id"], "item-1-4");
         assert_eq!(older["pagination"]["hasOlder"], true);
+    }
+
+    #[test]
+    fn mobile_fallback_page_does_not_return_inline_image_payloads() {
+        let mut thread = json!({ "turns": [{ "id": "t", "status": "completed", "items": [{
+            "id": "image", "type": "userMessage", "content": [{ "type": "image", "url": "data:image/png;base64,AAAA" }]
+        }] }] });
+        paginate_thread_items(&mut thread, None, 10).unwrap();
+        assert_eq!(thread["messages"][0]["item"]["content"][0]["url"], "[Image attachment omitted from mobile history]");
     }
 
     #[test]

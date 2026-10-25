@@ -9,6 +9,7 @@ export class BoardApi {
   private localSettingsLoaded: Promise<void> | null = null;
   private settingsRevisionOffset = 0;
   constructor(private readonly credential: PairingCredential) {}
+  historyCacheScope() { return this.credential.baseUrl; }
 
   private async resolveBoard(config: BoardConfig): Promise<BoardConfig> {
     this.sharedTurnSettings = Boolean(config.turnSettings);

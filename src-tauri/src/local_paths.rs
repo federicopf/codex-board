@@ -3,6 +3,17 @@ use std::path::PathBuf;
 #[cfg(windows)]
 pub fn resolve_local_path(path: &str) -> Result<PathBuf, String> {
     if path.starts_with('/') {
+        // WSL's /mnt/<drive> paths map deterministically to Windows paths. Do
+        // this locally instead of starting WSL just to run `wslpath` on every
+        // chat/image request (cold WSL startup can cost many seconds).
+        let normalized = path.replace('\\', "/");
+        if let Some(mounted) = normalized.strip_prefix("/mnt/") {
+            let (drive, rest) = mounted.split_once('/').unwrap_or((mounted, ""));
+            if drive.len() == 1 && drive.as_bytes()[0].is_ascii_alphabetic() {
+                let suffix = if rest.is_empty() { String::new() } else { format!("\\{}", rest.replace('/', "\\")) };
+                return Ok(PathBuf::from(format!("{}:{suffix}", drive.to_ascii_uppercase())));
+            }
+        }
         let output = std::process::Command::new("wsl.exe")
             .args(["--exec", "wslpath", "-w", path])
             .output()
