@@ -58,7 +58,7 @@ import {
   renameCategory,
   saveCategoryOrder,
 } from "./lib/categoryOrder";
-import { ALL_PROJECTS, projectOptions, buildProjectMap } from "./lib/projects";
+import { ALL_PROJECTS, projectOptions, buildProjectMap, sameProjectPath } from "./lib/projects";
 import { buildThreadTitle, threadCategories, UNCATEGORIZED } from "./lib/threadStatus";
 import type { BoardThread, CodexError, CodexEvent, JsonValue, QueuedMessage, SequencedCodexEvent, ThreadDto, TurnSettings } from "./types";
 type JsonObject = Record<string, JsonValue>;
@@ -730,16 +730,14 @@ function App() {
     if (overId.startsWith(CUSTOMER_DROP_PREFIX)) {
       const targetCustomer = customers.find((customer) => customer.id === customerFromDropId(overId));
       const targetThread = threads.find((thread) => thread.id === threadId);
-      const normalizePath = (path: string) => path.replaceAll("\\", "/").replace(/\/+$/, "").toLocaleLowerCase();
-      if (!targetCustomer || !targetThread || normalizePath(targetCustomer.projectCwd) !== normalizePath(targetThread.cwd || "")) return;
+      if (!targetCustomer || !targetThread || !sameProjectPath(targetCustomer.projectCwd, targetThread.cwd)) return;
       assignThreadToCustomer(threadId, targetCustomer.id);
       return;
     }
     if (overId.startsWith(PROJECT_DROP_PREFIX)) {
       const targetProject = projectFromDropId(overId);
       const targetThread = threads.find((thread) => thread.id === threadId);
-      const normalizePath = (path: string) => path.replaceAll("\\", "/").replace(/\/+$/, "").toLocaleLowerCase();
-      if (targetProject === ALL_PROJECTS || !targetThread || normalizePath(targetThread.cwd || "") !== targetProject) return;
+      if (targetProject === ALL_PROJECTS || !targetThread || !sameProjectPath(targetThread.cwd, targetProject)) return;
       assignThreadToCustomer(threadId, null);
     }
   }

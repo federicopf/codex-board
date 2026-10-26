@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ThreadDto } from "../types";
-import { ALL_PROJECTS, buildProjectMap, normalizeProjectPath } from "./projects";
+import { ALL_PROJECTS, buildProjectMap, normalizeProjectPath, sameProjectPath } from "./projects";
 import { toBoardThreads } from "./board";
 
 const thread = (id: string, cwd: string | null): ThreadDto => ({
@@ -14,6 +14,13 @@ const thread = (id: string, cwd: string | null): ThreadDto => ({
 describe("projects", () => {
   it("normalizes Windows paths case-insensitively", () => {
     expect(normalizeProjectPath("C:\\Code\\Demo\\")).toBe("c:/code/demo");
+    expect(sameProjectPath("C:\\Code\\Demo", "c:/code/demo/")).toBe(true);
+  });
+
+  it("preserves case for WSL and other case-sensitive paths when matching project drops", () => {
+    expect(sameProjectPath("/mnt/c/Users/Asus/project", "/mnt/c/Users/Asus/project/")).toBe(true);
+    expect(sameProjectPath("/mnt/c/Users/Asus/project", "/mnt/c/users/asus/project")).toBe(false);
+    expect(sameProjectPath(null, null)).toBe(false);
   });
 
   it("disambiguates duplicate basenames with their parent", () => {

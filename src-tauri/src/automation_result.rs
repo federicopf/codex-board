@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+// Generation targets 60 words, but tolerate longer reports so a valid
+// success report is not mislabeled unknown. Stored text is still character-capped.
+const MAX_TOLERATED_REPORT_WORDS: usize = 500;
+
 pub const RESULT_INSTRUCTION: &str = concat!(
     "<!-- codex-board-automation: This result contract applies ONLY to this automated turn, not future manual messages. ",
     "Complete the requested work, then return ONLY one JSON object with exactly these keys: status, summary, noteworthy. ",
@@ -72,9 +76,9 @@ pub fn resolve(turn: &Value, final_text: Option<&str>, finished_at: i64) -> Auto
             let parsed = final_text.and_then(parse_model_report);
             match parsed {
                 Some(report) if !report.summary.trim().is_empty()
-                    && report.summary.split_whitespace().count() <= 60
+                    && report.summary.split_whitespace().count() <= MAX_TOLERATED_REPORT_WORDS
                     && report.noteworthy.len() <= 4
-                    && report.noteworthy.iter().all(|item| !item.trim().is_empty() && item.split_whitespace().count() <= 60) => (
+                    && report.noteworthy.iter().all(|item| !item.trim().is_empty() && item.split_whitespace().count() <= MAX_TOLERATED_REPORT_WORDS) => (
                     match report.status { ReportStatus::Success => "success", ReportStatus::Failed => "failed" },
                     report.summary.trim().to_owned(),
                     report.noteworthy.into_iter().map(|item| item.trim().chars().take(240).collect()).collect(),
@@ -180,11 +184,21 @@ mod tests {
             Some(r#"{"status":"maybe","summary":"OK","noteworthy":[]}"#), Some(r#"{"status":"success","summary":"OK","noteworthy":[],"extra":true}"#)] {
             assert_eq!(resolve(&json!({"status":"completed"}), text, 1).status, "unknown");
         }
-        let long = json!({"status":"success","summary":"word ".repeat(61),"noteworthy":[]}).to_string();
+        let long = json!({"status":"success","summary":"word ".repeat(MAX_TOLERATED_REPORT_WORDS + 1),"noteworthy":[]}).to_string();
         assert_eq!(resolve(&json!({"status":"completed"}), Some(&long), 1).status, "unknown");
         let many_notes = json!({"status":"success","summary":"OK","noteworthy":["one","two","three","four","five"]}).to_string();
         assert_eq!(resolve(&json!({"status":"completed"}), Some(&many_notes), 1).status, "unknown");
         assert_eq!(resolve(&json!({}), Some(r#"{"status":"success","summary":"OK","noteworthy":[]}"#), 1).status, "unknown");
+    }
+    #[test]
+    fn valid_report_with_a_long_note_remains_successful() {
+        let note = "word ".repeat(200);
+        let report = json!({"status":"success","summary":"Audit completato e verificato.","noteworthy":[note]}).to_string();
+        let result = resolve(&json!({"status":"completed"}), Some(&report), 1);
+        assert_eq!(result.status, "success");
+        assert_eq!(result.summary, "Audit completato e verificato.");
+        assert_eq!(result.noteworthy.len(), 1);
+        assert_eq!(result.noteworthy[0].chars().count(), 240);
     }
     #[test]
     fn success_and_no_change_are_supported_and_commentary_is_not_a_result() {

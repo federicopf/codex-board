@@ -18,6 +18,11 @@ export function normalizeProjectPath(cwd: string | null | undefined): string {
   return normalized || "/";
 }
 
+export function sameProjectPath(left: string | null | undefined, right: string | null | undefined): boolean {
+  const normalizedLeft = normalizeProjectPath(left);
+  return normalizedLeft !== UNKNOWN_PROJECT && normalizedLeft === normalizeProjectPath(right);
+}
+
 function segments(key: string): string[] {
   return key.split("/").filter(Boolean);
 }
