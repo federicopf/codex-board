@@ -68,3 +68,43 @@ export class TurnSettingsSync {
     return this.snapshot.settings;
   };
 }
+
+// The board preference is only a default. Each conversation owns its saved choice.
+export class ThreadTurnSettingsSync {
+  private readonly defaults: TurnSettingsSync;
+  private readonly threads = new Map<string, TurnSettingsSync>();
+  private config: Pick<BoardConfig, "revision" | "turnSettings" | "threadTurnSettings"> | null = null;
+
+  constructor(writeDefault: (patch: TurnSettings) => Promise<BoardConfig>, private writeThread: (threadId: string, patch: TurnSettings) => Promise<BoardConfig>, initial: TurnSettings = {}) {
+    this.defaults = new TurnSettingsSync(writeDefault, initial);
+  }
+
+  getSnapshot = () => this.defaults.getSnapshot();
+  subscribe = (listener: () => void) => this.defaults.subscribe(listener);
+  unavailable = (error: unknown) => {
+    this.defaults.unavailable(error);
+    for (const store of this.threads.values()) store.unavailable(error);
+  };
+  receive = (config: Pick<BoardConfig, "revision" | "turnSettings" | "threadTurnSettings">) => {
+    if (this.config && config.revision < this.config.revision) return;
+    this.config = config;
+    this.defaults.receive(config);
+    for (const [id, store] of this.threads) store.receive(this.threadConfig(id, config));
+  };
+  thread = (id: string): TurnSettingsSync => {
+    let store = this.threads.get(id);
+    if (!store) {
+      store = new TurnSettingsSync(async (patch) => {
+        const config = await this.writeThread(id, patch);
+        this.receive(config);
+        return { ...config, turnSettings: config.threadTurnSettings?.[id] ?? config.turnSettings };
+      });
+      this.threads.set(id, store);
+      if (this.config) store.receive(this.threadConfig(id, this.config));
+    }
+    return store;
+  };
+  private threadConfig(id: string, config: Pick<BoardConfig, "revision" | "turnSettings" | "threadTurnSettings">) {
+    return { revision: config.revision, turnSettings: config.threadTurnSettings?.[id] ?? config.turnSettings };
+  }
+}

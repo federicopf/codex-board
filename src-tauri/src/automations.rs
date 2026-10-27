@@ -176,7 +176,7 @@ impl AutomationStore {
                         let status = if raw == "completed" { "success" } else if raw == "interrupted" { "failed" } else { raw };
                         let summary = event.params.get("result").and_then(serde_json::Value::as_str).unwrap_or("Esito non verificabile.");
                         let noteworthy = event.params.get("noteworthy").and_then(serde_json::Value::as_array).map(|items| items.iter()
-                            .filter_map(serde_json::Value::as_str).take(4).map(|item| item.chars().take(240).collect()).collect()).unwrap_or_default();
+                            .filter_map(serde_json::Value::as_str).take(4).map(str::to_owned).collect()).unwrap_or_default();
                         let finished = event.params.get("finishedAt").and_then(serde_json::Value::as_i64).unwrap_or_else(now_ms);
                         let _ = outcomes.record_completion(id, status, summary, noteworthy, finished).await;
                     }
@@ -228,7 +228,7 @@ impl AutomationStore {
         let Some(item) = next.automations.iter_mut().find(|item| item.id == id) else { return Ok(()) };
         if item.last_result.as_ref().is_some_and(|previous| previous.finished_at > finished_at) { return Ok(()) }
         let status = match status { "success" | "failed" => status, _ => "unknown" };
-        item.last_result = Some(AutomationRunResult { status: status.into(), summary: summary.chars().take(500).collect(), noteworthy: noteworthy.into_iter().take(4).map(|item| item.chars().take(240).collect()).collect(), finished_at });
+        item.last_result = Some(AutomationRunResult { status: status.into(), summary: summary.to_owned(), noteworthy: noteworthy.into_iter().take(4).collect(), finished_at });
         item.last_error = (status != "success").then(|| summary.to_owned());
         item.last_run_at = Some(finished_at);
         self.persist(&next)?;

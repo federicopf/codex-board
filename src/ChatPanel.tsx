@@ -118,7 +118,7 @@ export function ChatComposer({ threadId, working, activeTurnId, loading, onSend,
   async function submit() {
     const message = draft.trim();
     if ((!message && attachments.length === 0) || sendingRef.current || !ready) return;
-    if (!turnPreferences.getSnapshot().settings.model) { onError("Choose a Codex model before sending."); return; }
+    if (!turnPreferences.thread(threadId).getSnapshot().settings.model) { onError("Choose a Codex model before sending."); return; }
     sendingRef.current = true; setSending(true); onError(null);
     try { await onSend(threadId, message, attachments.map((attachment) => attachment.dataUrl)); drafts.accepted(threadId, saved); }
     catch (cause) { onError(asCodexError(cause).message); }
@@ -154,7 +154,7 @@ function ImageAttachmentButton({ onSelect, onError, disabled, open, onOpenChange
 }
 
 function TurnSettingsBar({ threadId, working, open, onOpenChange }: { threadId: string; working: boolean; open: boolean; onOpenChange: (open: boolean) => void }) {
-  const { settings, update, error: settingsError, saving } = useTurnPreferences();
+  const { settings, update, error: settingsError, saving } = useTurnPreferences(threadId);
   const { model = "", effort = "", summary = "auto", serviceTier: tier = "" } = settings;
   const [models, setModels] = useState<Array<{ id: string; name: string; efforts: string[]; tiers: string[] }>>([]);
   const [compacting, setCompacting] = useState(false);

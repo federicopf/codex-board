@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TurnSettingsSync, type BoardConfig, type TurnSettings } from "@codex-board/protocol";
+import { ThreadTurnSettingsSync, TurnSettingsSync, type BoardConfig, type TurnSettings } from "@codex-board/protocol";
 
 const config = (revision: number, turnSettings: TurnSettings): BoardConfig => ({ categories: [], projects: [], approvalMode: "ask", revision, turnSettings });
 function deferred<T>() {
@@ -57,5 +57,30 @@ describe("shared desktop/mobile turn preferences",()=>{
     response.resolve(config(2,{model:"new"}));
     await save;
     expect((await sending).model).toBe("new");
+  });
+});
+
+describe("per-conversation turn preferences", () => {
+  it("changes one thread without changing another and survives board refresh", async () => {
+    let saved = config(1, { model: "default-model" });
+    const store = new ThreadTurnSettingsSync(async () => saved, async (id, patch) => {
+      saved = { ...saved, revision: saved.revision + 1, threadTurnSettings: {
+        ...saved.threadTurnSettings,
+        [id]: { ...saved.threadTurnSettings?.[id], ...patch },
+      } };
+      return saved;
+    });
+    store.receive(saved);
+    expect(store.thread("a").getSnapshot().settings.model).toBe("default-model");
+    expect(store.thread("b").getSnapshot().settings.model).toBe("default-model");
+    await store.thread("a").update({ model: "model-a" });
+    expect((await store.thread("a").flush()).model).toBe("model-a");
+    expect((await store.thread("b").flush()).model).toBe("default-model");
+    store.receive(config(1, { model: "stale-model" }));
+    expect(store.thread("a").getSnapshot().settings.model).toBe("model-a");
+    const reopened = new ThreadTurnSettingsSync(async () => saved, async () => saved);
+    reopened.receive(saved);
+    expect(reopened.thread("a").getSnapshot().settings.model).toBe("model-a");
+    expect(reopened.thread("b").getSnapshot().settings.model).toBe("default-model");
   });
 });

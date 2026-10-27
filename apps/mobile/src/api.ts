@@ -62,6 +62,11 @@ export class BoardApi {
     }
     return this.resolveBoard(await this.request<BoardConfig>("/v1/turn-settings", { method: "PUT", body: JSON.stringify(settings) }));
   }
+  async updateThreadTurnSettings(id: string, settings: TurnSettings) {
+    if (this.sharedTurnSettings === null) await this.board();
+    if (this.sharedTurnSettings === false) throw new Error("Update Codex Board on the PC to save a model for each conversation.");
+    return this.resolveBoard(await this.request<BoardConfig>(`/v1/threads/${encodeURIComponent(id)}/turn-settings`, { method: "PUT", body: JSON.stringify(settings) }));
+  }
   thread(id: string, page?: { limit: number; before?: number; unit?: "items" }) {
     const query = page ? `?limit=${page.limit}${page.before === undefined ? "" : `&before=${page.before}`}${page.unit ? `&unit=${page.unit}` : ""}` : "";
     return this.request<Record<string, JsonValue>>(`/v1/threads/${encodeURIComponent(id)}${query}`);

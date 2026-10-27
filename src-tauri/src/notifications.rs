@@ -95,7 +95,7 @@ impl NotificationStore {
                         if let Some(text) = automation_result::final_message(std::slice::from_ref(item)) {
                             if let Some(pending) = worker.pending_automations.lock().await.get_mut(thread_id) {
                                 // Bound malformed streams; parsing refuses oversized/truncated JSON.
-                                pending.final_text = Some(text.chars().take(16_000).collect());
+                                pending.final_text = Some(text.chars().take(64_000).collect());
                             }
                         }
                     }
@@ -193,9 +193,9 @@ fn from_event(
                     .unwrap_or_default()
                     .to_owned(),
                 name: name.to_owned(),
-                result: truncate(result, 2_000),
+                result: result.trim().to_owned(),
                 noteworthy: params.get("noteworthy").and_then(Value::as_array).map(|items| items.iter()
-                    .filter_map(Value::as_str).take(4).map(|item| truncate(item, 240)).collect()).unwrap_or_default(),
+                    .filter_map(Value::as_str).take(4).map(|item| item.trim().to_owned()).collect()).unwrap_or_default(),
                 status: status.to_owned(),
                 duration_ms: params.get("durationMs").and_then(Value::as_i64),
             }),
@@ -272,15 +272,6 @@ fn outcome_title(status: &str) -> &'static str {
     }
 }
 
-fn truncate(value: &str, max_chars: usize) -> String {
-    let mut chars = value.trim().chars();
-    let result = chars.by_ref().take(max_chars).collect::<String>();
-    if chars.next().is_some() {
-        format!("{result}…")
-    } else {
-        result
-    }
-}
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -352,6 +343,16 @@ mod tests {
         assert_eq!(result.result, "Found 3 records. Updated the report.");
         assert_eq!(result.noteworthy, vec!["A retry recovered a timeout."]);
         assert_eq!(result.duration_ms, Some(1500));
+    }
+
+    #[test]
+    fn automation_event_preserves_long_note_without_cutting_it() {
+        let note = "La campagna è stata verificata e il controllo è terminato. ".repeat(8);
+        let notification = from_event("board/automation/completed", &json!({
+            "automationId": "a", "automationName": "Audit", "status": "success",
+            "result": "Audit completo.", "noteworthy": [note]
+        }), false, None).expect("automation notification");
+        assert_eq!(notification.automation.unwrap().noteworthy[0], note.trim());
     }
 
     #[test]

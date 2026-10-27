@@ -1,8 +1,8 @@
 import { useSyncExternalStore } from "react";
-import { TurnSettingsSync, type TurnSettings } from "@codex-board/protocol";
-import { setTurnSettings } from "../api";
+import { ThreadTurnSettingsSync, type TurnSettings } from "@codex-board/protocol";
+import { setTurnSettings, setThreadTurnSettings } from "../api";
 
-export const turnPreferences = new TurnSettingsSync(setTurnSettings, {
+export const turnPreferences = new ThreadTurnSettingsSync(setTurnSettings, setThreadTurnSettings, {
   model: localStorage.getItem("codex-board.model") || "",
   effort: localStorage.getItem("codex-board.effort") || "",
   summary: localStorage.getItem("codex-board.summary") || "auto",
@@ -18,7 +18,8 @@ turnPreferences.subscribe(() => {
   } catch { /* The backend remains authoritative when the local cache is full. */ }
 });
 
-export function useTurnPreferences() {
-  const state = useSyncExternalStore(turnPreferences.subscribe, turnPreferences.getSnapshot);
-  return { ...state, update: (patch: TurnSettings) => { void turnPreferences.update(patch).catch(() => undefined); } };
+export function useTurnPreferences(threadId: string) {
+  const store = turnPreferences.thread(threadId);
+  const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  return { ...state, update: (patch: TurnSettings) => { void store.update(patch).catch(() => undefined); } };
 }

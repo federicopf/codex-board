@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     env, fs,
     net::SocketAddr,
     path::{Path, PathBuf},
@@ -44,6 +45,8 @@ pub struct BoardConfig {
     pub approval_mode: String,
     #[serde(default)]
     pub turn_settings: TurnPreferences,
+    #[serde(default)]
+    pub thread_turn_settings: HashMap<String, TurnPreferences>,
     #[serde(default)]
     pub revision: u64,
 }
@@ -102,6 +105,7 @@ impl Default for BoardConfig {
             customers: Vec::new(),
             approval_mode: default_approval_mode(),
             turn_settings: TurnPreferences::default(),
+            thread_turn_settings: HashMap::new(),
             revision: 0,
         }
     }
@@ -273,6 +277,10 @@ impl RemoteGateway {
         save_turn_settings(&self.config, &self.config_path, patch)
     }
 
+    pub fn set_thread_turn_settings(&self, thread_id: &str, patch: TurnPreferencesPatch) -> Result<BoardConfig, String> {
+        save_thread_turn_settings(&self.config, &self.config_path, thread_id, patch)
+    }
+
     pub fn start(
         &self,
         client: Arc<CodexClient>,
@@ -331,6 +339,7 @@ impl RemoteGateway {
                 .route("/v1/board", get(get_board).put(put_board))
                 .route("/v1/customers/{id}", delete(delete_customer))
                 .route("/v1/turn-settings", put(put_turn_settings))
+                .route("/v1/threads/{id}/turn-settings", put(put_thread_turn_settings))
                 .route(
                     "/v1/automations",
                     get(list_automations).post(create_automation),
@@ -557,6 +566,7 @@ fn save_board_config(
     config.customers = unique_customers(config.customers)?;
     // Board/category writes must never replace a newer model preference.
     config.turn_settings = current.turn_settings.clone();
+    config.thread_turn_settings = current.thread_turn_settings.clone();
     config.revision = current.revision.saturating_add(1);
     persist_config(path, &config)?;
     *current = config.clone();
@@ -591,6 +601,27 @@ fn save_turn_settings(
     }
     let mut config = current.clone();
     let settings = &mut config.turn_settings;
+    if let Some(model) = patch.model { settings.model = model.trim().to_string(); }
+    if let Some(effort) = patch.effort { settings.effort = effort; }
+    if let Some(summary) = patch.summary { settings.summary = summary; }
+    if let Some(tier) = patch.service_tier { settings.service_tier = tier; }
+    config.revision = current.revision.saturating_add(1);
+    persist_config(path, &config)?;
+    *current = config.clone();
+    Ok(config)
+}
+
+fn save_thread_turn_settings(
+    state: &Arc<RwLock<BoardConfig>>,
+    path: &Path,
+    thread_id: &str,
+    patch: TurnPreferencesPatch,
+) -> Result<BoardConfig, String> {
+    if thread_id.trim().is_empty() { return Err("Thread id is required".into()); }
+    let mut current = state.write().map_err(|error| error.to_string())?;
+    let mut config = current.clone();
+    let settings = config.thread_turn_settings.entry(thread_id.to_owned())
+        .or_insert_with(|| current.turn_settings.clone());
     if let Some(model) = patch.model { settings.model = model.trim().to_string(); }
     if let Some(effort) = patch.effort { settings.effort = effort; }
     if let Some(summary) = patch.summary { settings.summary = summary; }
@@ -1058,6 +1089,23 @@ async fn put_turn_settings(
     Ok(Json(config))
 }
 
+async fn put_thread_turn_settings(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(patch): Json<TurnPreferencesPatch>,
+) -> Result<Json<BoardConfig>, ApiError> {
+    authorized(&headers, &state)?;
+    let config = save_thread_turn_settings(&state.config, &state.config_path, &id, patch)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    state.client.emit_local_event(
+        "board/config/updated",
+        serde_json::to_value(&config)
+            .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
+    ).await;
+    Ok(Json(config))
+}
+
 async fn list_automations(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -1412,6 +1460,25 @@ mod tests {
     }
 
     #[test]
+    fn thread_models_are_isolated_and_survive_board_updates() {
+        let directory = std::env::temp_dir().join(format!("codex-board-thread-models-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        let gateway = RemoteGateway::prepare(&directory).unwrap();
+        gateway.set_turn_settings(serde_json::from_value(json!({ "model": "default" })).unwrap()).unwrap();
+        let mut stale_board = gateway.board_config();
+        gateway.set_thread_turn_settings("thread-a", serde_json::from_value(json!({ "model": "model-a" })).unwrap()).unwrap();
+        gateway.set_thread_turn_settings("thread-b", serde_json::from_value(json!({ "model": "model-b" })).unwrap()).unwrap();
+        stale_board.categories = vec!["Review".into()];
+        let saved = gateway.set_board_config(stale_board).unwrap();
+        assert_eq!(saved.turn_settings.model, "default");
+        assert_eq!(saved.thread_turn_settings["thread-a"].model, "model-a");
+        assert_eq!(saved.thread_turn_settings["thread-b"].model, "model-b");
+        let disk: BoardConfig = crate::persistence::load_json_or_default(&directory.join("board-config.json"));
+        assert_eq!(disk.thread_turn_settings["thread-a"].model, "model-a");
+        assert_eq!(disk.thread_turn_settings["thread-b"].model, "model-b");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn automatic_approval_never_answers_user_questions() {
         assert!(automatic_approval("item/tool/requestUserInput", &json!({})).is_none());
         assert_eq!(
@@ -1442,6 +1509,7 @@ mod tests {
                     customers: Vec::new(),
                     approval_mode: "auto".into(),
                     turn_settings: TurnPreferences::default(),
+                    thread_turn_settings: HashMap::new(),
                     revision: 0,
                 })
             })

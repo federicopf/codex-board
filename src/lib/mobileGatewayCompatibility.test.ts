@@ -55,4 +55,15 @@ describe("OTA compatibility with installed desktop gateways",()=>{
     await expect(api.updateTurnSettings({model:"chosen"})).rejects.toThrow("Invalid credential");
     expect(saveLegacyTurnSettings).not.toHaveBeenCalled();
   });
+
+  it("saves a conversation model through its own gateway endpoint", async () => {
+    const saved = { ...board(6, { model: "default" }), threadTurnSettings: { "thread-a": { model: "model-a" } } };
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(reply(saved)));
+    vi.stubGlobal("fetch", fetch);
+    const api = new BoardApi({ baseUrl: "http://fixture", token: "fixture" });
+    await api.board();
+    expect((await api.updateThreadTurnSettings("thread-a", { model: "model-a" })).threadTurnSettings?.["thread-a"].model).toBe("model-a");
+    expect(fetch.mock.calls[1][0]).toBe("http://fixture/v1/threads/thread-a/turn-settings");
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ model: "model-a" });
+  });
 });

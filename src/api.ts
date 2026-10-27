@@ -5,7 +5,7 @@ import type { BoardNotification, ProjectCustomer } from "@codex-board/protocol";
 
 export interface GatewayInfo { running: boolean; port: number; token: string; error?: string | null; }
 export interface TailscaleInfo { installed: boolean; online: boolean; dnsName?: string | null; baseUrl?: string | null; error?: string | null; }
-export interface BoardConfig { categories: string[]; projects: string[]; customers: ProjectCustomer[]; approvalMode: "auto" | "ask"; turnSettings: TurnSettings; revision: number; }
+export interface BoardConfig { categories: string[]; projects: string[]; customers: ProjectCustomer[]; approvalMode: "auto" | "ask"; turnSettings: TurnSettings; threadTurnSettings?: Record<string, TurnSettings>; revision: number; }
 
 export async function listThreads(): Promise<ThreadDto[]> {
   return invoke<ThreadDto[]>("list_threads");
@@ -63,6 +63,7 @@ export async function getBoardConfig(): Promise<BoardConfig> { return invoke<Boa
 export async function setBoardConfig(config: BoardConfig): Promise<BoardConfig> { return invoke<BoardConfig>("set_board_config", { config }); }
 export async function deleteCustomer(customerId: string): Promise<BoardConfig> { return invoke<BoardConfig>("delete_customer", { customerId }); }
 export async function setTurnSettings(settings: TurnSettings, initializeOnly = false): Promise<BoardConfig> { return invoke<BoardConfig>("set_turn_settings", { settings: { ...settings, initializeOnly } }); }
+export async function setThreadTurnSettings(threadId: string, settings: TurnSettings): Promise<BoardConfig> { return invoke<BoardConfig>("set_thread_turn_settings", { threadId, settings }); }
 export async function listAutomations(): Promise<Automation[]> { return invoke<Automation[]>("list_automations"); }
 export async function createAutomation(input: CreateAutomationInput): Promise<Automation> { return invoke<Automation>("create_automation", { input }); }
 export async function retryAutomation(id: string): Promise<void> { return invoke("retry_automation", { id }); }

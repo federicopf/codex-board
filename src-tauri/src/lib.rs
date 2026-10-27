@@ -252,6 +252,21 @@ async fn set_turn_settings(
 }
 
 #[tauri::command]
+async fn set_thread_turn_settings(
+    gateway: tauri::State<'_, RemoteGateway>,
+    client: tauri::State<'_, Arc<CodexClient>>,
+    thread_id: String,
+    settings: TurnPreferencesPatch,
+) -> Result<BoardConfig, String> {
+    let saved = gateway.set_thread_turn_settings(&thread_id, settings)?;
+    client.emit_local_event(
+        "board/config/updated",
+        serde_json::to_value(&saved).map_err(|error| error.to_string())?,
+    ).await;
+    Ok(saved)
+}
+
+#[tauri::command]
 async fn tailscale_status() -> TailscaleInfo {
     remote::tailscale_status().await
 }
@@ -382,6 +397,7 @@ pub fn run() {
             set_board_config,
             delete_customer,
             set_turn_settings,
+            set_thread_turn_settings,
             tailscale_status,
             configure_tailscale_serve,
             list_automations,

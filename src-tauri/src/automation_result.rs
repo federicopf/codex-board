@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 // Generation targets 60 words, but tolerate longer reports so a valid
-// success report is not mislabeled unknown. Stored text is still character-capped.
+// success report is not mislabeled unknown. Never cut a valid report mid-sentence.
 const MAX_TOLERATED_REPORT_WORDS: usize = 500;
 
 pub const RESULT_INSTRUCTION: &str = concat!(
@@ -81,14 +81,14 @@ pub fn resolve(turn: &Value, final_text: Option<&str>, finished_at: i64) -> Auto
                     && report.noteworthy.iter().all(|item| !item.trim().is_empty() && item.split_whitespace().count() <= MAX_TOLERATED_REPORT_WORDS) => (
                     match report.status { ReportStatus::Success => "success", ReportStatus::Failed => "failed" },
                     report.summary.trim().to_owned(),
-                    report.noteworthy.into_iter().map(|item| item.trim().chars().take(240).collect()).collect(),
+                    report.noteworthy.into_iter().map(|item| item.trim().to_owned()).collect(),
                 ),
                 _ => ("unknown", "Esito non verificabile: report strutturato assente o non valido. Controlla la conversazione prima di rilanciare.".into(), Vec::new()),
             }
         },
         _ => ("unknown", "Esito non verificabile: stato tecnico dell'esecuzione assente o sconosciuto.".into(), Vec::new()),
     };
-    AutomationRunResult { status: status.into(), summary: summary.chars().take(500).collect(), noteworthy, finished_at }
+    AutomationRunResult { status: status.into(), summary, noteworthy, finished_at }
 }
 
 fn parse_model_report(text: &str) -> Option<ModelReport> {
@@ -198,7 +198,19 @@ mod tests {
         assert_eq!(result.status, "success");
         assert_eq!(result.summary, "Audit completato e verificato.");
         assert_eq!(result.noteworthy.len(), 1);
-        assert_eq!(result.noteworthy[0].chars().count(), 240);
+        assert_eq!(result.noteworthy[0], "word ".repeat(200).trim());
+    }
+    #[test]
+    fn valid_report_keeps_complete_long_summary_and_notes() {
+        let summary = "Sono stati verificati lead, prenotazioni e spesa della campagna. ".repeat(12);
+        let note = "La statica ha prodotto prenotazioni e il controllo è terminato senza errori. ".repeat(12);
+        let report = json!({"status":"success","summary":summary,"noteworthy":[note]}).to_string();
+        let result = resolve(&json!({"status":"completed"}), Some(&report), 1);
+        assert_eq!(result.status, "success");
+        assert_eq!(result.summary, summary.trim());
+        assert_eq!(result.noteworthy[0], note.trim());
+        assert!(result.noteworthy[0].chars().count() > 240);
+        assert!(result.summary.chars().count() > 500);
     }
     #[test]
     fn success_and_no_change_are_supported_and_commentary_is_not_a_result() {

@@ -5,7 +5,7 @@ import { ChatDraftStore } from "@codex-board/protocol";
 import { ChatComposer } from "./ChatPanel";
 
 vi.mock("./lib/turnSettings", () => ({
-  turnPreferences: { getSnapshot: () => ({ settings: { model: "fixture" } }) },
+  turnPreferences: { thread: () => ({ getSnapshot: () => ({ settings: { model: "fixture" } }) }) },
   useTurnPreferences: () => ({ settings: { model: "fixture" }, update: vi.fn(), error: null, saving: false }),
 }));
 vi.mock("./api", () => ({

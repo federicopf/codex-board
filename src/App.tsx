@@ -326,7 +326,7 @@ function App() {
               summary: typeof nextTurnSettings.summary === "string" ? nextTurnSettings.summary : "auto",
               serviceTier: typeof nextTurnSettings.serviceTier === "string" ? nextTurnSettings.serviceTier : undefined,
             };
-            turnPreferences.receive({ revision: typeof config.revision === "number" ? config.revision : 0, turnSettings });
+            turnPreferences.receive({ revision: typeof config.revision === "number" ? config.revision : 0, turnSettings, threadTurnSettings: record(config.threadTurnSettings) as Record<string, TurnSettings> });
             projectPathsRef.current = nextProjects;
             setProjectPaths(nextProjects);
             setCategoryOrder(nextCategories);
@@ -657,7 +657,7 @@ function App() {
     const wasWorking = workingIdsRef.current.has(threadId);
     if (!wasWorking) setThreadWorking(threadId, true);
     try {
-      const selected: TurnSettings = { ...await turnPreferences.flush(), ...settings };
+      const selected: TurnSettings = { ...await turnPreferences.thread(threadId).flush(), ...settings };
       if (!selected.model) throw new Error("Select a Codex model before sending a message.");
       const response = await sendMessage(threadId, message, _imageUrls, selected);
       if (response.queued) queueRevision.current += 1;

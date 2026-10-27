@@ -9,7 +9,7 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Markdown from "react-native-markdown-display";
 import {
-  automationOutcome, automationEditFields, automationUpdateInput, automationDateTimeValue, automationIntervalMinutes, categoryFromTitle, displayTitle as formatTaskTitle, formatAutomationInterval, formatCodexDirectives, parsePairingPayload, threadNameWithTitle, TurnSettingsSync,
+  automationOutcome, automationEditFields, automationUpdateInput, automationDateTimeValue, automationIntervalMinutes, categoryFromTitle, displayTitle as formatTaskTitle, formatAutomationInterval, formatCodexDirectives, parsePairingPayload, threadNameWithTitle, ThreadTurnSettingsSync,
   type Automation, type BoardConfig, type BoardNotification, type ProjectCustomer, type CreateAutomationInput, type JsonValue, type PairingCredential,
   type PendingRemoteRequest, type QueuedMessage, type ThreadDto, type TurnSettings,
 } from "@codex-board/protocol";
@@ -27,6 +27,7 @@ import { ProjectHome } from "./src/ProjectHome";
 import { colors } from "./src/theme";
 import { MobileNavigation } from "./src/MobileNavigation";
 import { MobileActionSheet } from "./src/MobileActionSheet";
+import { filterCustomerBoardThreads, projectKey } from "./src/projectOwnership";
 
 const displayTitle = (name?: string | null, preview?: string | null) => formatTaskTitle(name ?? null, preview ?? null);
 
@@ -169,7 +170,6 @@ function projectLabel(cwd: string | null): string {
 }
 
 const ALL_PROJECTS = "__all_projects__";
-const projectKey = (cwd: string | null): string => (cwd || "").trim().replace(/[\\/]+$/, "").toLocaleLowerCase() || "__local__";
 
 function projectBoards(threads: ThreadDto[], registeredProjects: string[] = []): { key: string; label: string; cwd: string; count: number }[] {
   const sources = [...registeredProjects.map((cwd) => ({ cwd })), ...threads];
@@ -300,7 +300,7 @@ function RequestCard({ request, api, onDone }: { request: PendingRemoteRequest; 
   </View>;
 }
 
-function MobileChatComposer({ threadId, api, working, preferences, onChanged, onQueueChanged, drafts }: { threadId: string; api: BoardApi; working: boolean; preferences: TurnSettingsSync; onChanged: () => void; onQueueChanged: () => void; drafts: ChatDraftStore }) {
+function MobileChatComposer({ threadId, api, working, preferences, onChanged, onQueueChanged, drafts }: { threadId: string; api: BoardApi; working: boolean; preferences: ThreadTurnSettingsSync; onChanged: () => void; onQueueChanged: () => void; drafts: ChatDraftStore }) {
   const insets = useSafeAreaInsets();
   const subscribeDraft = useCallback((listener: () => void) => drafts.subscribe(threadId, listener), [drafts, threadId]);
   const draftSnapshot = useCallback(() => drafts.getSnapshot(threadId), [drafts, threadId]);
@@ -314,7 +314,8 @@ function MobileChatComposer({ threadId, api, working, preferences, onChanged, on
     return () => { background.remove(); void drafts.flush(threadId).catch(() => undefined); };
   }, [drafts, threadId]);
   const [busy, setBusy] = useState(false);
-  const { settings, ready, saving, error: settingsError } = useSyncExternalStore(preferences.subscribe, preferences.getSnapshot);
+  const threadPreferences = preferences.thread(threadId);
+  const { settings, ready, saving, error: settingsError } = useSyncExternalStore(threadPreferences.subscribe, threadPreferences.getSnapshot);
   const { model = "", effort = "", summary = "auto", serviceTier: tier = "" } = settings;
   const [workMode, setWorkMode] = useState<"default" | "plan">(() => threadWorkModes.get(threadId) || "default");
   const [models, setModels] = useState<Array<{ id: string; name: string; efforts: string[]; tiers: Array<{ id: string; name: string }> }>>([]);
@@ -325,14 +326,14 @@ function MobileChatComposer({ threadId, api, working, preferences, onChanged, on
   useEffect(() => { let alive = true; setCatalogError(null); void api.models().then((value) => { const data = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).data : null; if (!alive) return; if (!Array.isArray(data)) {setCatalogError("Model catalog unavailable");return;} const next = data.map((item) => { const row = item as Record<string, unknown>; const effortItems = Array.isArray(row.supportedReasoningEfforts) ? row.supportedReasoningEfforts.map((entry) => (entry as Record<string, unknown>)?.reasoningEffort).filter((entry): entry is string => typeof entry === "string") : []; const tierItems = Array.isArray(row.serviceTiers) ? row.serviceTiers.map((entry) => { const value = entry as Record<string, unknown>; return { id: String(value?.id || ""), name: String(value?.name || value?.id || "") }; }).filter((entry) => entry.id) : []; return { id: typeof row.model === "string" ? row.model : String(row.id || ""), name: typeof row.displayName === "string" ? row.displayName : String(row.model || row.id || ""), efforts: effortItems, tiers: tierItems }; }).filter((item) => item.id); setModels(next); }).catch((error) => {if(alive)setCatalogError(error instanceof Error?error.message:String(error));}); return () => { alive = false; }; }, [api, catalogRevision]);
   const selectedModel = models.find((item) => item.id === model);
   const availableEfforts = selectedModel?.efforts.length ? selectedModel.efforts : ["low", "medium", "high", "xhigh"];
-  function saveSettings(patch: TurnSettings) { void preferences.update(patch).catch(() => undefined); }
+  function saveSettings(patch: TurnSettings) { void threadPreferences.update(patch).catch(() => undefined); }
 
   async function send() {
     const text = draft.trim();
     if ((!text && attachments.length === 0) || sendingRef.current || !draftReady) return;
     sendingRef.current = true; setBusy(true);
     try {
-      const confirmed = await preferences.flush();
+      const confirmed = await threadPreferences.flush();
       if (!confirmed.model && api.sharedTurnSettings !== false) { setActiveTool("model"); return; }
       const outcome = await api.send(threadId, text, attachments.map((attachment) => attachment.dataUrl), confirmed.model ? { ...confirmed, mode: workMode } : undefined);
       if (outcome.queued) onQueueChanged();
@@ -392,7 +393,7 @@ function MobileChatComposer({ threadId, api, working, preferences, onChanged, on
   </View>;
 }
 
-function Chat({ thread, api, queue, requests, eventRevision, preferences, onClose, onChanged, onQueueChanged, onFork, onRename, drafts }: { thread: ThreadDto; api: BoardApi; queue: QueuedMessage[]; requests: PendingRemoteRequest[]; eventRevision: number; preferences: TurnSettingsSync; onClose: () => void; onChanged: () => void; onQueueChanged: () => void; onFork: () => void; onRename: () => void; drafts: ChatDraftStore }) {
+function Chat({ thread, api, queue, requests, eventRevision, preferences, onClose, onChanged, onQueueChanged, onFork, onRename, drafts }: { thread: ThreadDto; api: BoardApi; queue: QueuedMessage[]; requests: PendingRemoteRequest[]; eventRevision: number; preferences: ThreadTurnSettingsSync; onClose: () => void; onChanged: () => void; onQueueChanged: () => void; onFork: () => void; onRename: () => void; drafts: ChatDraftStore }) {
   const [loaded, setLoaded] = useState<JsonObject | null>(() => threadCache.get(thread.id) || null);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -745,7 +746,7 @@ function AutomationManager({ api, automations, threads, categories, onClose, onC
 function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCredential; onDisconnect: () => Promise<void>; onOpenTour: () => void }) {
   const api = useMemo(() => new BoardApi(credential), [credential]);
   const drafts = useMemo(() => createMobileDrafts(credential.baseUrl), [credential.baseUrl]);
-  const preferences = useMemo(() => new TurnSettingsSync(patch=>api.updateTurnSettings(patch)), [api]);
+  const preferences = useMemo(() => new ThreadTurnSettingsSync(patch=>api.updateTurnSettings(patch), (threadId,patch)=>api.updateThreadTurnSettings(threadId,patch)), [api]);
   const [threads, setThreads] = useState<ThreadDto[]>([]);
   const [config, setConfig] = useState<BoardConfig | null>(null);
   const [queues, setQueues] = useState<Record<string, QueuedMessage[]>>({});
@@ -859,7 +860,12 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     };
   }, [api, preferences, refresh, scheduleRefresh]);
   useEffect(() => {
-    void loadSelectedBoard().then(saved=>{if(saved&&!projectSelectionChanged.current)setSelectedProject(saved);})
+    void loadSelectedBoard().then(saved=>{
+      if (!saved || projectSelectionChanged.current) return;
+      const normalized = saved === ALL_PROJECTS ? saved : projectKey(saved);
+      setSelectedProject(normalized);
+      if (normalized !== saved) void saveSelectedBoard(normalized);
+    })
       .catch(()=>undefined).finally(()=>setBoardRestored(true));
   }, []);
   useEffect(() => {
@@ -876,10 +882,8 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   const currentProjectCustomers = selectedProject === ALL_PROJECTS ? [] : (config?.customers || []).filter((customer) => projectKey(customer.projectCwd) === selectedProject);
   const currentCustomer = currentProjectCustomers.find((customer) => customer.id === selectedCustomerId) || null;
   const projectBaseThreads = selectedProject === ALL_PROJECTS ? threads : threads.filter((thread) => projectKey(thread.cwd) === selectedProject);
-  const projectThreads = selectedProject === ALL_PROJECTS ? projectBaseThreads : currentCustomer
-    ? projectBaseThreads.filter((thread) => currentCustomer.threadIds.includes(thread.id))
-    : projectBaseThreads.filter((thread) => !currentProjectCustomers.some((customer) => customer.threadIds.includes(thread.id)));
-  const projectThreadCount = projectBaseThreads.filter((thread) => !currentProjectCustomers.some((customer) => customer.threadIds.includes(thread.id))).length;
+  const projectThreads = selectedProject === ALL_PROJECTS ? projectBaseThreads : filterCustomerBoardThreads(projectBaseThreads, currentProjectCustomers, currentCustomer?.id || null);
+  const projectThreadCount = filterCustomerBoardThreads(projectBaseThreads, currentProjectCustomers, null).length;
   const dashboardCategories = categories.filter((category) => projectThreads.some((thread) => categoryFromTitle(thread.name) === category));
   useEffect(() => { if (config && boardRestored && !loading && selectedProject !== ALL_PROJECTS && !projects.some((project) => project.key === selectedProject)) { setSelectedProject(ALL_PROJECTS); void saveSelectedBoard(ALL_PROJECTS); } }, [config, boardRestored, loading, selectedProject, projects]);
   useEffect(() => {
@@ -938,9 +942,13 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     setSelected(thread);
   }
 
-  async function assignThreadToCustomer(thread: ThreadDto, customerId: string | null) {
-    if (!config) return;
+  async function assignThreadToCustomer(thread: ThreadDto, customerId: string | null): Promise<boolean> {
+    if (!config) return false;
     const targetCustomerId = customerId && (config.customers || []).some((customer) => customer.id === customerId && projectKey(customer.projectCwd) === projectKey(thread.cwd)) ? customerId : null;
+    if (customerId && !targetCustomerId) {
+      Alert.alert("Could not assign conversation", "This customer does not belong to the conversation's project.");
+      return false;
+    }
     const customers = (config.customers || []).map((customer) => {
       const threadIds = customer.threadIds.filter((id) => id !== thread.id);
       if (customer.id === targetCustomerId) threadIds.push(thread.id);
@@ -951,7 +959,15 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
       setConfig(saved);
       setSelectedProject(projectKey(thread.cwd));
       setSelectedCustomerId(targetCustomerId);
-    } catch (error) { Alert.alert("Could not assign conversation", error instanceof Error ? error.message : String(error)); }
+      return true;
+    } catch (error) { Alert.alert("Could not assign conversation", error instanceof Error ? error.message : String(error)); return false; }
+  }
+
+  async function retainCustomerThread(thread: ThreadDto, customerId: string | null, created: boolean) {
+    const assigned = customerId ? await assignThreadToCustomer(thread, customerId) : false;
+    if (created) retainCreatedThread(thread, assigned ? customerId : null);
+    else openThread(thread, assigned ? customerId : null);
+    await refresh();
   }
 
   function pullToRefresh() { setRefreshing(true); void refresh(); }
@@ -997,7 +1013,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
       onDeleteCustomer={deleteCustomer}
       onCreateCustomer={()=>setCreatingCustomer(true)}
       onAssignCustomer={setAssigningCustomerThread}
-      onOpen={setSelected}
+      onOpen={openThread}
       onMove={setMoving}
       onFork={setForking}
       onRename={setRenaming}
@@ -1012,12 +1028,12 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     {managing && config && <CategoryManager config={config} threads={threads} api={api} onClose={() => setManaging(false)} onSaved={refresh} onOpenTour={onOpenTour} onDisconnect={() => void onDisconnect()} />}
     {automating && <AutomationManager api={api} automations={automations} threads={threads} categories={categories} onClose={() => setAutomating(false)} onChanged={refresh} />}
     {creatingProject&&config&&<NewProjectModal config={config} api={api} onClose={()=>setCreatingProject(false)} onCreated={(cwd)=>{setCreatingProject(false);selectProjectBoard(projectKey(cwd));void refresh()}}/>}
-    {creatingTask && <NewTaskModal api={api} threads={threads} projects={config?.projects || []} categories={categories} defaultProjectKey={selectedProject === ALL_PROJECTS ? undefined : selectedProject} onClose={() => setCreatingTask(false)} onCreated={(thread) => { setCreatingTask(false); const customerId = currentCustomer && projectKey(currentCustomer.projectCwd) === projectKey(thread.cwd) ? currentCustomer.id : null; if(customerId) void assignThreadToCustomer(thread,customerId).then(()=>retainCreatedThread(thread,customerId)); else retainCreatedThread(thread); void refresh(); }} />}
+    {creatingTask && <NewTaskModal api={api} threads={threads} projects={config?.projects || []} categories={categories} defaultProjectKey={selectedProject === ALL_PROJECTS ? undefined : selectedProject} onClose={() => setCreatingTask(false)} onCreated={(thread) => { setCreatingTask(false); const customerId = currentCustomer && projectKey(currentCustomer.projectCwd) === projectKey(thread.cwd) ? currentCustomer.id : null; void retainCustomerThread(thread, customerId, true); }} />}
     {creatingCustomer&&config&&selectedProject!==ALL_PROJECTS&&<NewCustomerModal config={config} api={api} projectCwd={projects.find(project=>project.key===selectedProject)?.cwd||selectedProject} onClose={()=>setCreatingCustomer(false)} onCreated={(customer,saved)=>{setConfig(saved);setCreatingCustomer(false);setSelectedCustomerId(customer.id);setActiveCategory(null)}}/>}
     {assigningCustomerThread&&<MobileActionSheet title="Assign conversation" onClose={()=>setAssigningCustomerThread(null)} actions={[{label:"Project threads",icon:"folder",onPress:()=>{const thread=assigningCustomerThread;setAssigningCustomerThread(null);void assignThreadToCustomer(thread,null)}},...(config?.customers||[]).filter(customer=>projectKey(customer.projectCwd)===projectKey(assigningCustomerThread.cwd)).map(customer=>({label:customer.name,icon:"users" as const,onPress:()=>{const thread=assigningCustomerThread;setAssigningCustomerThread(null);void assignThreadToCustomer(thread,customer.id)}}))]}/>}
     {inboxOpen && <InboxModal api={api} items={notifications} initialTab={inboxInitialTab} onClose={()=>setInboxOpen(false)} onChanged={refresh} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item)}} onOpen={(id)=>{const thread=threads.find(item=>item.id===id);if(thread){setInboxOpen(false);openThread(thread)}}}/>}
     {moving && <MoveDialog thread={moving} categories={categories} api={api} onClose={() => setMoving(null)} onMoved={refresh} />}
-    {forking && <ForkThreadModal api={api} thread={forking} categories={categories} onClose={()=>setForking(null)} onCreated={(thread)=>{setForking(null);if(currentCustomer)void assignThreadToCustomer(thread,currentCustomer.id).then(()=>openThread(thread,currentCustomer.id));else openThread(thread);void refresh()}}/>}
+    {forking && <ForkThreadModal api={api} thread={forking} categories={categories} onClose={()=>setForking(null)} onCreated={(thread)=>{const ownerId=(config?.customers||[]).find(customer=>customer.threadIds.includes(forking.id))?.id||null;setForking(null);void retainCustomerThread(thread,ownerId,false)}}/>}
     {renaming&&<RenameThreadModal key={renaming.id} api={api} thread={renaming} onClose={()=>setRenaming(null)} onSaved={(saved)=>{setThreads(current=>current.map(item=>item.id===saved.id?saved:item));setSelected(current=>current?.id===saved.id?saved:current);setRenaming(null);void refresh()}}/>}
     {resultNotification&&<AutomationResultModal onRetry={()=>api.retryAutomation(resultNotification.automation!.id).then(refresh)} notification={resultNotification} onClose={()=>setResultNotification(null)} onBackToList={()=>{setResultNotification(null);setInboxInitialTab("automations");setInboxOpen(true)}} onOpenThread={(id)=>{const thread=threads.find(item=>item.id===id);setResultNotification(null);if(thread)openThread(thread)}}/>}
   </SafeAreaView>;
