@@ -13,8 +13,8 @@ export interface MoveResult {
   newName: string;
 }
 
-export function toBoardThreads(threads: ThreadDto[]): BoardThread[] {
-  const projects = buildProjectMap(threads);
+export function toBoardThreads(threads: ThreadDto[], projectNames: Record<string, string> = {}): BoardThread[] {
+  const projects = buildProjectMap(threads, [], projectNames);
   return threads.map((thread) => {
     const effectiveTitle = effectiveThreadTitle(thread.name, thread.preview);
     const parsed = parseThreadTitle(effectiveTitle);

@@ -5,7 +5,7 @@ import { MobileIcon } from "./MobileIcon";
 import { MobileActionSheet } from "./MobileActionSheet";
 
 interface ProjectChoice { key: string; label: string; cwd: string; count: number; }
-export function ProjectHome({ projects, totalCount, loading, refreshing, connected, lastProject, onOpen, onArchive, onCreate, onRefresh, usage }: {
+export function ProjectHome({ projects, totalCount, loading, refreshing, connected, lastProject, onOpen, onRename, onArchive, onCreate, onRefresh, usage }: {
   projects: ProjectChoice[];
   totalCount: number;
   loading: boolean;
@@ -13,6 +13,7 @@ export function ProjectHome({ projects, totalCount, loading, refreshing, connect
   connected: boolean;
   lastProject: string;
   onOpen: (key: string) => void;
+  onRename: (project: ProjectChoice) => void;
   onArchive: (project: ProjectChoice) => void;
   onCreate: () => void;
   onRefresh: () => void;
@@ -41,6 +42,7 @@ export function ProjectHome({ projects, totalCount, loading, refreshing, connect
       ListFooterComponent={!loading?<View style={styles.footer}><Pressable style={styles.overview} onPress={()=>onOpen("__all_projects__")} accessibilityRole="button"><MobileIcon name="grid" color={colors.textMuted}/><View style={styles.projectCopy}><Text style={styles.overviewTitle}>All projects</Text><Text style={styles.projectMeta}>{totalCount} tasks in the complete overview</Text></View><MobileIcon name="chevron-right" color={colors.textMuted} size={18}/></Pressable>{usage.used!==null&&<Text style={styles.usage}>{usage.used}% usage{usage.resetsAt?` · resets ${new Date(usage.resetsAt*1000).toLocaleString()}`:""}</Text>}</View>:null}/>
     {actions&&<MobileActionSheet title={actions.label} onClose={()=>setActions(null)} actions={[
       {label:"Open project",icon:"folder",onPress:()=>onOpen(actions.key)},
+      {label:"Rename project",icon:"edit-2",onPress:()=>onRename(actions)},
       {label:`Archive ${actions.count} conversations`,icon:"archive",destructive:true,onPress:()=>onArchive(actions)},
     ]}/>}
   </View>;

@@ -27,7 +27,7 @@ function segments(key: string): string[] {
   return key.split("/").filter(Boolean);
 }
 
-export function buildProjectMap(threads: ThreadDto[], registeredProjects: string[] = []): Map<string, ProjectInfo> {
+export function buildProjectMap(threads: ThreadDto[], registeredProjects: string[] = [], projectNames: Record<string, string> = {}): Map<string, ProjectInfo> {
   const paths = new Map<string, string>();
   for (const cwd of registeredProjects) paths.set(normalizeProjectPath(cwd), cwd);
   for (const thread of threads) paths.set(normalizeProjectPath(thread.cwd), thread.cwd || "");
@@ -50,7 +50,7 @@ export function buildProjectMap(threads: ThreadDto[], registeredProjects: string
       const base = parts.at(-1) ?? key;
       const parent = parts.at(-2);
       const duplicate = (baseCounts.get(base) ?? 0) > 1;
-      const label = duplicate && parent ? `${parent} / ${base}` : base;
+      const label = projectNames[key]?.trim() || (duplicate && parent ? `${parent} / ${base}` : base);
       return [key, { key, label, cwd: paths.get(key) || key }];
     }),
   );

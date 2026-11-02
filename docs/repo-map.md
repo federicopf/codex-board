@@ -34,7 +34,7 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 - Tastiera chat mobile: `ChatKeyboardFrame.tsx` abilita `height` su Android e `padding` su iOS, misurando la posizione reale del viewport per includere safe area/banner; nessuna altezza tastiera hardcoded o modifica del manifest nativo. Verificare sul telefono oltre ai test di layout.
 - Immagini Codex: `turn_input` in `src-tauri/src/codex/mod.rs` e condiviso da nuova chat e messaggi/coda; il runtime 0.146.1 richiede `{type:"image",url:"..."}`, non `image:{url:...}`. Le sole route HTTP di creazione/invio accettano fino a 32 MiB. Test: `ChatComposer.test.tsx`, `chatDrafts.test.ts`, `mobileChatDrafts.test.ts`, `mobileKeyboard.test.tsx` e test Rust del contratto immagini.
 - Creazione task: `src/NewTaskDialog.tsx` inoltra le immagini selezionate insieme al primo messaggio tramite `create_thread`; il backend costruisce lo stesso input immagine usato dai messaggi successivi.
-- Progetti: le cartelle registrate persistono in `BoardConfig.projects`; `src/lib/projects.ts` unisce queste board ai progetti scoperti dalle conversazioni, così le board vuote non scompaiono.
+- Progetti: le cartelle registrate persistono in `BoardConfig.projects`; `src/lib/projects.ts` unisce queste board ai progetti scoperti dalle conversazioni, così le board vuote non scompaiono. I nomi visibili persistono separatamente in `BoardConfig.projectNames` usando il path normalizzato come chiave; Tauri `rename_project` e `PUT /v1/projects/name` aggiornano solo il nome, senza cambiare cwd, clienti o thread. `save_board_config` preserva la mappa contro scritture stale.
 
 ### Tauri / Rust core
 

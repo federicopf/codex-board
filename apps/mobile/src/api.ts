@@ -51,6 +51,7 @@ export class BoardApi {
   async board() { return this.resolveBoard(await this.request<BoardConfig>("/v1/board")); }
   async updateBoard(config: BoardConfig) { return this.resolveBoard(await this.request<BoardConfig>("/v1/board", { method: "PUT", body: JSON.stringify(config) })); }
   async deleteCustomer(id: string) { return this.resolveBoard(await this.request<BoardConfig>(`/v1/customers/${encodeURIComponent(id)}`, { method: "DELETE" })); }
+  async renameProject(cwd: string, name: string) { return this.resolveBoard(await this.request<BoardConfig>("/v1/projects/name", { method: "PUT", body: JSON.stringify({ cwd, name }) })); }
   async updateTurnSettings(settings: TurnSettings) {
     if (this.sharedTurnSettings === null) await this.board();
     if (this.sharedTurnSettings === false) {

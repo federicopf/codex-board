@@ -66,4 +66,14 @@ describe("OTA compatibility with installed desktop gateways",()=>{
     expect(fetch.mock.calls[1][0]).toBe("http://fixture/v1/threads/thread-a/turn-settings");
     expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ model: "model-a" });
   });
+
+  it("renames a project through the shared gateway without changing its path", async () => {
+    const saved = { ...board(7, { model: "default" }), projectNames: { "c:/work": "Client work" } };
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(reply(saved)));
+    vi.stubGlobal("fetch", fetch);
+    const api = new BoardApi({ baseUrl: "http://fixture", token: "fixture" });
+    expect((await api.renameProject("C:\\work", "Client work")).projectNames?.["c:/work"]).toBe("Client work");
+    expect(fetch.mock.calls[0][0]).toBe("http://fixture/v1/projects/name");
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ cwd: "C:\\work", name: "Client work" });
+  });
 });

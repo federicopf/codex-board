@@ -171,7 +171,7 @@ function projectLabel(cwd: string | null): string {
 
 const ALL_PROJECTS = "__all_projects__";
 
-function projectBoards(threads: ThreadDto[], registeredProjects: string[] = []): { key: string; label: string; cwd: string; count: number }[] {
+function projectBoards(threads: ThreadDto[], registeredProjects: string[] = [], projectNames: Record<string, string> = {}): { key: string; label: string; cwd: string; count: number }[] {
   const sources = [...registeredProjects.map((cwd) => ({ cwd })), ...threads];
   const values = [...new Map(sources.map((source) => {
     const cwd = source.cwd || "Local project";
@@ -182,7 +182,7 @@ function projectBoards(threads: ThreadDto[], registeredProjects: string[] = []):
   return values.map((item) => {
     const parts = item.cwd.split(/[\\/]/).filter(Boolean);
     const parent = parts.at(-2);
-    const label = (duplicateCounts.get(item.base) || 0) > 1 && parent ? `${parent} / ${item.base}` : item.base;
+    const label = projectNames[item.key]?.trim() || ((duplicateCounts.get(item.base) || 0) > 1 && parent ? `${parent} / ${item.base}` : item.base);
     return { key: item.key, cwd: item.cwd, label, count: threads.filter((thread) => projectKey(thread.cwd) === item.key).length };
   }).sort((a, b) => a.label.localeCompare(b.label));
 }
@@ -393,7 +393,7 @@ function MobileChatComposer({ threadId, api, working, preferences, onChanged, on
   </View>;
 }
 
-function Chat({ thread, api, queue, requests, eventRevision, preferences, onClose, onChanged, onQueueChanged, onFork, onRename, drafts }: { thread: ThreadDto; api: BoardApi; queue: QueuedMessage[]; requests: PendingRemoteRequest[]; eventRevision: number; preferences: ThreadTurnSettingsSync; onClose: () => void; onChanged: () => void; onQueueChanged: () => void; onFork: () => void; onRename: () => void; drafts: ChatDraftStore }) {
+function Chat({ thread, projectName, api, queue, requests, eventRevision, preferences, onClose, onChanged, onQueueChanged, onFork, onRename, drafts }: { thread: ThreadDto; projectName: string; api: BoardApi; queue: QueuedMessage[]; requests: PendingRemoteRequest[]; eventRevision: number; preferences: ThreadTurnSettingsSync; onClose: () => void; onChanged: () => void; onQueueChanged: () => void; onFork: () => void; onRename: () => void; drafts: ChatDraftStore }) {
   const [loaded, setLoaded] = useState<JsonObject | null>(() => threadCache.get(thread.id) || null);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -464,7 +464,7 @@ function Chat({ thread, api, queue, requests, eventRevision, preferences, onClos
   return <ChatKeyboardFrame>
     <View style={styles.header}>
       <Pressable accessibilityRole="button" accessibilityLabel="Back to board" style={styles.chatBackButton} onPress={onClose}><MobileIcon name="chevron-left" size={25} color={colors.text}/></Pressable>
-      <View style={styles.headerCopy}><View style={styles.chatTitleRow}><Text style={styles.headerTitle} numberOfLines={1}>{displayTitle(thread.name, thread.preview)}</Text><View style={[styles.chatState, turnId && styles.chatStateLive]}><Text style={[styles.chatStateText, turnId && styles.chatStateTextLive]}>{turnId ? "Working" : "Ready"}</Text></View></View><Text style={styles.headerMeta} numberOfLines={1}>{projectLabel(thread.cwd)}{thread.forkedFromId?" · Forked conversation":""}</Text></View>
+      <View style={styles.headerCopy}><View style={styles.chatTitleRow}><Text style={styles.headerTitle} numberOfLines={1}>{displayTitle(thread.name, thread.preview)}</Text><View style={[styles.chatState, turnId && styles.chatStateLive]}><Text style={[styles.chatStateText, turnId && styles.chatStateTextLive]}>{turnId ? "Working" : "Ready"}</Text></View></View><Text style={styles.headerMeta} numberOfLines={1}>{projectName}{thread.forkedFromId?" · Forked conversation":""}</Text></View>
       <View style={styles.topbarActions}>
         <Pressable accessibilityRole="button" accessibilityLabel="Conversation actions" style={styles.chatBackButton} onPress={()=>setActionsOpen(true)}><MobileIcon name="more-horizontal" size={23} color={colors.text}/></Pressable>
       </View>
@@ -543,8 +543,8 @@ function MoveDialog({ thread, categories, api, onClose, onMoved }: { thread: Thr
   return <Modal transparent animationType="fade" onRequestClose={() => { if (!busy) onClose(); }}><View style={styles.modalBackdrop}><Pressable disabled={busy} style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close move task dialog"/><View style={styles.moveDialog}><View style={styles.sheetHandle} /><Text style={styles.moveEyebrow}>MOVE TASK</Text><Text style={styles.moveTitle} numberOfLines={2}>{displayTitle(thread.name, thread.preview)}</Text><Text style={styles.moveSubtitle}>Choose the next board stage.</Text><ScrollView style={styles.moveOptions}>{categories.map((category) => { const selected = category === current; return <Pressable key={category} disabled={busy || selected} style={[styles.moveOption, selected && styles.moveOptionSelected]} onPress={() => void move(category)}><View style={[styles.categoryDot, selected && styles.categoryDotSelected]} /><Text style={[styles.moveOptionText, selected && styles.moveOptionTextSelected]}>{category}</Text>{selected ? <Text style={styles.currentLabel}>CURRENT</Text> : <MobileIcon name="chevron-right" size={18} color={colors.textMuted}/>}</Pressable>; })}</ScrollView><Pressable style={styles.moveCancel} onPress={onClose}><Text style={styles.moveCancelText}>Cancel</Text></Pressable></View></View></Modal>;
 }
 
-function NewTaskModal({ api, threads, projects, categories, defaultProjectKey, onClose, onCreated }: { api: BoardApi; threads: ThreadDto[]; projects: string[]; categories: string[]; defaultProjectKey?: string; onClose: () => void; onCreated: (thread: ThreadDto) => void }) {
-  const choices = projectBoards(threads, projects).filter((project) => project.key !== "__local__");
+function NewTaskModal({ api, threads, projects, projectNames, categories, defaultProjectKey, onClose, onCreated }: { api: BoardApi; threads: ThreadDto[]; projects: string[]; projectNames: Record<string, string>; categories: string[]; defaultProjectKey?: string; onClose: () => void; onCreated: (thread: ThreadDto) => void }) {
+  const choices = projectBoards(threads, projects, projectNames).filter((project) => project.key !== "__local__");
   const [cwd, setCwd] = useState(choices.find((project) => project.key === defaultProjectKey)?.cwd || choices[0]?.cwd || ""); const [category, setCategory] = useState(categories[0] || "Uncategorized"); const [title, setTitle] = useState(""); const [prompt, setPrompt] = useState(""); const [busy, setBusy] = useState(false);
   const [attachments, setAttachments] = useState<Array<{ id: string; name: string; uri: string; dataUrl: string }>>([]);
   const [uploading, setUploading] = useState(false);
@@ -574,7 +574,24 @@ function NewProjectModal({ config, api, onClose, onCreated }: { config: BoardCon
   return <Modal animationType="slide" onRequestClose={onClose}><SafeAreaView style={styles.page}><View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Cancel new project" style={styles.chatBackButton} onPress={onClose}><MobileIcon name="x" size={24} color={colors.text}/></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>Create project</Text><Text style={styles.headerMeta}>Register a working folder on the connected PC</Text></View></View><View style={styles.newTaskMobile}><Text style={styles.fieldLabel}>WORKING FOLDER</Text><TextInput autoFocus style={styles.smallInput} value={cwd} onChangeText={setCwd} placeholder="C:\\Users\\you\\Projects\\my-project" autoCapitalize="none" autoCorrect={false}/>{duplicate&&<Text style={styles.automationError}>This project already exists.</Text>}<Pressable disabled={busy||!cwd.trim()||duplicate} style={[styles.primaryButton,(busy||!cwd.trim()||duplicate)&&styles.disabled]} onPress={()=>void create()}>{busy?<ActivityIndicator color="white"/>:<Text style={styles.primaryButtonText}>Create project</Text>}</Pressable></View></SafeAreaView></Modal>;
 }
 
-function NewCustomerModal({ config, api, projectCwd, onClose, onCreated }: { config: BoardConfig; api: BoardApi; projectCwd: string; onClose: () => void; onCreated: (customer: ProjectCustomer, config: BoardConfig) => void }) {
+function RenameProjectModal({ project, api, onClose, onSaved }: { project: { cwd: string; label: string }; api: BoardApi; onClose: () => void; onSaved: (config: BoardConfig) => void }) {
+  const [name, setName] = useState(project.label);
+  const [busy, setBusy] = useState(false);
+  async function save() {
+    const next = name.trim();
+    if (!next || next.length > 120 || busy) return;
+    setBusy(true);
+    try { onSaved(await api.renameProject(project.cwd, next)); }
+    catch (error) { Alert.alert("Could not rename project", error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  }
+  return <Modal animationType="slide" onRequestClose={onClose}><SafeAreaView style={styles.page}>
+    <View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Cancel rename project" style={styles.chatBackButton} onPress={onClose}><MobileIcon name="x" size={24} color={colors.text}/></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>Rename project</Text><Text style={styles.headerMeta}>The folder and conversations stay unchanged</Text></View></View>
+    <View style={styles.newTaskMobile}><Text style={styles.fieldLabel}>PROJECT NAME</Text><TextInput autoFocus maxLength={120} style={styles.smallInput} value={name} onChangeText={setName} placeholder="Project name" returnKeyType="done" onSubmitEditing={() => void save()}/><Text style={styles.automationDescription}>{project.cwd}</Text><Pressable disabled={busy || !name.trim()} style={[styles.primaryButton,(busy || !name.trim()) && styles.disabled]} onPress={() => void save()}>{busy?<ActivityIndicator color="white"/>:<Text style={styles.primaryButtonText}>Save name</Text>}</Pressable></View>
+  </SafeAreaView></Modal>;
+}
+
+function NewCustomerModal({ config, api, projectCwd, projectName, onClose, onCreated }: { config: BoardConfig; api: BoardApi; projectCwd: string; projectName: string; onClose: () => void; onCreated: (customer: ProjectCustomer, config: BoardConfig) => void }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const duplicate = (config.customers || []).some((customer) => projectKey(customer.projectCwd) === projectKey(projectCwd) && customer.name.trim().toLocaleLowerCase() === name.trim().toLocaleLowerCase());
@@ -589,7 +606,7 @@ function NewCustomerModal({ config, api, projectCwd, onClose, onCreated }: { con
     } catch (error) { Alert.alert("Could not create customer", error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
-  return <Modal animationType="slide" onRequestClose={onClose}><SafeAreaView style={styles.page}><View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Cancel new customer" style={styles.chatBackButton} onPress={onClose}><MobileIcon name="x" size={24} color={colors.text}/></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>Add customer</Text><Text style={styles.headerMeta}>{projectLabel(projectCwd)}</Text></View></View><View style={styles.newTaskMobile}><Text style={styles.fieldLabel}>CUSTOMER NAME</Text><TextInput autoFocus style={styles.smallInput} value={name} onChangeText={setName} placeholder="Customer name" returnKeyType="done" onSubmitEditing={()=>void create()}/>{duplicate&&<Text style={styles.automationError}>A customer with this name already exists in this project.</Text>}<Pressable disabled={busy||!name.trim()||duplicate} style={[styles.primaryButton,(busy||!name.trim()||duplicate)&&styles.disabled]} onPress={()=>void create()}>{busy?<ActivityIndicator color="white"/>:<Text style={styles.primaryButtonText}>Create customer</Text>}</Pressable></View></SafeAreaView></Modal>;
+  return <Modal animationType="slide" onRequestClose={onClose}><SafeAreaView style={styles.page}><View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Cancel new customer" style={styles.chatBackButton} onPress={onClose}><MobileIcon name="x" size={24} color={colors.text}/></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>Add customer</Text><Text style={styles.headerMeta}>{projectName}</Text></View></View><View style={styles.newTaskMobile}><Text style={styles.fieldLabel}>CUSTOMER NAME</Text><TextInput autoFocus style={styles.smallInput} value={name} onChangeText={setName} placeholder="Customer name" returnKeyType="done" onSubmitEditing={()=>void create()}/>{duplicate&&<Text style={styles.automationError}>A customer with this name already exists in this project.</Text>}<Pressable disabled={busy||!name.trim()||duplicate} style={[styles.primaryButton,(busy||!name.trim()||duplicate)&&styles.disabled]} onPress={()=>void create()}>{busy?<ActivityIndicator color="white"/>:<Text style={styles.primaryButtonText}>Create customer</Text>}</Pressable></View></SafeAreaView></Modal>;
 }
 
 function RenameThreadModal({ api, thread, onClose, onSaved }: { api: BoardApi; thread: ThreadDto; onClose: () => void; onSaved: (thread: ThreadDto) => void }) {
@@ -765,6 +782,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   const [projectOpen, setProjectOpen] = useState(false);
   const [creatingTask, setCreatingTask] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
+  const [renamingProject, setRenamingProject] = useState<{ cwd: string; label: string } | null>(null);
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [assigningCustomerThread, setAssigningCustomerThread] = useState<ThreadDto | null>(null);
@@ -878,7 +896,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   }, [projectOpen, selected]);
   const discovered = [...new Set(threads.map((thread) => categoryFromTitle(thread.name)))];
   const categories = [...(config?.categories || []), ...discovered.filter((value) => !config?.categories.includes(value))];
-  const projects = useMemo(() => projectBoards(threads, config?.projects || []), [config?.projects, threads]);
+  const projects = useMemo(() => projectBoards(threads, config?.projects || [], config?.projectNames || {}), [config?.projects, config?.projectNames, threads]);
   const currentProjectCustomers = selectedProject === ALL_PROJECTS ? [] : (config?.customers || []).filter((customer) => projectKey(customer.projectCwd) === selectedProject);
   const currentCustomer = currentProjectCustomers.find((customer) => customer.id === selectedCustomerId) || null;
   const projectBaseThreads = selectedProject === ALL_PROJECTS ? threads : threads.filter((thread) => projectKey(thread.cwd) === selectedProject);
@@ -893,7 +911,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   const visibleThreads = projectThreads.filter((thread) => categoryFromTitle(thread.name) === visibleCategory);
   const searchedThreads = (search.trim() ? projectThreads : visibleThreads).filter((thread) => {
     const query = search.trim().toLocaleLowerCase();
-    return !query || [displayTitle(thread.name, thread.preview), thread.preview || "", projectLabel(thread.cwd)].some((value) => value.toLocaleLowerCase().includes(query));
+    return !query || [displayTitle(thread.name, thread.preview), thread.preview || "", projects.find((item) => item.key === projectKey(thread.cwd))?.label || projectLabel(thread.cwd)].some((value) => value.toLocaleLowerCase().includes(query));
   }).sort((left,right)=>(right.updatedAt||0)-(left.updatedAt||0));
   const workingCount = projectThreads.filter(isWorking).length;
   const selectedProjectLabel = selectedProject === ALL_PROJECTS ? "All projects" : projects.find((project) => project.key === selectedProject)?.label || "Project";
@@ -974,7 +992,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
 
   return <SafeAreaView style={styles.page}>
     {connectionError&&<Pressable style={styles.connectionBanner} onPress={()=>void refresh()} accessibilityRole="button" accessibilityLabel="Retry connection"><Text style={styles.connectionBannerText}>PC unavailable · Tap to retry</Text></Pressable>}
-    {selected ? <Chat drafts={drafts} key={selected.id} thread={selected} api={api} queue={queues[selected.id] || []} requests={requests.filter((request) => requestThreadId(request) === selected.id)} eventRevision={eventRevision} preferences={preferences} onClose={() => setSelected(null)} onChanged={refresh} onQueueChanged={markQueueChanged} onFork={() => setForking(selected)} onRename={()=>setRenaming(selected)} /> : <>
+    {selected ? <Chat drafts={drafts} key={selected.id} thread={selected} projectName={projects.find((item)=>item.key===projectKey(selected.cwd))?.label||projectLabel(selected.cwd)} api={api} queue={queues[selected.id] || []} requests={requests.filter((request) => requestThreadId(request) === selected.id)} eventRevision={eventRevision} preferences={preferences} onClose={() => setSelected(null)} onChanged={refresh} onQueueChanged={markQueueChanged} onFork={() => setForking(selected)} onRename={()=>setRenaming(selected)} /> : <>
     {!projectOpen ? <ProjectHome
       connected={connected}
       loading={loading}
@@ -984,6 +1002,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
       lastProject={selectedProject}
       usage={usageSnapshot(rateLimits)}
       onOpen={selectProjectBoard}
+      onRename={(project)=>setRenamingProject(project)}
       onArchive={archiveProject}
       onCreate={()=>setCreatingProject(true)}
       onRefresh={pullToRefresh}
@@ -1005,7 +1024,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
       search={search}
       isWorking={isWorking}
       titleFor={(thread)=>displayTitle(thread.name,thread.preview)}
-      projectFor={(thread)=>projectLabel(thread.cwd)}
+      projectFor={(thread)=>projects.find((item)=>item.key===projectKey(thread.cwd))?.label||projectLabel(thread.cwd)}
       onSearch={setSearch}
       onBackToProjects={()=>setProjectOpen(false)}
       onCategory={setActiveCategory}
@@ -1028,8 +1047,9 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     {managing && config && <CategoryManager config={config} threads={threads} api={api} onClose={() => setManaging(false)} onSaved={refresh} onOpenTour={onOpenTour} onDisconnect={() => void onDisconnect()} />}
     {automating && <AutomationManager api={api} automations={automations} threads={threads} categories={categories} onClose={() => setAutomating(false)} onChanged={refresh} />}
     {creatingProject&&config&&<NewProjectModal config={config} api={api} onClose={()=>setCreatingProject(false)} onCreated={(cwd)=>{setCreatingProject(false);selectProjectBoard(projectKey(cwd));void refresh()}}/>}
-    {creatingTask && <NewTaskModal api={api} threads={threads} projects={config?.projects || []} categories={categories} defaultProjectKey={selectedProject === ALL_PROJECTS ? undefined : selectedProject} onClose={() => setCreatingTask(false)} onCreated={(thread) => { setCreatingTask(false); const customerId = currentCustomer && projectKey(currentCustomer.projectCwd) === projectKey(thread.cwd) ? currentCustomer.id : null; void retainCustomerThread(thread, customerId, true); }} />}
-    {creatingCustomer&&config&&selectedProject!==ALL_PROJECTS&&<NewCustomerModal config={config} api={api} projectCwd={projects.find(project=>project.key===selectedProject)?.cwd||selectedProject} onClose={()=>setCreatingCustomer(false)} onCreated={(customer,saved)=>{setConfig(saved);setCreatingCustomer(false);setSelectedCustomerId(customer.id);setActiveCategory(null)}}/>}
+    {renamingProject&&<RenameProjectModal key={projectKey(renamingProject.cwd)} project={renamingProject} api={api} onClose={()=>setRenamingProject(null)} onSaved={(saved)=>{setConfig(saved);setRenamingProject(null)}}/>}
+    {creatingTask && <NewTaskModal api={api} threads={threads} projects={config?.projects || []} projectNames={config?.projectNames || {}} categories={categories} defaultProjectKey={selectedProject === ALL_PROJECTS ? undefined : selectedProject} onClose={() => setCreatingTask(false)} onCreated={(thread) => { setCreatingTask(false); const customerId = currentCustomer && projectKey(currentCustomer.projectCwd) === projectKey(thread.cwd) ? currentCustomer.id : null; void retainCustomerThread(thread, customerId, true); }} />}
+    {creatingCustomer&&config&&selectedProject!==ALL_PROJECTS&&<NewCustomerModal config={config} api={api} projectCwd={projects.find(project=>project.key===selectedProject)?.cwd||selectedProject} projectName={selectedProjectLabel} onClose={()=>setCreatingCustomer(false)} onCreated={(customer,saved)=>{setConfig(saved);setCreatingCustomer(false);setSelectedCustomerId(customer.id);setActiveCategory(null)}}/>}
     {assigningCustomerThread&&<MobileActionSheet title="Assign conversation" onClose={()=>setAssigningCustomerThread(null)} actions={[{label:"Project threads",icon:"folder",onPress:()=>{const thread=assigningCustomerThread;setAssigningCustomerThread(null);void assignThreadToCustomer(thread,null)}},...(config?.customers||[]).filter(customer=>projectKey(customer.projectCwd)===projectKey(assigningCustomerThread.cwd)).map(customer=>({label:customer.name,icon:"users" as const,onPress:()=>{const thread=assigningCustomerThread;setAssigningCustomerThread(null);void assignThreadToCustomer(thread,customer.id)}}))]}/>}
     {inboxOpen && <InboxModal api={api} items={notifications} initialTab={inboxInitialTab} onClose={()=>setInboxOpen(false)} onChanged={refresh} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item)}} onOpen={(id)=>{const thread=threads.find(item=>item.id===id);if(thread){setInboxOpen(false);openThread(thread)}}}/>}
     {moving && <MoveDialog thread={moving} categories={categories} api={api} onClose={() => setMoving(null)} onMoved={refresh} />}

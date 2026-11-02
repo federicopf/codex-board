@@ -12,7 +12,7 @@ use codex::{
     TurnCoordinator, TurnSettings,
 };
 use notifications::{BoardNotification, NotificationStore};
-use remote::{BoardConfig, GatewayInfo, RemoteGateway, TailscaleInfo, TurnPreferencesPatch};
+use remote::{BoardConfig, GatewayInfo, ProjectNameInput, RemoteGateway, TailscaleInfo, TurnPreferencesPatch};
 use serde_json::Value;
 use std::sync::Arc;
 use tauri::Manager;
@@ -238,6 +238,20 @@ async fn delete_customer(
 }
 
 #[tauri::command]
+async fn rename_project(
+    gateway: tauri::State<'_, RemoteGateway>,
+    client: tauri::State<'_, Arc<CodexClient>>,
+    input: ProjectNameInput,
+) -> Result<BoardConfig, String> {
+    let saved = gateway.rename_project(input)?;
+    client.emit_local_event(
+        "board/config/updated",
+        serde_json::to_value(&saved).map_err(|error| error.to_string())?,
+    ).await;
+    Ok(saved)
+}
+
+#[tauri::command]
 async fn set_turn_settings(
     gateway: tauri::State<'_, RemoteGateway>,
     client: tauri::State<'_, Arc<CodexClient>>,
@@ -396,6 +410,7 @@ pub fn run() {
             get_board_config,
             set_board_config,
             delete_customer,
+            rename_project,
             set_turn_settings,
             set_thread_turn_settings,
             tailscale_status,

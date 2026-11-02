@@ -542,11 +542,15 @@ body { min-width: 980px; }
 .sidebar-project-row { position: relative; display: flex; flex-wrap: wrap; align-items: stretch; }
 .sidebar-project-drop { position: absolute; z-index: 0; inset: 0; border: 1px solid transparent; border-radius: 11px; pointer-events: none; }
 .sidebar-project-drop.is-over { border-color: #999bff; background: rgba(133,136,255,.18); box-shadow: 0 0 0 2px rgba(133,136,255,.1); }
-.sidebar-project-row .sidebar-project { position: relative; z-index: 1; flex: 1; min-width: 0; padding-right: 72px; }
+.sidebar-project-row .sidebar-project { position: relative; z-index: 1; flex: 1; min-width: 0; padding-right: 102px; }
 .sidebar-project-toggle { position: absolute; z-index: 2; top: 13px; right: 37px; width: 27px; height: 27px; display: grid; place-items: center; border: 0; border-radius: 7px; color: var(--sidebar-muted); background: transparent; transition: color .15s, background .15s; }
 .sidebar-project-toggle:hover { color: white; background: rgba(255,255,255,.1); }
 .sidebar-project-toggle svg { width: 13px; height: 13px; transition: transform .15s; }
 .sidebar-project-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.sidebar-project-rename { position: absolute; z-index: 2; top: 13px; right: 66px; width: 27px; height: 27px; display: grid; place-items: center; border: 0; border-radius: 7px; color: var(--sidebar-muted); background: transparent; opacity: 0; transition: opacity .15s, color .15s, background .15s; }
+.sidebar-project-row:hover .sidebar-project-rename, .sidebar-project-row:focus-within .sidebar-project-rename { opacity: 1; }
+.sidebar-project-rename:hover { color: white; background: rgba(255,255,255,.1); }
+.sidebar-project-rename svg { width: 14px; height: 14px; }
 .sidebar-customer-row { flex: 0 0 calc(100% - 18px); min-width: 0; display: flex; align-items: center; gap: 2px; margin: 2px 0 2px 18px; }
 .sidebar-customer { flex: 1 1 auto; width: auto; min-width: 0; min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 5px 9px; border: 1px solid transparent; border-radius: 8px; color: var(--sidebar-muted); background: transparent; text-align: left; font-size: 10px; transition: color .15s, background .15s, border-color .15s; }
 .sidebar-customer:hover, .sidebar-customer.active { color: white; background: rgba(255,255,255,.08); }

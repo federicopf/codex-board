@@ -44,4 +44,11 @@ describe("projects", () => {
     const map = buildProjectMap([], ["C:\\work\\empty"]);
     expect(map.get("c:/work/empty")).toEqual({ key: "c:/work/empty", label: "empty", cwd: "C:\\work\\empty" });
   });
+
+  it("uses a custom display name without changing the project identity or path", () => {
+    const names = { "c:/work/amati": "Amati Studio" };
+    const map = buildProjectMap([thread("a", "C:\\Work\\Amati")], [], names);
+    expect(map.get("c:/work/amati")).toEqual({ key: "c:/work/amati", cwd: "C:\\Work\\Amati", label: "Amati Studio" });
+    expect(toBoardThreads([thread("a", "C:\\Work\\Amati")], names)[0]).toMatchObject({ projectKey: "c:/work/amati", projectLabel: "Amati Studio", cwd: "C:\\Work\\Amati" });
+  });
 });

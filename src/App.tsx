@@ -12,7 +12,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { asCodexError, clearNotifications, createThread, archiveThread, deleteCustomer as deleteCustomerApi, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, getRateLimits, interruptTurn, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameThread, sendMessage, setBoardConfig } from "./api";
+import { asCodexError, clearNotifications, createThread, archiveThread, deleteCustomer as deleteCustomerApi, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, getRateLimits, interruptTurn, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameProject as renameProjectApi, renameThread, sendMessage, setBoardConfig } from "./api";
 import type { BoardNotification, ProjectCustomer } from "@codex-board/protocol";
 import { turnPreferences } from "./lib/turnSettings";
 import { setTurnSettings } from "./api";
@@ -26,6 +26,7 @@ import { NewProjectDialog } from "./NewProjectDialog";
 import { NewCustomerDialog } from "./NewCustomerDialog";
 import { ForkThreadDialog } from "./ForkThreadDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
+import { RenameProjectDialog } from "./RenameProjectDialog";
 import { loadThread } from "./api";
 import { threadNameWithTitle } from "@codex-board/protocol";
 import { ProductTour } from "./ProductTour";
@@ -97,6 +98,8 @@ function App() {
   const [newTaskDialog, setNewTaskDialog] = useState(false);
   const [newProjectDialog, setNewProjectDialog] = useState(false);
   const [projectPaths, setProjectPaths] = useState<string[]>([]);
+  const [projectNames, setProjectNames] = useState<Record<string, string>>({});
+  const [renamingProjectKey, setRenamingProjectKey] = useState<string | null>(null);
   const [customers, setCustomers] = useState<ProjectCustomer[]>([]);
   const [customerToDelete, setCustomerToDelete] = useState<ProjectCustomer | null>(null);
   const [customerDeleteBusy, setCustomerDeleteBusy] = useState(false);
@@ -127,6 +130,7 @@ function App() {
   const toastSequence = useRef(0);
   const approvalModeRef = useRef(approvalMode);
   const projectPathsRef = useRef(projectPaths);
+  const projectNamesRef = useRef(projectNames);
   const customersRef = useRef(customers);
   const boardConfigReady = useRef(false);
   const notificationIdsRef = useRef<Set<string> | null>(null);
@@ -145,7 +149,7 @@ function App() {
     try {
       const [result, serverQueues] = await Promise.all([listThreads(), getMessageQueues()]);
       if (request !== refreshRequest.current) return;
-      const fetchedThreads = toBoardThreads(result);
+      const fetchedThreads = toBoardThreads(result, projectNamesRef.current);
       const fetchedIds = new Set(fetchedThreads.map((thread) => thread.id));
       for (const [id, thread] of pendingThreadIdsRef.current) {
         if (fetchedIds.has(id)) pendingThreadIdsRef.current.delete(id);
@@ -213,9 +217,11 @@ function App() {
       if (cancelled) return;
       setCategoryOrder(categories);
       projectPathsRef.current = projects;
+      projectNamesRef.current = config.projectNames || {};
       customersRef.current = savedCustomers;
       setCustomers(savedCustomers);
       setProjectPaths(projects);
+      setProjectNames(projectNamesRef.current);
       setApprovalMode(mode);
       boardConfigReady.current = true;
     }).catch((cause) => { if (!cancelled) { turnPreferences.unavailable(cause); setError(asCodexError(cause)); } });
@@ -328,6 +334,10 @@ function App() {
             };
             turnPreferences.receive({ revision: typeof config.revision === "number" ? config.revision : 0, turnSettings, threadTurnSettings: record(config.threadTurnSettings) as Record<string, TurnSettings> });
             projectPathsRef.current = nextProjects;
+            const nextProjectNames = Object.fromEntries(Object.entries(record(config.projectNames)).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+            projectNamesRef.current = nextProjectNames;
+            setProjectNames(nextProjectNames);
+            setThreads((current) => toBoardThreads(current, nextProjectNames));
             setProjectPaths(nextProjects);
             setCategoryOrder(nextCategories);
             setApprovalMode(nextMode);
@@ -375,8 +385,8 @@ function App() {
       cwd,
       updatedAt,
     }));
-    return projectOptions(buildProjectMap(raw, projectPaths));
-  }, [projectPaths, threads]);
+    return projectOptions(buildProjectMap(raw, projectPaths, projectNames));
+  }, [projectPaths, projectNames, threads]);
 
   useEffect(() => {
     const discovered = threads.flatMap((thread) => thread.cwd ? [thread.cwd] : []);
@@ -410,6 +420,16 @@ function App() {
     persistBoardConfig(categoryOrder, approvalModeRef.current, next);
     setNewProjectDialog(false);
     selectProjectBoard(buildProjectMap([], [cwd]).keys().next().value || ALL_PROJECTS);
+  }
+
+  async function renameProject(projectKey: string, name: string) {
+    const cwd = projects.find((item) => item.key === projectKey)?.cwd;
+    if (!cwd) throw new Error("Project not found.");
+    const saved = await renameProjectApi(cwd, name);
+    const names = saved.projectNames || {};
+    projectNamesRef.current = names;
+    setProjectNames(names);
+    setThreads((current) => toBoardThreads(current, names));
   }
 
   function selectCustomerBoard(projectKey: string, nextCustomerId: string | null) {
@@ -500,10 +520,10 @@ function App() {
   const renamingThread = threads.find((thread) => thread.id === renamingThreadId) ?? null;
 
   function retainCreatedThread(created: ThreadDto) {
-    const retained = toBoardThreads([...threadsRef.current.filter((thread) => thread.id !== created.id), created]).find((thread) => thread.id === created.id);
+    const retained = toBoardThreads([...threadsRef.current.filter((thread) => thread.id !== created.id), created], projectNamesRef.current).find((thread) => thread.id === created.id);
     if (!retained) return;
     pendingThreadIdsRef.current.set(created.id, retained);
-    setThreads((current) => toBoardThreads([...current.filter((thread) => thread.id !== created.id), created]));
+    setThreads((current) => toBoardThreads([...current.filter((thread) => thread.id !== created.id), created], projectNamesRef.current));
     setChatThreadId(created.id);
   }
   function archiveConversation(threadId: string) {
@@ -540,7 +560,7 @@ function App() {
     if (!renamingThread) return;
     const latest = await loadThread(renamingThread.id);
     const confirmed = await renameThread(renamingThread.id, threadNameWithTitle(latest.name || null, latest.preview || null, title));
-    setThreads((current) => toBoardThreads(current.map((thread) => thread.id === confirmed.id ? confirmed : thread)));
+    setThreads((current) => toBoardThreads(current.map((thread) => thread.id === confirmed.id ? confirmed : thread), projectNamesRef.current));
   }
 
   async function createFork(category: string, title: string, lastTurnId: string | null) {
@@ -802,6 +822,7 @@ function App() {
           onDelete={archiveConversation}
           onStop={(threadId) => void stopThread(threadId)}
           onDeleteProject={(projectKey) => archiveCurrentProject(projectKey)}
+          onRenameProject={setRenamingProjectKey}
           onDeleteCustomer={(customerId) => setCustomerToDelete(customers.find((customer) => customer.id === customerId) || null)}
           onRename={(category) => setCategoryDialog({ mode: "rename", category })}
         />
@@ -845,6 +866,7 @@ function App() {
       {automationsDialog && <AutomationsDialog revision={automationRevision} threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}
       {newTaskDialog && <NewTaskDialog threads={threads} projects={projects.filter((item) => item.cwd)} categories={categories} defaultProjectKey={project === ALL_PROJECTS ? undefined : project} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt, imageUrls) => { const created = await createThread(cwd, category, title, prompt, imageUrls); if (customerId) assignThreadToCustomer(created.id, customerId); retainCreatedThread(created); setNewTaskDialog(false); void refresh(true); }} />}
       {newProjectDialog && <NewProjectDialog existingPaths={projectPaths} onClose={() => setNewProjectDialog(false)} onCreate={createProject} />}
+      {renamingProjectKey && projects.find((item) => item.key === renamingProjectKey) && <RenameProjectDialog key={renamingProjectKey} project={projects.find((item) => item.key === renamingProjectKey)!} onClose={() => setRenamingProjectKey(null)} onRename={(name) => renameProject(renamingProjectKey, name)} />}
       {newCustomerProjectKey && <NewCustomerDialog projectLabel={projects.find((item) => item.key === newCustomerProjectKey)?.label || "Project"} existingNames={customers.filter((customer) => customer.projectCwd.replaceAll("\\", "/").toLocaleLowerCase() === (projects.find((item) => item.key === newCustomerProjectKey)?.cwd || "").replaceAll("\\", "/").toLocaleLowerCase()).map((customer) => customer.name)} onClose={() => setNewCustomerProjectKey(null)} onCreate={createCustomer} />}
       {productTour && <ProductTour onClose={() => { localStorage.setItem("codex-board.tour.v1", "done"); setProductTour(false); }} />}
       {inboxOpen && <InboxDialog items={notifications} initialTab={inboxInitialTab} onClose={()=>setInboxOpen(false)} onReadAll={()=>void markNotificationsRead().then(()=>listNotifications().then(setNotifications))} onClear={()=>void clearNotifications().then(()=>setNotifications([]))} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item);if(!item.read)void markNotificationsRead(item.id);}} onOpen={(threadId)=>{setInboxOpen(false);setChatThreadId(threadId);const item=notifications.find(entry=>entry.threadId===threadId&&!entry.read);if(item)void markNotificationsRead(item.id);}} />}

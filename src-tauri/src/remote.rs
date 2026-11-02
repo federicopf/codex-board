@@ -40,6 +40,8 @@ pub struct BoardConfig {
     #[serde(default)]
     pub projects: Vec<String>,
     #[serde(default)]
+    pub project_names: HashMap<String, String>,
+    #[serde(default)]
     pub customers: Vec<ProjectCustomer>,
     #[serde(default = "default_approval_mode")]
     pub approval_mode: String,
@@ -59,6 +61,13 @@ pub struct ProjectCustomer {
     pub name: String,
     #[serde(default)]
     pub thread_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectNameInput {
+    pub cwd: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +111,7 @@ impl Default for BoardConfig {
         Self {
             categories: Vec::new(),
             projects: Vec::new(),
+            project_names: HashMap::new(),
             customers: Vec::new(),
             approval_mode: default_approval_mode(),
             turn_settings: TurnPreferences::default(),
@@ -273,6 +283,10 @@ impl RemoteGateway {
             .ok_or_else(|| "Customer not found".into())
     }
 
+    pub fn rename_project(&self, input: ProjectNameInput) -> Result<BoardConfig, String> {
+        save_project_name(&self.config, &self.config_path, input)
+    }
+
     pub fn set_turn_settings(&self, patch: TurnPreferencesPatch) -> Result<BoardConfig, String> {
         save_turn_settings(&self.config, &self.config_path, patch)
     }
@@ -338,6 +352,7 @@ impl RemoteGateway {
                 .route("/v1/requests", get(pending_requests))
                 .route("/v1/board", get(get_board).put(put_board))
                 .route("/v1/customers/{id}", delete(delete_customer))
+                .route("/v1/projects/name", put(put_project_name))
                 .route("/v1/turn-settings", put(put_turn_settings))
                 .route("/v1/threads/{id}/turn-settings", put(put_thread_turn_settings))
                 .route(
@@ -527,6 +542,15 @@ fn unique_projects(projects: Vec<String>) -> Result<Vec<String>, String> {
     Ok(result)
 }
 
+fn project_identity(cwd: &str) -> String {
+    let path = cwd.trim().replace('\\', "/");
+    let mut key = path.trim_end_matches('/').to_owned();
+    if key.is_empty() { key = "/".into(); }
+    if key.len() == 2 && key.as_bytes().get(1) == Some(&b':') { key.push('/'); }
+    if key.as_bytes().get(1) == Some(&b':') { key = key.to_lowercase(); }
+    key
+}
+
 fn unique_customers(customers: Vec<ProjectCustomer>) -> Result<Vec<ProjectCustomer>, String> {
     let mut ids = std::collections::HashSet::new();
     let mut assigned_threads = std::collections::HashSet::new();
@@ -567,6 +591,7 @@ fn save_board_config(
     // Board/category writes must never replace a newer model preference.
     config.turn_settings = current.turn_settings.clone();
     config.thread_turn_settings = current.thread_turn_settings.clone();
+    config.project_names = current.project_names.clone();
     config.revision = current.revision.saturating_add(1);
     persist_config(path, &config)?;
     *current = config.clone();
@@ -588,6 +613,26 @@ fn delete_customer_config(
     persist_config(path, &next)?;
     *current = next.clone();
     Ok(Some(next))
+}
+
+fn save_project_name(
+    state: &Arc<RwLock<BoardConfig>>,
+    path: &Path,
+    input: ProjectNameInput,
+) -> Result<BoardConfig, String> {
+    let name = input.name.trim();
+    if name.is_empty() || name.chars().count() > 120 { return Err("Project name must contain 1–120 characters".into()); }
+    let key = project_identity(&input.cwd);
+    let mut current = state.write().map_err(|error| error.to_string())?;
+    if !current.projects.iter().any(|cwd| project_identity(cwd) == key) {
+        return Err("Project not found".into());
+    }
+    let mut next = current.clone();
+    next.project_names.insert(key, name.to_owned());
+    next.revision = current.revision.saturating_add(1);
+    persist_config(path, &next)?;
+    *current = next.clone();
+    Ok(next)
 }
 
 fn save_turn_settings(
@@ -1073,6 +1118,22 @@ async fn delete_customer(
     Ok(Json(config))
 }
 
+async fn put_project_name(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(input): Json<ProjectNameInput>,
+) -> Result<Json<BoardConfig>, ApiError> {
+    authorized(&headers, &state)?;
+    let config = save_project_name(&state.config, &state.config_path, input)
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error))?;
+    state.client.emit_local_event(
+        "board/config/updated",
+        serde_json::to_value(&config)
+            .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
+    ).await;
+    Ok(Json(config))
+}
+
 async fn put_turn_settings(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -1479,6 +1540,26 @@ mod tests {
     }
 
     #[test]
+    fn project_name_changes_only_the_label_and_survives_stale_board_writes() {
+        let directory = std::env::temp_dir().join(format!("codex-board-project-name-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        let gateway = RemoteGateway::prepare(&directory).unwrap();
+        let mut original = gateway.board_config();
+        original.projects = vec!["C:\\Work\\Amati".into()];
+        gateway.set_board_config(original).unwrap();
+        let stale = gateway.board_config();
+        let saved = gateway.rename_project(ProjectNameInput { cwd: "c:/work/amati/".into(), name: " Amati Studio ".into() }).unwrap();
+        assert_eq!(saved.project_names["c:/work/amati"], "Amati Studio");
+        assert_eq!(saved.projects, vec!["C:\\Work\\Amati"]);
+        let saved = gateway.set_board_config(stale).unwrap();
+        assert_eq!(saved.project_names["c:/work/amati"], "Amati Studio");
+        assert!(gateway.rename_project(ProjectNameInput { cwd: "C:\\Work\\Other".into(), name: "Wrong".into() }).is_err());
+        assert!(gateway.rename_project(ProjectNameInput { cwd: "C:\\Work\\Amati".into(), name: "  ".into() }).is_err());
+        let disk: BoardConfig = crate::persistence::load_json_or_default(&directory.join("board-config.json"));
+        assert_eq!(disk.project_names["c:/work/amati"], "Amati Studio");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn automatic_approval_never_answers_user_questions() {
         assert!(automatic_approval("item/tool/requestUserInput", &json!({})).is_none());
         assert_eq!(
@@ -1506,6 +1587,7 @@ mod tests {
                 gateway.set_board_config(BoardConfig {
                     categories: vec![category.into()],
                     projects: vec!["C:\\work\\demo".into()],
+                    project_names: HashMap::new(),
                     customers: Vec::new(),
                     approval_mode: "auto".into(),
                     turn_settings: TurnPreferences::default(),
