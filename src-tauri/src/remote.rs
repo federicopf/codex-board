@@ -50,6 +50,8 @@ pub struct BoardConfig {
     #[serde(default)]
     pub thread_turn_settings: HashMap<String, TurnPreferences>,
     #[serde(default)]
+    pub favorite_thread_ids: Vec<String>,
+    #[serde(default)]
     pub revision: u64,
 }
 
@@ -68,6 +70,11 @@ pub struct ProjectCustomer {
 pub struct ProjectNameInput {
     pub cwd: String,
     pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FavoriteThreadInput {
+    pub favorite: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +123,7 @@ impl Default for BoardConfig {
             approval_mode: default_approval_mode(),
             turn_settings: TurnPreferences::default(),
             thread_turn_settings: HashMap::new(),
+            favorite_thread_ids: Vec::new(),
             revision: 0,
         }
     }
@@ -295,6 +303,10 @@ impl RemoteGateway {
         save_thread_turn_settings(&self.config, &self.config_path, thread_id, patch)
     }
 
+    pub fn set_thread_favorite(&self, thread_id: &str, favorite: bool) -> Result<BoardConfig, String> {
+        save_thread_favorite(&self.config, &self.config_path, thread_id, favorite)
+    }
+
     pub fn start(
         &self,
         client: Arc<CodexClient>,
@@ -355,6 +367,7 @@ impl RemoteGateway {
                 .route("/v1/projects/name", put(put_project_name))
                 .route("/v1/turn-settings", put(put_turn_settings))
                 .route("/v1/threads/{id}/turn-settings", put(put_thread_turn_settings))
+                .route("/v1/threads/{id}/favorite", put(put_thread_favorite))
                 .route(
                     "/v1/automations",
                     get(list_automations).post(create_automation),
@@ -592,10 +605,32 @@ fn save_board_config(
     config.turn_settings = current.turn_settings.clone();
     config.thread_turn_settings = current.thread_turn_settings.clone();
     config.project_names = current.project_names.clone();
+    config.favorite_thread_ids = current.favorite_thread_ids.clone();
     config.revision = current.revision.saturating_add(1);
     persist_config(path, &config)?;
     *current = config.clone();
     Ok(config)
+}
+
+fn save_thread_favorite(
+    state: &Arc<RwLock<BoardConfig>>,
+    path: &Path,
+    thread_id: &str,
+    favorite: bool,
+) -> Result<BoardConfig, String> {
+    let thread_id = thread_id.trim();
+    if thread_id.is_empty() { return Err("Thread ID is required".into()); }
+    let mut current = state.write().map_err(|error| error.to_string())?;
+    if current.favorite_thread_ids.iter().any(|id| id == thread_id) == favorite {
+        return Ok(current.clone());
+    }
+    let mut next = current.clone();
+    if favorite { next.favorite_thread_ids.push(thread_id.to_owned()); }
+    else { next.favorite_thread_ids.retain(|id| id != thread_id); }
+    next.revision = current.revision.saturating_add(1);
+    persist_config(path, &next)?;
+    *current = next.clone();
+    Ok(next)
 }
 
 fn delete_customer_config(
@@ -1150,6 +1185,23 @@ async fn put_turn_settings(
     Ok(Json(config))
 }
 
+async fn put_thread_favorite(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(input): Json<FavoriteThreadInput>,
+) -> Result<Json<BoardConfig>, ApiError> {
+    authorized(&headers, &state)?;
+    let config = save_thread_favorite(&state.config, &state.config_path, &id, input.favorite)
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error))?;
+    state.client.emit_local_event(
+        "board/config/updated",
+        serde_json::to_value(&config)
+            .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
+    ).await;
+    Ok(Json(config))
+}
+
 async fn put_thread_turn_settings(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -1560,6 +1612,23 @@ mod tests {
     }
 
     #[test]
+    fn favorites_are_idempotent_persistent_and_survive_stale_board_writes() {
+        let directory = std::env::temp_dir().join(format!("codex-board-favorites-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        let gateway = RemoteGateway::prepare(&directory).unwrap();
+        let stale = gateway.board_config();
+        let saved = gateway.set_thread_favorite("thread-a", true).unwrap();
+        assert_eq!(saved.favorite_thread_ids, vec!["thread-a"]);
+        assert_eq!(gateway.set_thread_favorite("thread-a", true).unwrap().revision, saved.revision);
+        let saved = gateway.set_board_config(stale).unwrap();
+        assert_eq!(saved.favorite_thread_ids, vec!["thread-a"]);
+        let disk: BoardConfig = crate::persistence::load_json_or_default(&directory.join("board-config.json"));
+        assert_eq!(disk.favorite_thread_ids, vec!["thread-a"]);
+        assert!(gateway.set_thread_favorite(" ", true).is_err());
+        assert!(gateway.set_thread_favorite("thread-a", false).unwrap().favorite_thread_ids.is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn automatic_approval_never_answers_user_questions() {
         assert!(automatic_approval("item/tool/requestUserInput", &json!({})).is_none());
         assert_eq!(
@@ -1592,6 +1661,7 @@ mod tests {
                     approval_mode: "auto".into(),
                     turn_settings: TurnPreferences::default(),
                     thread_turn_settings: HashMap::new(),
+                    favorite_thread_ids: Vec::new(),
                     revision: 0,
                 })
             })

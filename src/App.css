@@ -539,6 +539,12 @@ body { min-width: 980px; }
 .button.danger { color: #b42318; border-color: #f0b8b2; background: #fff7f6; }
 .button.danger:hover { background: #feeceb; border-color: #d92d20; }
 .card-icon-action:has(svg) { flex: 0 0 auto; }
+.favorite-action.is-favorite { color: #d88a1d; background: #fff3dc; }
+.favorite-action.is-favorite svg { fill: currentColor; }
+.general-tabs { display: flex; align-items: center; gap: 6px; padding: 8px 28px 0; background: var(--surface-raised); }
+.general-tabs button { min-height: 34px; display: inline-flex; align-items: center; gap: 7px; padding: 0 13px; border: 0; border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+.general-tabs button.active { color: var(--accent); background: var(--accent-soft); }
+.general-tabs svg { width: 14px; height: 14px; }
 .sidebar-project-row { position: relative; display: flex; flex-wrap: wrap; align-items: stretch; }
 .sidebar-project-drop { position: absolute; z-index: 0; inset: 0; border: 1px solid transparent; border-radius: 11px; pointer-events: none; }
 .sidebar-project-drop.is-over { border-color: #999bff; background: rgba(133,136,255,.18); box-shadow: 0 0 0 2px rgba(133,136,255,.1); }

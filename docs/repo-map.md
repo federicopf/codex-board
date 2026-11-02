@@ -50,6 +50,8 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 
 ### Mobile Expo
 
+- General/Favorites: la vista globale `__all_projects__` e presentata come General con All e Favorites; il backend conserva `favoriteThreadIds` in `BoardConfig` tramite mutazione dedicata `set_thread_favorite` / `PUT /v1/threads/{id}/favorite`. `save_board_config` preserva i preferiti contro salvataggi stale; entrambi i client filtrano i thread globali senza cambiare ownership progetto/cliente. Test Rust `favorites_are_idempotent_persistent_and_survive_stale_board_writes`.
+
 - Tipo: Expo/React Native companion app per Board via gateway autenticato.
 - Entry point: `apps/mobile/App.tsx`, `apps/mobile/src/MobileBoardHome.tsx`, `apps/mobile/src/api.ts`, `apps/mobile/src/connection.ts`.
 - Manifest: `apps/mobile/package.json`, `apps/mobile/app.json`, `apps/mobile/eas.json`.

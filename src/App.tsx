@@ -12,7 +12,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { asCodexError, clearNotifications, createThread, archiveThread, deleteCustomer as deleteCustomerApi, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, getRateLimits, interruptTurn, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameProject as renameProjectApi, renameThread, sendMessage, setBoardConfig } from "./api";
+import { asCodexError, clearNotifications, createThread, archiveThread, deleteCustomer as deleteCustomerApi, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, getRateLimits, interruptTurn, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameProject as renameProjectApi, renameThread, sendMessage, setBoardConfig, setThreadFavorite } from "./api";
 import type { BoardNotification, ProjectCustomer } from "@codex-board/protocol";
 import { turnPreferences } from "./lib/turnSettings";
 import { setTurnSettings } from "./api";
@@ -71,10 +71,13 @@ type ArchiveDialogState = { kind: "thread"; threadId: string; title: string } | 
 interface Toast { id: number; threadId: string; title: string; message: string; kind: "done" | "error"; }
 const PROJECT_BOARD_KEY = "codex-board.project-board.v1";
 const PROJECT_CUSTOMER_KEY = "codex-board.project-customer.v1";
+const GENERAL_VIEW_KEY = "codex-board.general-view.v1";
 
 function App() {
   const [threads, setThreads] = useState<BoardThread[]>([]);
   const [project, setProject] = useState(() => localStorage.getItem(PROJECT_BOARD_KEY) || ALL_PROJECTS);
+  const [generalView, setGeneralView] = useState<"all" | "favorites">(() => localStorage.getItem(GENERAL_VIEW_KEY) === "favorites" ? "favorites" : "all");
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [customerId, setCustomerId] = useState<string | null>(() => localStorage.getItem(PROJECT_CUSTOMER_KEY));
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -220,6 +223,7 @@ function App() {
       projectNamesRef.current = config.projectNames || {};
       customersRef.current = savedCustomers;
       setCustomers(savedCustomers);
+      setFavoriteIds(new Set(config.favoriteThreadIds || []));
       setProjectPaths(projects);
       setProjectNames(projectNamesRef.current);
       setApprovalMode(mode);
@@ -337,6 +341,7 @@ function App() {
             const nextProjectNames = Object.fromEntries(Object.entries(record(config.projectNames)).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
             projectNamesRef.current = nextProjectNames;
             setProjectNames(nextProjectNames);
+            setFavoriteIds(new Set(Array.isArray(config.favoriteThreadIds) ? config.favoriteThreadIds.filter((id): id is string => typeof id === "string") : []));
             setThreads((current) => toBoardThreads(current, nextProjectNames));
             setProjectPaths(nextProjects);
             setCategoryOrder(nextCategories);
@@ -476,10 +481,22 @@ function App() {
 
   const projectThreads = useMemo(() => project === ALL_PROJECTS ? threads : threads.filter((item) => item.projectKey === project), [project, threads]);
   const visibleThreads = useMemo(() => {
-    if (project === ALL_PROJECTS) return projectThreads;
+    if (project === ALL_PROJECTS) return generalView === "favorites" ? projectThreads.filter((thread) => favoriteIds.has(thread.id)) : projectThreads;
     const customer = customers.find((item) => item.id === customerId);
     return customer ? projectThreads.filter((thread) => customer.threadIds.includes(thread.id)) : projectThreads.filter((thread) => !customers.some((item) => item.threadIds.includes(thread.id)));
-  }, [project, projectThreads, customerId, customers]);
+  }, [project, projectThreads, customerId, customers, generalView, favoriteIds]);
+
+  function changeGeneralView(view: "all" | "favorites") {
+    setGeneralView(view);
+    localStorage.setItem(GENERAL_VIEW_KEY, view);
+  }
+
+  async function toggleFavorite(threadId: string, favorite: boolean) {
+    try {
+      const saved = await setThreadFavorite(threadId, favorite);
+      setFavoriteIds(new Set(saved.favoriteThreadIds || []));
+    } catch (cause) { setError(asCodexError(cause)); }
+  }
   const filteredThreads = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     if (!query) return visibleThreads;
@@ -786,6 +803,8 @@ function App() {
       <SortableContext items={displayedCategories.map(categoryDragId)} strategy={horizontalListSortingStrategy}>
         <BoardWorkspace
           project={project}
+          generalView={generalView}
+          favoriteIds={favoriteIds}
           customerId={customerId}
           customers={customers}
           search={search}
@@ -802,6 +821,8 @@ function App() {
           refreshing={refreshing}
           rateLimits={rateLimits}
           onProjectChange={selectProjectBoard}
+          onGeneralViewChange={changeGeneralView}
+          onToggleFavorite={(threadId, favorite) => void toggleFavorite(threadId, favorite)}
           onCustomerChange={selectCustomerBoard}
           onCreateCustomer={setNewCustomerProjectKey}
           onAssignCustomer={assignThreadToCustomer}

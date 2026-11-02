@@ -789,6 +789,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   const [inboxOpen, setInboxOpen] = useState(false);
   const [inboxInitialTab, setInboxInitialTab] = useState<"notifications" | "automations">("notifications");
   const [selectedProject, setSelectedProject] = useState(ALL_PROJECTS);
+  const [generalView, setGeneralView] = useState<"all" | "favorites">("all");
   const [boardRestored, setBoardRestored] = useState(false);
   const projectSelectionChanged = useRef(false);
   const [search, setSearch] = useState("");
@@ -900,7 +901,8 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   const currentProjectCustomers = selectedProject === ALL_PROJECTS ? [] : (config?.customers || []).filter((customer) => projectKey(customer.projectCwd) === selectedProject);
   const currentCustomer = currentProjectCustomers.find((customer) => customer.id === selectedCustomerId) || null;
   const projectBaseThreads = selectedProject === ALL_PROJECTS ? threads : threads.filter((thread) => projectKey(thread.cwd) === selectedProject);
-  const projectThreads = selectedProject === ALL_PROJECTS ? projectBaseThreads : filterCustomerBoardThreads(projectBaseThreads, currentProjectCustomers, currentCustomer?.id || null);
+  const favoriteIds = new Set(config?.favoriteThreadIds || []);
+  const projectThreads = selectedProject === ALL_PROJECTS ? (generalView === "favorites" ? projectBaseThreads.filter((thread) => favoriteIds.has(thread.id)) : projectBaseThreads) : filterCustomerBoardThreads(projectBaseThreads, currentProjectCustomers, currentCustomer?.id || null);
   const projectThreadCount = filterCustomerBoardThreads(projectBaseThreads, currentProjectCustomers, null).length;
   const dashboardCategories = categories.filter((category) => projectThreads.some((thread) => categoryFromTitle(thread.name) === category));
   useEffect(() => { if (config && boardRestored && !loading && selectedProject !== ALL_PROJECTS && !projects.some((project) => project.key === selectedProject)) { setSelectedProject(ALL_PROJECTS); void saveSelectedBoard(ALL_PROJECTS); } }, [config, boardRestored, loading, selectedProject, projects]);
@@ -914,7 +916,14 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     return !query || [displayTitle(thread.name, thread.preview), thread.preview || "", projects.find((item) => item.key === projectKey(thread.cwd))?.label || projectLabel(thread.cwd)].some((value) => value.toLocaleLowerCase().includes(query));
   }).sort((left,right)=>(right.updatedAt||0)-(left.updatedAt||0));
   const workingCount = projectThreads.filter(isWorking).length;
-  const selectedProjectLabel = selectedProject === ALL_PROJECTS ? "All projects" : projects.find((project) => project.key === selectedProject)?.label || "Project";
+  const selectedProjectLabel = selectedProject === ALL_PROJECTS ? "General" : projects.find((project) => project.key === selectedProject)?.label || "Project";
+
+  async function toggleFavorite(thread: ThreadDto) {
+    try {
+      const saved = await api.setThreadFavorite(thread.id, !favoriteIds.has(thread.id));
+      setConfig(saved);
+    } catch (error) { Alert.alert("Could not update Favorites", error instanceof Error ? error.message : String(error)); }
+  }
   async function archiveThread(thread: ThreadDto) {
     const title = displayTitle(thread.name, thread.preview);
     Alert.alert("Archive task", `Archive “${title}”?`, [{ text: "Cancel", style: "cancel" }, { text: "Archive", style: "destructive", onPress: () => void api.archive(thread.id).then(() => { if (selected?.id === thread.id) setSelected(null); return refresh(); }).catch((error) => Alert.alert("Could not archive task", String(error))) }]);
@@ -1015,6 +1024,10 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
       customers={currentProjectCustomers}
       customerThreadCount={projectThreadCount}
       showProject={selectedProject === ALL_PROJECTS}
+      generalView={generalView}
+      onGeneralViewChange={setGeneralView}
+      favoriteIds={favoriteIds}
+      onToggleFavorite={(thread)=>void toggleFavorite(thread)}
       totalCount={projectThreads.length}
       workingCount={workingCount}
       categories={dashboardCategories.map(category=>({name:category,count:projectThreads.filter(thread=>categoryFromTitle(thread.name)===category).length}))}

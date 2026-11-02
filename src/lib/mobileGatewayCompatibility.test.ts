@@ -76,4 +76,15 @@ describe("OTA compatibility with installed desktop gateways",()=>{
     expect(fetch.mock.calls[0][0]).toBe("http://fixture/v1/projects/name");
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ cwd: "C:\\work", name: "Client work" });
   });
+
+  it("updates favorites through the dedicated thread endpoint", async () => {
+    const saved = { ...board(8, { model: "default" }), favoriteThreadIds: ["thread-a"] };
+    const fetch = vi.fn().mockResolvedValue(reply(saved));
+    vi.stubGlobal("fetch", fetch);
+    const api = new BoardApi({ baseUrl: "http://fixture", token: "fixture" });
+    expect((await api.setThreadFavorite("thread-a", true)).favoriteThreadIds).toEqual(["thread-a"]);
+    expect(fetch.mock.calls[0][0]).toBe("http://fixture/v1/threads/thread-a/favorite");
+    expect(fetch.mock.calls[0][1].method).toBe("PUT");
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ favorite: true });
+  });
 });

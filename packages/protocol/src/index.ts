@@ -19,6 +19,7 @@ export interface BoardConfig {
   approvalMode: "auto" | "ask";
   turnSettings: TurnSettings;
   threadTurnSettings?: Record<string, TurnSettings>;
+  favoriteThreadIds?: string[];
   revision: number;
 }
 

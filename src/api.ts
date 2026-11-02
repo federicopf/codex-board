@@ -5,7 +5,7 @@ import type { BoardNotification, ProjectCustomer } from "@codex-board/protocol";
 
 export interface GatewayInfo { running: boolean; port: number; token: string; error?: string | null; }
 export interface TailscaleInfo { installed: boolean; online: boolean; dnsName?: string | null; baseUrl?: string | null; error?: string | null; }
-export interface BoardConfig { categories: string[]; projects: string[]; projectNames?: Record<string, string>; customers: ProjectCustomer[]; approvalMode: "auto" | "ask"; turnSettings: TurnSettings; threadTurnSettings?: Record<string, TurnSettings>; revision: number; }
+export interface BoardConfig { categories: string[]; projects: string[]; projectNames?: Record<string, string>; customers: ProjectCustomer[]; approvalMode: "auto" | "ask"; turnSettings: TurnSettings; threadTurnSettings?: Record<string, TurnSettings>; favoriteThreadIds?: string[]; revision: number; }
 
 export async function listThreads(): Promise<ThreadDto[]> {
   return invoke<ThreadDto[]>("list_threads");
@@ -61,6 +61,7 @@ export async function getTailscaleStatus(): Promise<TailscaleInfo> { return invo
 export async function configureTailscaleServe(): Promise<TailscaleInfo> { return invoke<TailscaleInfo>("configure_tailscale_serve"); }
 export async function getBoardConfig(): Promise<BoardConfig> { return invoke<BoardConfig>("get_board_config"); }
 export async function setBoardConfig(config: BoardConfig): Promise<BoardConfig> { return invoke<BoardConfig>("set_board_config", { config }); }
+export async function setThreadFavorite(threadId: string, favorite: boolean): Promise<BoardConfig> { return invoke<BoardConfig>("set_thread_favorite", { threadId, favorite }); }
 export async function deleteCustomer(customerId: string): Promise<BoardConfig> { return invoke<BoardConfig>("delete_customer", { customerId }); }
 export async function setTurnSettings(settings: TurnSettings, initializeOnly = false): Promise<BoardConfig> { return invoke<BoardConfig>("set_turn_settings", { settings: { ...settings, initializeOnly } }); }
 export async function renameProject(cwd: string, name: string): Promise<BoardConfig> { return invoke<BoardConfig>("rename_project", { input: { cwd, name } }); }

@@ -238,6 +238,21 @@ async fn delete_customer(
 }
 
 #[tauri::command]
+async fn set_thread_favorite(
+    gateway: tauri::State<'_, RemoteGateway>,
+    client: tauri::State<'_, Arc<CodexClient>>,
+    thread_id: String,
+    favorite: bool,
+) -> Result<BoardConfig, String> {
+    let saved = gateway.set_thread_favorite(&thread_id, favorite)?;
+    client.emit_local_event(
+        "board/config/updated",
+        serde_json::to_value(&saved).map_err(|error| error.to_string())?,
+    ).await;
+    Ok(saved)
+}
+
+#[tauri::command]
 async fn rename_project(
     gateway: tauri::State<'_, RemoteGateway>,
     client: tauri::State<'_, Arc<CodexClient>>,
@@ -409,6 +424,7 @@ pub fn run() {
             gateway_info,
             get_board_config,
             set_board_config,
+            set_thread_favorite,
             delete_customer,
             rename_project,
             set_turn_settings,

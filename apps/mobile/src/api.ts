@@ -50,6 +50,7 @@ export class BoardApi {
   forkThread(id: string, input: ForkThreadInput) { return this.request<ThreadDto>(`/v1/threads/${encodeURIComponent(id)}/fork`, { method: "POST", body: JSON.stringify(input) }); }
   async board() { return this.resolveBoard(await this.request<BoardConfig>("/v1/board")); }
   async updateBoard(config: BoardConfig) { return this.resolveBoard(await this.request<BoardConfig>("/v1/board", { method: "PUT", body: JSON.stringify(config) })); }
+  async setThreadFavorite(id: string, favorite: boolean) { return this.resolveBoard(await this.request<BoardConfig>(`/v1/threads/${encodeURIComponent(id)}/favorite`, { method: "PUT", body: JSON.stringify({ favorite }) })); }
   async deleteCustomer(id: string) { return this.resolveBoard(await this.request<BoardConfig>(`/v1/customers/${encodeURIComponent(id)}`, { method: "DELETE" })); }
   async renameProject(cwd: string, name: string) { return this.resolveBoard(await this.request<BoardConfig>("/v1/projects/name", { method: "PUT", body: JSON.stringify({ cwd, name }) })); }
   async updateTurnSettings(settings: TurnSettings) {

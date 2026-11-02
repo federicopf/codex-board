@@ -36,12 +36,14 @@ function updatedLabel(updatedAt: number | null): string {
   return `Updated ${days}d ago`;
 }
 
-function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen, onMove, onFork, onRenameThread, onDelete, onStop, overlay = false }: {
+function ThreadCard({ thread, pending, working, queuedCount, showProject, favorite = false, onToggleFavorite, onOpen, onMove, onFork, onRenameThread, onDelete, onStop, overlay = false }: {
   thread: BoardThread;
   pending: boolean;
   working: boolean;
   queuedCount: number;
   showProject: boolean;
+  favorite?: boolean;
+  onToggleFavorite?: (threadId: string, favorite: boolean) => void;
   onOpen?: (threadId: string) => void;
   onMove?: (threadId: string) => void;
   onFork?: (threadId: string) => void;
@@ -71,6 +73,7 @@ function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen
       <footer>
         {pending ? <span className="saving">Saving changes…</span> : <span className="card-updated">{updatedLabel(thread.updatedAt)}</span>}
         {!overlay && <button className="card-icon-action" type="button" aria-label={`Fork ${thread.displayTitle}`} title={working ? "Wait for the active turn to finish" : "Fork conversation"} disabled={working || pending} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onFork?.(thread.id); }}><Icon name="fork" /></button>}
+        {!overlay && <button className={`card-icon-action favorite-action${favorite ? " is-favorite" : ""}`} type="button" aria-label={`${favorite ? "Remove" : "Add"} ${thread.displayTitle} ${favorite ? "from" : "to"} favorites`} title={favorite ? "Remove from Favorites" : "Add to Favorites"} aria-pressed={favorite} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onToggleFavorite?.(thread.id, !favorite); }}><Icon name="star" /></button>}
         {!overlay && <button className="card-icon-action" type="button" aria-label={`Archive ${thread.displayTitle}`} title="Archive conversation" disabled={pending || working} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onDelete?.(thread.id); }}><Icon name="trash" /></button>}
         {!overlay && working && <button className="card-icon-action danger" type="button" aria-label={`Stop ${thread.displayTitle}`} title="Stop active turn" disabled={pending} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onStop?.(thread.id); }}><Icon name="stop" /></button>}
         {!overlay && <button className="card-icon-action" type="button" aria-label={`Move ${thread.displayTitle}`} title="Move task" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onMove?.(thread.id); }}><Icon name="move" /></button>}
@@ -80,13 +83,15 @@ function ThreadCard({ thread, pending, working, queuedCount, showProject, onOpen
   );
 }
 
-function BoardColumn({ category, threads, pendingIds, workingIds, queues, showProject, onOpen, onMove, onFork, onRename, onRenameThread, onDelete, onStop }: {
+function BoardColumn({ category, threads, pendingIds, workingIds, queues, showProject, favoriteIds, onToggleFavorite, onOpen, onMove, onFork, onRename, onRenameThread, onDelete, onStop }: {
   category: string;
   threads: BoardThread[];
   pendingIds: Set<string>;
   workingIds: Set<string>;
   queues: Record<string, QueuedMessage[]>;
   showProject: boolean;
+  favoriteIds: Set<string>;
+  onToggleFavorite: (threadId: string, favorite: boolean) => void;
   onOpen: (threadId: string) => void;
   onMove: (threadId: string) => void;
   onFork: (threadId: string) => void;
@@ -109,7 +114,7 @@ function BoardColumn({ category, threads, pendingIds, workingIds, queues, showPr
         <button className="column-rename" type="button" aria-label={`Rename ${category}`} title="Rename category" onClick={() => onRename(category)}><Icon name="edit" /></button>
       </header>
       <div className="column-body">
-        {threads.map((thread) => <ThreadCard key={thread.id} thread={thread} pending={pendingIds.has(thread.id)} working={workingIds.has(thread.id)} queuedCount={queues[thread.id]?.length || 0} showProject={showProject} onOpen={onOpen} onMove={onMove} onFork={onFork} onRenameThread={onRenameThread} onDelete={onDelete} onStop={onStop} />)}
+        {threads.map((thread) => <ThreadCard key={thread.id} thread={thread} pending={pendingIds.has(thread.id)} working={workingIds.has(thread.id)} queuedCount={queues[thread.id]?.length || 0} showProject={showProject} favorite={favoriteIds.has(thread.id)} onToggleFavorite={onToggleFavorite} onOpen={onOpen} onMove={onMove} onFork={onFork} onRenameThread={onRenameThread} onDelete={onDelete} onStop={onStop} />)}
       </div>
     </section>
   );
@@ -117,6 +122,8 @@ function BoardColumn({ category, threads, pendingIds, workingIds, queues, showPr
 
 export interface BoardWorkspaceProps {
   project: string;
+  generalView: "all" | "favorites";
+  favoriteIds: Set<string>;
   customerId: string | null;
   customers: ProjectCustomer[];
   search: string;
@@ -132,6 +139,8 @@ export interface BoardWorkspaceProps {
   notifications: BoardNotification[];
   refreshing: boolean;
   onProjectChange: (project: string) => void;
+  onGeneralViewChange: (view: "all" | "favorites") => void;
+  onToggleFavorite: (threadId: string, favorite: boolean) => void;
   onCustomerChange: (project: string, customerId: string | null) => void;
   onCreateCustomer: (project: string) => void;
   onAssignCustomer: (threadId: string, customerId: string | null) => void;
@@ -175,7 +184,7 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
   useEffect(() => {
     if (props.project !== ALL_PROJECTS) setExpandedProjects((current) => new Set(current).add(props.project));
   }, [props.project]);
-  const projectLabel = props.project === ALL_PROJECTS ? "All projects" : props.projects.find((item) => item.key === props.project)?.label || "Project";
+  const projectLabel = props.project === ALL_PROJECTS ? "General" : props.projects.find((item) => item.key === props.project)?.label || "Project";
   const selectedCustomer = props.customers.find((customer) => customer.id === props.customerId);
   const unread = props.notifications.filter((item) => !item.read).length;
   const usage = usageDetails(props.rateLimits);
@@ -192,14 +201,14 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
         </nav>
         <div className="sidebar-section-label sidebar-project-heading"><span>Project boards</span><button type="button" aria-label="Create project" title="Create project" onClick={props.onNewProject}>＋</button></div>
         <div className="sidebar-project-list" role="navigation" aria-label="Project boards">
-          {[{ key: ALL_PROJECTS, label: "All projects" }, ...props.projects].map((item) => {
+          {[{ key: ALL_PROJECTS, label: "General" }, ...props.projects].map((item) => {
             const stats = props.projectStats[item.key] || { working: 0 };
             const projectCustomers = props.customers.filter((customer) => normalizeProjectPath(customer.projectCwd) === item.key);
             const expanded = expandedProjects.has(item.key);
             return <div key={item.key} className="sidebar-project-row">
               {item.key !== ALL_PROJECTS && <ProjectDropTarget projectKey={item.key} />}
               <button type="button" className={`sidebar-project${props.project === item.key ? " active" : ""}`} aria-current={props.project === item.key ? "page" : undefined} onClick={() => { setExpandedProjects((current) => new Set(current).add(item.key)); props.onProjectChange(item.key); }}>
-                <span>{item.key === ALL_PROJECTS ? "ALL" : item.label.slice(0, 2).toUpperCase()}</span>
+                <span>{item.key === ALL_PROJECTS ? "GE" : item.label.slice(0, 2).toUpperCase()}</span>
                 <div><strong>{item.label}</strong></div>
                 {stats.working > 0 && <i className="project-live-dot" aria-label="Work in progress" title="Work in progress" />}
               </button>
@@ -222,7 +231,7 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
 
       <section className="workspace-view">
         <header className="workspace-titlebar">
-          <div><span className="eyebrow">{selectedCustomer ? "Customer workspace" : "Project board"}</span><h1>{selectedCustomer?.name || projectLabel}</h1><p>{selectedCustomer ? `Conversations for ${selectedCustomer.name} in ${projectLabel}.` : props.project === ALL_PROJECTS ? "A complete overview of work across every project." : "Project threads stay general unless assigned to a customer."}</p></div>
+          <div><span className="eyebrow">{selectedCustomer ? "Customer workspace" : props.project === ALL_PROJECTS ? "Cross-project workspace" : "Project board"}</span><h1>{selectedCustomer?.name || projectLabel}</h1><p>{selectedCustomer ? `Conversations for ${selectedCustomer.name} in ${projectLabel}.` : props.project === ALL_PROJECTS ? "All tasks and favorites across projects and customers." : "Project threads stay general unless assigned to a customer."}</p></div>
           <div className="titlebar-actions">
             <button className="button secondary" disabled={props.refreshing} onClick={props.onRefresh}><Icon name="refresh" className={props.refreshing ? "spin" : ""} /> Refresh</button>
             <button className="button secondary" onClick={props.onCategories}><Icon name="categories" /> Categories</button>
@@ -231,16 +240,17 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
           </div>
         </header>
 
+        {props.project === ALL_PROJECTS && <nav className="general-tabs" aria-label="General views"><button type="button" className={props.generalView === "all" ? "active" : ""} aria-current={props.generalView === "all" ? "page" : undefined} onClick={() => props.onGeneralViewChange("all")}>All</button><button type="button" className={props.generalView === "favorites" ? "active" : ""} aria-current={props.generalView === "favorites" ? "page" : undefined} onClick={() => props.onGeneralViewChange("favorites")}><Icon name="star" /> Favorites</button></nav>}
         <div className="workspace-commandbar">
           <label className="search-control"><Icon name="search" /><input value={props.search} onChange={(event) => props.onSearchChange(event.target.value)} placeholder="Search tasks…" />{props.search && <button type="button" aria-label="Clear search" onClick={() => props.onSearchChange("")}>×</button>}</label>
           <div className="workspace-metrics"><span><strong>{props.visibleThreadCount}</strong> tasks</span><span className={props.workingCount ? "live" : ""}><i /><strong>{props.workingCount}</strong> working</span><span className="usage-summary" title={usage.plan ? `Plan: ${usage.plan}` : "Codex account usage"}><strong>{usage.used === null ? "—" : `${usage.used}%`}</strong> used<small>{resetLabel}</small></span></div>
         </div>
 
         {props.displayedCategories.length === 0 ? (
-          <div className="empty-board"><div className="empty-illustration"><Icon name="search" /></div><h2>No tasks match this board</h2><p>Try another search or create a new task.</p>{props.search && <button className="button secondary" onClick={() => props.onSearchChange("")}>Clear search</button>}</div>
+          <div className="empty-board"><div className="empty-illustration"><Icon name={props.project === ALL_PROJECTS && props.generalView === "favorites" ? "star" : "search"} /></div><h2>{props.project === ALL_PROJECTS && props.generalView === "favorites" && !props.search ? "No favorites yet" : "No tasks match this board"}</h2><p>{props.project === ALL_PROJECTS && props.generalView === "favorites" && !props.search ? "Use the star on any task card to keep it here, across projects and customers." : "Try another search or create a new task."}</p>{props.search && <button className="button secondary" onClick={() => props.onSearchChange("")}>Clear search</button>}</div>
         ) : (
           <div className="board" aria-label="Task board">
-            {props.displayedCategories.map((category) => <BoardColumn key={category} category={category} threads={props.filteredThreads.filter((thread) => thread.category === category)} pendingIds={props.pendingIds} workingIds={props.workingIds} queues={props.queues} showProject={props.project === ALL_PROJECTS} onOpen={props.onOpen} onMove={props.onMove} onFork={props.onFork} onRename={props.onRename} onRenameThread={props.onRenameThread} onDelete={props.onDelete} onStop={props.onStop} />)}
+            {props.displayedCategories.map((category) => <BoardColumn key={category} category={category} threads={props.filteredThreads.filter((thread) => thread.category === category)} pendingIds={props.pendingIds} workingIds={props.workingIds} queues={props.queues} showProject={props.project === ALL_PROJECTS} favoriteIds={props.favoriteIds} onToggleFavorite={props.onToggleFavorite} onOpen={props.onOpen} onMove={props.onMove} onFork={props.onFork} onRename={props.onRename} onRenameThread={props.onRenameThread} onDelete={props.onDelete} onStop={props.onStop} />)}
           </div>
         )}
       </section>
