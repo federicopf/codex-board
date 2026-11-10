@@ -181,9 +181,18 @@ function usageDetails(value: JsonValue | null): { used: number | null; resetsAt:
 
 export function BoardWorkspace(props: BoardWorkspaceProps) {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => props.project === ALL_PROJECTS ? new Set() : new Set([props.project]));
+  const [sidebarActions, setSidebarActions] = useState<{ kind: "project"; key: string } | { kind: "customer"; id: string } | null>(null);
   useEffect(() => {
     if (props.project !== ALL_PROJECTS) setExpandedProjects((current) => new Set(current).add(props.project));
   }, [props.project]);
+  useEffect(() => {
+    if (!sidebarActions) return;
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setSidebarActions(null); };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [sidebarActions]);
+  const actionProject = sidebarActions?.kind === "project" ? props.projects.find((item) => item.key === sidebarActions.key) : null;
+  const actionCustomer = sidebarActions?.kind === "customer" ? props.customers.find((item) => item.id === sidebarActions.id) : null;
   const projectLabel = props.project === ALL_PROJECTS ? "General" : props.projects.find((item) => item.key === props.project)?.label || "Project";
   const selectedCustomer = props.customers.find((customer) => customer.id === props.customerId);
   const unread = props.notifications.filter((item) => !item.read).length;
@@ -213,11 +222,10 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
                 {stats.working > 0 && <i className="project-live-dot" aria-label="Work in progress" title="Work in progress" />}
               </button>
               {item.key !== ALL_PROJECTS && <button type="button" className="sidebar-project-toggle" aria-label={`${expanded ? "Collapse" : "Expand"} ${item.label} customers`} aria-expanded={expanded} onClick={() => setExpandedProjects((current) => { const next = new Set(current); if (next.has(item.key)) next.delete(item.key); else next.add(item.key); return next; })}><Icon name="chevronDown" /></button>}
-              {item.key !== ALL_PROJECTS && <button type="button" className="sidebar-project-rename" aria-label={`Rename project ${item.label}`} title="Rename project" onClick={(event) => { event.stopPropagation(); props.onRenameProject(item.key); }}><Icon name="edit" /></button>}
-              {item.key !== ALL_PROJECTS && <button type="button" className="sidebar-project-archive" aria-label={`Remove project ${item.label}`} title="Remove project" onClick={(event) => { event.stopPropagation(); props.onDeleteProject(item.key); }}><Icon name="trash" /></button>}
+              {item.key !== ALL_PROJECTS && <button type="button" className="sidebar-project-actions" aria-label={`Actions for project ${item.label}`} title="Project actions" onClick={(event) => { event.stopPropagation(); setSidebarActions({ kind: "project", key: item.key }); }}><Icon name="more" /></button>}
               {item.key !== ALL_PROJECTS && expanded && projectCustomers.map((customer) => <div className="sidebar-customer-row" key={customer.id}>
                 <CustomerSidebarItem customer={customer} active={props.customerId === customer.id} onClick={() => { setExpandedProjects((current) => new Set(current).add(item.key)); props.onCustomerChange(item.key, customer.id); }} />
-                <button type="button" className="sidebar-customer-delete" aria-label={`Delete customer ${customer.name}`} title="Delete customer" onClick={(event) => { event.stopPropagation(); props.onDeleteCustomer(customer.id); }}><Icon name="trash" /></button>
+                <button type="button" className="sidebar-customer-actions" aria-label={`Actions for customer ${customer.name}`} title="Customer actions" onClick={(event) => { event.stopPropagation(); setSidebarActions({ kind: "customer", id: customer.id }); }}><Icon name="more" /></button>
               </div>)}
             </div>;
           })}
@@ -228,6 +236,15 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
           <button className="sidebar-link" onClick={props.onSettings}><Icon name="settings" /><span>Settings</span></button>
         </div>
       </aside>
+
+      {(actionProject || actionCustomer) && <div className="sidebar-actions-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSidebarActions(null); }}>
+        <section className="sidebar-actions-dialog" role="dialog" aria-modal="true" aria-label={`${actionProject ? "Project" : "Customer"} actions`}>
+          <header><div><span className="eyebrow">{actionProject ? "Project" : "Customer"}</span><h2>{actionProject?.label || actionCustomer?.name}</h2></div><button type="button" className="sidebar-actions-close" aria-label="Close actions" autoFocus onClick={() => setSidebarActions(null)}>×</button></header>
+          {actionProject && <button type="button" className="sidebar-actions-option" onClick={() => { setSidebarActions(null); props.onRenameProject(actionProject.key); }}><Icon name="edit" /> Rename project</button>}
+          {actionProject && <button type="button" className="sidebar-actions-option destructive" onClick={() => { setSidebarActions(null); props.onDeleteProject(actionProject.key); }}><Icon name="trash" /> Remove project</button>}
+          {actionCustomer && <button type="button" className="sidebar-actions-option destructive" onClick={() => { setSidebarActions(null); props.onDeleteCustomer(actionCustomer.id); }}><Icon name="trash" /> Remove customer</button>}
+        </section>
+      </div>}
 
       <section className="workspace-view">
         <header className="workspace-titlebar">

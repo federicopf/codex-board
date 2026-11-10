@@ -15,6 +15,7 @@ export type IconName =
   | "help"
   | "message"
   | "move"
+  | "more"
   | "plus"
   | "paperclip"
   | "play"
@@ -41,6 +42,7 @@ const paths: Record<IconName, ReactNode> = {
   help: <><circle cx="12" cy="12" r="9" /><path d="M9.7 9a2.5 2.5 0 1 1 3.4 2.3c-.8.4-1.1.9-1.1 1.7" /><path d="M12 17h.01" /></>,
   message: <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" />,
   move: <><path d="M5 9 2 12l3 3" /><path d="M9 5 12 2l3 3" /><path d="m15 19-3 3-3-3" /><path d="m19 9 3 3-3 3" /><path d="M2 12h20M12 2v20" /></>,
+  more: <><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" /></>,
   plus: <path d="M12 5v14M5 12h14" />,
   paperclip: <path d="m21.4 11.6-8.5 8.5a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />,
   play: <path d="m8 5 11 7-11 7V5Z" />,
