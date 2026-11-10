@@ -9,7 +9,7 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Markdown from "react-native-markdown-display";
 import {
-  automationOutcome, automationEditFields, automationUpdateInput, automationDateTimeValue, automationIntervalMinutes, categoryFromTitle, displayTitle as formatTaskTitle, formatAutomationInterval, formatCodexDirectives, parsePairingPayload, threadNameWithTitle, ThreadTurnSettingsSync,
+  automationOutcome, automationEditFields, automationUpdateInput, automationDateTimeValue, automationIntervalMinutes, categoryFromTitle, displayTitle as formatTaskTitle, formatAutomationInterval, formatCodexDirectives, groupAutomationsByOwner, parsePairingPayload, threadNameWithTitle, ThreadTurnSettingsSync,
   type Automation, type BoardConfig, type BoardNotification, type ProjectCustomer, type CreateAutomationInput, type JsonValue, type PairingCredential,
   type PendingRemoteRequest, type QueuedMessage, type ThreadDto, type TurnSettings,
 } from "@codex-board/protocol";
@@ -19,6 +19,7 @@ import { createMobileDrafts } from "./src/chatDrafts";
 import { readChatHistoryCache, writeChatHistoryCache } from "./src/chatHistoryCache";
 import { ChatKeyboardFrame } from "./src/ChatKeyboardFrame";
 import { RetryAutomationAction } from "./src/RetryAutomationAction";
+import { RunAutomationAction } from "./src/RunAutomationAction";
 import { clearCredential, hasSeenTour, loadCredential, loadSelectedBoard, markTourSeen, saveCredential, saveSelectedBoard } from "./src/connection";
 import { MobileBoardHome } from "./src/MobileBoardHome";
 import { AutomationResultModal } from "./src/AutomationResultModal";
@@ -27,7 +28,7 @@ import { ProjectHome } from "./src/ProjectHome";
 import { colors } from "./src/theme";
 import { MobileNavigation } from "./src/MobileNavigation";
 import { MobileActionSheet } from "./src/MobileActionSheet";
-import { filterCustomerBoardThreads, projectKey } from "./src/projectOwnership";
+import { customerBoardCounts, filterCustomerBoardThreads, projectKey } from "./src/projectOwnership";
 
 const displayTitle = (name?: string | null, preview?: string | null) => formatTaskTitle(name ?? null, preview ?? null);
 
@@ -54,6 +55,24 @@ function ChatMessage({ line, api }: { line: ChatLine; api: BoardApi }) {
 const threadCache = new Map<string, JsonObject>();
 const threadWorkModes = new Map<string, "default" | "plan">();
 const CHAT_HISTORY_PAGE_SIZE = 10;
+const MAX_THREAD_CACHE_ENTRIES = 3;
+
+function rememberThread(threadId: string, thread: JsonObject): void {
+  const messages = Array.isArray(thread.messages) ? thread.messages : [];
+  const recent = messages.slice(-CHAT_HISTORY_PAGE_SIZE);
+  const firstIndex = object(recent[0]).index;
+  const turns = Array.isArray(thread.turns) ? thread.turns : [];
+  const previousStart = object(thread._pagination).start;
+  const cacheStart = typeof firstIndex === "number" ? firstIndex : Math.max(0, (typeof previousStart === "number" ? previousStart : 0) + messages.length - recent.length);
+  const cached = messages.length > CHAT_HISTORY_PAGE_SIZE
+    ? { ...thread, messages: recent, turns: [], _pagination: { ...object(thread._pagination), start: cacheStart, hasOlder: cacheStart > 0 } }
+    : turns.length > CHAT_HISTORY_PAGE_SIZE
+      ? { ...thread, turns: turns.slice(-CHAT_HISTORY_PAGE_SIZE), _pagination: { ...object(thread._pagination), start: Math.max(0, (typeof previousStart === "number" ? previousStart : 0) + turns.length - CHAT_HISTORY_PAGE_SIZE), hasOlder: true } }
+      : thread;
+  threadCache.delete(threadId);
+  threadCache.set(threadId, cached);
+  while (threadCache.size > MAX_THREAD_CACHE_ENTRIES) threadCache.delete(threadCache.keys().next().value!);
+}
 
 function mergeThreadPage(existing: JsonObject | null, page: JsonObject): JsonObject {
   const metadata = object(page.pagination);
@@ -172,6 +191,11 @@ function projectLabel(cwd: string | null): string {
 const ALL_PROJECTS = "__all_projects__";
 
 function projectBoards(threads: ThreadDto[], registeredProjects: string[] = [], projectNames: Record<string, string> = {}): { key: string; label: string; cwd: string; count: number }[] {
+  const threadCounts = new Map<string, number>();
+  for (const thread of threads) {
+    const key = projectKey(thread.cwd);
+    threadCounts.set(key, (threadCounts.get(key) || 0) + 1);
+  }
   const sources = [...registeredProjects.map((cwd) => ({ cwd })), ...threads];
   const values = [...new Map(sources.map((source) => {
     const cwd = source.cwd || "Local project";
@@ -183,7 +207,7 @@ function projectBoards(threads: ThreadDto[], registeredProjects: string[] = [], 
     const parts = item.cwd.split(/[\\/]/).filter(Boolean);
     const parent = parts.at(-2);
     const label = projectNames[item.key]?.trim() || ((duplicateCounts.get(item.base) || 0) > 1 && parent ? `${parent} / ${item.base}` : item.base);
-    return { key: item.key, cwd: item.cwd, label, count: threads.filter((thread) => projectKey(thread.cwd) === item.key).length };
+    return { key: item.key, cwd: item.cwd, label, count: threadCounts.get(item.key) || 0 };
   }).sort((a, b) => a.label.localeCompare(b.label));
 }
 
@@ -416,7 +440,7 @@ function Chat({ thread, projectName, api, queue, requests, eventRevision, prefer
       .then((next) => {
         if (request !== historyRequest.current) return;
         const merged = loadedRef.current?._staleCache === true ? next : mergeThreadPage(loadedRef.current, next);
-        threadCache.set(thread.id, merged); loadedRef.current = merged; hasHistory.current = true; setLoaded(merged); setHistoryError(null);
+        rememberThread(thread.id, merged); loadedRef.current = merged; hasHistory.current = true; setLoaded(merged); setHistoryError(null);
         void writeChatHistoryCache(api.historyCacheScope(), thread.id, merged);
       })
       .catch((error) => { if (request === historyRequest.current) setHistoryError(error instanceof Error ? error.message : String(error)); })
@@ -431,7 +455,7 @@ function Chat({ thread, projectName, api, queue, requests, eventRevision, prefer
     let active = true;
     void readChatHistoryCache(api.historyCacheScope(), thread.id).then((cached) => {
       if (!active || loadedRef.current || !cached) return;
-      threadCache.set(thread.id, cached);
+      rememberThread(thread.id, cached);
       loadedRef.current = cached;
       hasHistory.current = true;
       setLoaded(cached);
@@ -451,7 +475,7 @@ function Chat({ thread, projectName, api, queue, requests, eventRevision, prefer
     void api.thread(thread.id, { limit: CHAT_HISTORY_PAGE_SIZE, before, unit: "items" })
       .then((page) => {
         const merged = mergeThreadPage(loadedRef.current, page);
-        threadCache.set(thread.id, merged); loadedRef.current = merged; hasHistory.current = true; setLoaded(merged);
+        rememberThread(thread.id, merged); loadedRef.current = merged; hasHistory.current = true; setLoaded(merged);
       })
       .catch((error) => Alert.alert("Could not load older messages", error instanceof Error ? error.message : String(error)))
       .finally(() => { loadingOlderRef.current = false; setHistoryLoadingOlder(false); });
@@ -543,9 +567,18 @@ function MoveDialog({ thread, categories, api, onClose, onMoved }: { thread: Thr
   return <Modal transparent animationType="fade" onRequestClose={() => { if (!busy) onClose(); }}><View style={styles.modalBackdrop}><Pressable disabled={busy} style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close move task dialog"/><View style={styles.moveDialog}><View style={styles.sheetHandle} /><Text style={styles.moveEyebrow}>MOVE TASK</Text><Text style={styles.moveTitle} numberOfLines={2}>{displayTitle(thread.name, thread.preview)}</Text><Text style={styles.moveSubtitle}>Choose the next board stage.</Text><ScrollView style={styles.moveOptions}>{categories.map((category) => { const selected = category === current; return <Pressable key={category} disabled={busy || selected} style={[styles.moveOption, selected && styles.moveOptionSelected]} onPress={() => void move(category)}><View style={[styles.categoryDot, selected && styles.categoryDotSelected]} /><Text style={[styles.moveOptionText, selected && styles.moveOptionTextSelected]}>{category}</Text>{selected ? <Text style={styles.currentLabel}>CURRENT</Text> : <MobileIcon name="chevron-right" size={18} color={colors.textMuted}/>}</Pressable>; })}</ScrollView><Pressable style={styles.moveCancel} onPress={onClose}><Text style={styles.moveCancelText}>Cancel</Text></Pressable></View></View></Modal>;
 }
 
-function NewTaskModal({ api, threads, projects, projectNames, categories, defaultProjectKey, onClose, onCreated }: { api: BoardApi; threads: ThreadDto[]; projects: string[]; projectNames: Record<string, string>; categories: string[]; defaultProjectKey?: string; onClose: () => void; onCreated: (thread: ThreadDto) => void }) {
+function NewTaskModal({ api, threads, projects, projectNames, categories, defaultProjectKey, defaultModel, onClose, onCreated }: { api: BoardApi; threads: ThreadDto[]; projects: string[]; projectNames: Record<string, string>; categories: string[]; defaultProjectKey?: string; defaultModel: string; onClose: () => void; onCreated: (thread: ThreadDto) => void }) {
   const choices = projectBoards(threads, projects, projectNames).filter((project) => project.key !== "__local__");
   const [cwd, setCwd] = useState(choices.find((project) => project.key === defaultProjectKey)?.cwd || choices[0]?.cwd || ""); const [category, setCategory] = useState(categories[0] || "Uncategorized"); const [title, setTitle] = useState(""); const [prompt, setPrompt] = useState(""); const [busy, setBusy] = useState(false);
+  const [model, setModel] = useState(defaultModel);
+  const [models, setModels] = useState<Array<{ id: string; name: string }>>([]);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  useEffect(() => { let alive = true; void api.models().then((value) => {
+    const data = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).data : null;
+    if (!Array.isArray(data)) throw new Error("Model catalog unavailable");
+    if (alive) setModels(data.map((entry) => { const row = entry as Record<string, unknown>; return { id: typeof row.model === "string" ? row.model : String(row.id || ""), name: typeof row.displayName === "string" ? row.displayName : String(row.model || row.id || "") }; }).filter((item) => item.id));
+  }).catch((error) => { if (alive) setModelError(error instanceof Error ? error.message : String(error)); }); return () => { alive = false; }; }, [api]);
   const [attachments, setAttachments] = useState<Array<{ id: string; name: string; uri: string; dataUrl: string }>>([]);
   const [uploading, setUploading] = useState(false);
   async function pickImages() {
@@ -559,11 +592,14 @@ function NewTaskModal({ api, threads, projects, projectNames, categories, defaul
     } catch (error) { Alert.alert("Could not attach images", error instanceof Error ? error.message : String(error)); }
     finally { setUploading(false); }
   }
-  async function create() { setBusy(true); try { const created = await api.createThread({ cwd, category, title: title.trim(), prompt: prompt.trim(), imageUrls: attachments.map((attachment) => attachment.dataUrl) }); onCreated(created); } catch (error) { Alert.alert("Could not create task", error instanceof Error ? error.message : String(error)); } finally { setBusy(false); } }
+  async function create() { if (!model) { Alert.alert("Choose a model", "Select a model before creating the chat."); return; } setBusy(true); try { const created = await api.createThread({ cwd, category, title: title.trim(), prompt: prompt.trim(), imageUrls: attachments.map((attachment) => attachment.dataUrl), model }); onCreated(created); } catch (error) { Alert.alert("Could not create task", error instanceof Error ? error.message : String(error)); } finally { setBusy(false); } }
   return <Modal animationType="slide" onRequestClose={onClose}><SafeAreaView style={styles.page}><View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Cancel new task" style={styles.chatBackButton} onPress={onClose}><MobileIcon name="x" size={24} color={colors.text}/></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>New Codex task</Text><Text style={styles.headerMeta}>Create and start directly from mobile</Text></View></View><ScrollView contentContainerStyle={styles.newTaskMobile}><Text style={styles.fieldLabel}>PROJECT</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.miniChoices}>{choices.map((project) => <Pressable key={project.cwd} style={[styles.miniChoice, project.cwd === cwd && styles.miniChoiceActive]} onPress={() => setCwd(project.cwd)}><Text style={[styles.miniChoiceText, project.cwd === cwd && styles.miniChoiceTextActive]}>{project.label}</Text></Pressable>)}</ScrollView><Text style={styles.fieldLabel}>CATEGORY</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.miniChoices}>{categories.map((item) => <Pressable key={item} style={[styles.miniChoice, item === category && styles.miniChoiceActive]} onPress={() => setCategory(item)}><Text style={[styles.miniChoiceText, item === category && styles.miniChoiceTextActive]}>{item}</Text></Pressable>)}</ScrollView><Text style={styles.fieldLabel}>TITLE</Text><TextInput style={styles.smallInput} value={title} onChangeText={setTitle} placeholder="What are we building?" returnKeyType="next" /><Text style={styles.fieldLabel}>FIRST MESSAGE</Text><TextInput style={[styles.smallInput, styles.newTaskPrompt]} value={prompt} onChangeText={setPrompt} multiline blurOnSubmit returnKeyType="send" onSubmitEditing={() => { if (!busy && cwd && title.trim() && prompt.trim()) void create(); }} placeholder="Describe what Codex should do…" />
+    <Text style={styles.fieldLabel}>MODEL FOR THIS CHAT</Text><Pressable style={styles.taskPickerButton} onPress={() => setModelPickerOpen(true)} accessibilityRole="button" accessibilityLabel={`Choose model, currently ${models.find((item) => item.id === model)?.name || model || "none"}`}><Text style={styles.taskPickerButtonText} numberOfLines={1}>{models.find((item) => item.id === model)?.name || model || "Choose a model"}</Text><MobileIcon name="chevron-down" size={18} color={colors.textMuted}/></Pressable>
+    {modelError && <Text style={styles.automationError}>Could not load models: {modelError}</Text>}
+    <Modal transparent visible={modelPickerOpen} animationType="fade" onRequestClose={() => setModelPickerOpen(false)}><View style={styles.taskPickerBackdrop}><Pressable style={StyleSheet.absoluteFill} onPress={() => setModelPickerOpen(false)} accessibilityRole="button" accessibilityLabel="Close model picker"/><View style={styles.taskPickerModal}><Text style={styles.managerTitle}>Choose a model</Text><ScrollView>{model && !models.some((item) => item.id === model) && <Pressable style={styles.taskPickerOption} onPress={() => setModelPickerOpen(false)}><Text style={styles.automationName}>{model}</Text></Pressable>}{models.map((item) => <Pressable key={item.id} style={styles.taskPickerOption} onPress={() => { setModel(item.id); setModelPickerOpen(false); }} accessibilityRole="button" accessibilityState={{selected:model === item.id}}><Text style={styles.automationName}>{item.name}</Text><Text style={styles.automationDescription}>{item.id}</Text></Pressable>)}</ScrollView>{models.length === 0 && !model && <Text style={styles.automationDescription}>No models available yet. Check the PC connection.</Text>}</View></View></Modal>
     <Pressable accessibilityRole="button" disabled={busy || uploading} style={[styles.newTaskAttach, (busy || uploading) && styles.disabled]} onPress={() => void pickImages()}><Text style={styles.newTaskAttachText}>{uploading ? "Loading images…" : "Attach images"}</Text></Pressable>
     {attachments.length > 0 && <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={styles.composerAttachmentStrip}>{attachments.map((attachment) => <View key={attachment.id} style={styles.composerAttachmentChip}><Image source={{ uri: attachment.uri }} style={styles.composerAttachmentThumb} /><Text numberOfLines={1} style={styles.composerAttachmentName}>{attachment.name}</Text><Pressable accessibilityRole="button" accessibilityLabel={`Remove ${attachment.name}`} style={styles.composerAttachmentRemove} onPress={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}><MobileIcon name="x" size={18} color={colors.textMuted}/></Pressable></View>)}</ScrollView>}
-    <Pressable disabled={busy || uploading || !cwd || !title.trim() || !prompt.trim()} style={[styles.primaryButton, (busy || uploading || !cwd || !title.trim() || !prompt.trim()) && styles.disabled]} onPress={() => void create()}>{busy ? <ActivityIndicator color="white" /> : <Text style={styles.primaryButtonText}>Create and start</Text>}</Pressable></ScrollView></SafeAreaView></Modal>;
+    <Pressable disabled={busy || uploading || !cwd || !title.trim() || !prompt.trim() || !model} style={[styles.primaryButton, (busy || uploading || !cwd || !title.trim() || !prompt.trim() || !model) && styles.disabled]} onPress={() => void create()}>{busy ? <ActivityIndicator color="white" /> : <Text style={styles.primaryButtonText}>Create and start</Text>}</Pressable></ScrollView></SafeAreaView></Modal>;
 }
 
 function NewProjectModal({ config, api, onClose, onCreated }: { config: BoardConfig; api: BoardApi; onClose: () => void; onCreated: (cwd: string) => void }) {
@@ -682,7 +718,7 @@ function RetryAutomationsButton({ api, automations, onChanged }: { api: BoardApi
   return <><Pressable style={styles.retryManyButton} disabled={!retryable.length} onPress={()=>{setSelected(retryable.filter(item=>item.runState!=="running").map(item=>item.id));setOpen(true);}}><MobileIcon name="refresh-cw" size={16} color={colors.primary}/><Text style={styles.retryManyText}>Retry automations</Text></Pressable><Modal transparent visible={open} animationType="fade" onRequestClose={()=>!busy&&setOpen(false)}><View style={styles.taskPickerBackdrop}><View style={styles.taskPickerModal}><Text style={styles.managerTitle}>Select workflows to retry</Text><ScrollView>{retryable.map(item=><Pressable key={item.id} style={styles.taskPickerOption} disabled={item.runState==="running"||busy} onPress={()=>setSelected(current=>current.includes(item.id)?current.filter(id=>id!==item.id):[...current,item.id])}><Text style={styles.automationName}>{selected.includes(item.id)?"☑":"□"}  {item.name}{item.runState==="running"?" · Running":""}</Text></Pressable>)}</ScrollView><View style={styles.retryManyActions}><Pressable onPress={()=>setOpen(false)} disabled={busy}><Text style={styles.editButton}>Cancel</Text></Pressable><Pressable onPress={()=>void retry()} disabled={busy||selected.length===0}><Text style={styles.editButton}>{busy?"Queuing…":`Retry ${selected.length}`}</Text></Pressable></View></View></View></Modal></>;
 }
 
-function AutomationManager({ api, automations, threads, categories, onClose, onChanged }: { api: BoardApi; automations: Automation[]; threads: ThreadDto[]; categories: string[]; onClose: () => void; onChanged: () => void }) {
+function AutomationManager({ api, automations, threads, customers, projectNames, categories, onClose, onChanged }: { api: BoardApi; automations: Automation[]; threads: ThreadDto[]; customers: ProjectCustomer[]; projectNames: Record<string, string>; categories: string[]; onClose: () => void; onChanged: () => void }) {
   const [editing, setEditing] = useState<Automation | null>(null);
   const [view, setView] = useState<"overview" | "createAutomation" | "createPipeline">("overview");
   const [kind, setKind] = useState<"recurringMessage" | "scheduledMessage" | "calendarMessage">("recurringMessage");
@@ -701,6 +737,16 @@ function AutomationManager({ api, automations, threads, categories, onClose, onC
   const [toCategory, setToCategory] = useState(categories[1] || categories[0] || "");
   const [pipelineTiming, setPipelineTiming] = useState<"delay" | "scheduled">("delay");
   const [busy, setBusy] = useState(false);
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
+  const threadOwners = new Map(threads.map((thread) => [thread.id, thread]));
+  const projectLabels = new Map(projectBoards(threads, [], projectNames).map((project) => [project.key, project.label]));
+  const automationGroups = groupAutomationsByOwner(automations, (id) => {
+    const thread = threadOwners.get(id);
+    if (!thread) return null;
+    const key = projectKey(thread.cwd);
+    const customer = customers.find((item) => item.threadIds.includes(id));
+    return { projectKey: key, projectLabel: projectLabels.get(key) || projectLabel(thread.cwd), customerId: customer?.id, customerName: customer?.name };
+  });
   function beginCreate(nextView: typeof view) {
     setEditing(null); setName(""); setPrompt(""); setRunAt(""); setView(nextView);
   }
@@ -741,7 +787,15 @@ function AutomationManager({ api, automations, threads, categories, onClose, onC
       <RetryAutomationsButton api={api} automations={automations} onChanged={onChanged}/>
       <View style={styles.workflowCreateChoices}><Pressable style={styles.workflowCreateCard} onPress={() => beginCreate("createAutomation")}><View style={styles.automationIcon}><MobileIcon name="zap" color={colors.primary}/></View><View style={styles.categoryCopy}><Text style={styles.automationName}>New automation</Text><Text style={styles.automationDescription}>Schedule a prompt for a task</Text></View><MobileIcon name="chevron-right" size={18} color={colors.primary}/></Pressable><Pressable style={styles.workflowCreateCard} onPress={() => beginCreate("createPipeline")}><View style={styles.automationIcon}><MobileIcon name="repeat" color={colors.primary}/></View><View style={styles.categoryCopy}><Text style={styles.automationName}>New pipeline</Text><Text style={styles.automationDescription}>Move tasks after a delay or on a date</Text></View><MobileIcon name="chevron-right" size={18} color={colors.primary}/></Pressable></View>
       {automations.length === 0 && <View style={styles.automationEmpty}><MobileIcon name="zap" size={30} color={colors.primary}/><Text style={styles.emptyTitle}>No workflows yet</Text><Text style={styles.emptyText}>Choose automation or pipeline above to create the first one.</Text></View>}
-      {automations.map((automation) => <View key={automation.id} style={styles.automationCard}><View style={styles.automationCardTop}><View style={styles.automationIcon}><MobileIcon name={automation.action.kind === "categoryPipeline" || automation.action.kind === "scheduledCategoryPipeline" ? "repeat" : automation.action.kind === "scheduledMessage" ? "clock" : "repeat"} color={colors.primary}/></View><View style={styles.categoryCopy}><Text style={styles.automationName}>{automation.name}</Text><Text style={styles.automationDescription}>{automationDescription(automation, threads)}</Text>{automation.runState && <Text style={styles.automationDescription}>{automation.runState === "queued" ? "Queued" : "Running"}</Text>}{automation.lastResult ? <><Text style={[styles.automationOutcome, automation.lastResult.status === "success" ? styles.outcomeSuccess : automation.lastResult.status === "failed" ? styles.outcomeFailed : styles.outcomeUnknown]}>{automationOutcome(automation.lastResult.status).label}</Text><Text style={styles.automationDescription}>{automation.lastResult.summary}</Text></> : <Text style={styles.automationDescription}>{automation.lastError || "No verified result yet"}</Text>}</View><Pressable style={[styles.toggle, automation.enabled && styles.toggleOn]} onPress={() => void api.setAutomationEnabled(automation.id, !automation.enabled).then(onChanged)}><View style={[styles.toggleKnob, automation.enabled && styles.toggleKnobOn]} /></Pressable></View><View style={styles.automationEditActions}>{automation.lastResult && automationOutcome(automation.lastResult.status).retryable && <RetryAutomationAction key={automation.lastResult.finishedAt} disabled={automation.runState === "running"} onRetry={()=>api.retryAutomation(automation.id).then(onChanged)}/>}<Pressable accessibilityRole="button" accessibilityLabel={`Edit ${automation.name}`} style={styles.chatBackButton} onPress={() => edit(automation)}><MobileIcon name="edit-2" size={22} color={colors.primary}/></Pressable><Pressable accessibilityRole="button" accessibilityLabel={`Delete ${automation.name}`} style={styles.chatBackButton} onPress={() => Alert.alert("Delete workflow?", automation.name, [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => void api.deleteAutomation(automation.id).then(onChanged) }])}><MobileIcon name="trash-2" size={21} color={colors.danger}/></Pressable></View></View>)}
+      {automationGroups.map((group, index) => {
+        const expanded = expandedGroup === group.key || (expandedGroup === null && index === 0);
+        return <View key={group.key} style={styles.automationGroup}>
+          <Pressable style={styles.automationGroupHeader} onPress={() => setExpandedGroup(expanded ? "__none__" : group.key)} accessibilityRole="button" accessibilityState={{expanded}} accessibilityLabel={`${group.label}, ${group.automations.length} workflows`}>
+            <View style={styles.automationGroupMark}/><Text style={styles.automationGroupTitle} numberOfLines={1}>{group.label}</Text><Text style={styles.automationGroupCount}>{group.automations.length}</Text><MobileIcon name={expanded ? "chevron-up" : "chevron-down"} size={19} color={colors.textMuted}/>
+          </Pressable>
+          {expanded && <View style={styles.automationGroupBody}>{group.automations.map((automation) => <View key={automation.id} style={styles.automationCard}><View style={styles.automationCardTop}><View style={styles.automationIcon}><MobileIcon name={automation.action.kind === "categoryPipeline" || automation.action.kind === "scheduledCategoryPipeline" ? "repeat" : automation.action.kind === "scheduledMessage" ? "clock" : "repeat"} color={colors.primary}/></View><View style={styles.categoryCopy}><Text style={styles.automationName}>{automation.name}</Text><Text style={styles.automationDescription}>{automationDescription(automation, threads)}</Text>{automation.runState && <Text style={styles.automationDescription}>{automation.runState === "queued" ? "Queued" : "Running"}</Text>}{automation.lastResult ? <><Text style={[styles.automationOutcome, automation.lastResult.status === "success" ? styles.outcomeSuccess : automation.lastResult.status === "failed" ? styles.outcomeFailed : styles.outcomeUnknown]}>{automationOutcome(automation.lastResult.status).label}</Text><Text style={styles.automationDescription}>{automation.lastResult.summary}</Text></> : <Text style={styles.automationDescription}>{automation.lastError || "No verified result yet"}</Text>}</View><Pressable style={[styles.toggle, automation.enabled && styles.toggleOn]} onPress={() => void api.setAutomationEnabled(automation.id, !automation.enabled).then(onChanged)}><View style={[styles.toggleKnob, automation.enabled && styles.toggleKnobOn]} /></Pressable></View><View style={styles.automationEditActions}><RunAutomationAction name={automation.name} disabled={Boolean(automation.runState)} onRun={()=>api.runAutomationNow(automation.id).then(onChanged)}/>{automation.lastResult && automationOutcome(automation.lastResult.status).retryable && <RetryAutomationAction key={automation.lastResult.finishedAt} disabled={automation.runState === "running"} onRetry={()=>api.retryAutomation(automation.id).then(onChanged)}/>}<Pressable accessibilityRole="button" accessibilityLabel={`Edit ${automation.name}`} style={styles.chatBackButton} onPress={() => edit(automation)}><MobileIcon name="edit-2" size={22} color={colors.primary}/></Pressable><Pressable accessibilityRole="button" accessibilityLabel={`Delete ${automation.name}`} style={styles.chatBackButton} onPress={() => Alert.alert("Delete workflow?", automation.name, [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => void api.deleteAutomation(automation.id).then(onChanged) }])}><MobileIcon name="trash-2" size={21} color={colors.danger}/></Pressable></View></View>)}</View>}
+        </View>;
+      })}
     </ScrollView> : <ScrollView contentContainerStyle={styles.manager}>
       <View style={styles.managerIntro}><Text style={styles.overviewEyebrow}>{editing ? "EDIT WORKFLOW" : creatingPipeline ? "NEW PIPELINE" : "NEW AUTOMATION"}</Text><Text style={styles.managerTitle}>{creatingPipeline ? "Move work automatically" : "Schedule a Codex prompt"}</Text><Text style={styles.managerSubtitle}>{creatingPipeline ? "Move every task in a category after time spent there or at a specific date." : "Run once, repeat on an interval or use a weekly calendar."}</Text></View>
       <View style={styles.automationComposer}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.automationModes}>{(creatingPipeline ? [["delay","After time"],["scheduled","Specific date"]] : [["recurringMessage","Interval"],["scheduledMessage","Once"],["calendarMessage","Calendar"]]).map(([value,label])=><Pressable key={value} style={[styles.automationMode,(creatingPipeline ? pipelineTiming===value : kind===value)&&styles.automationModeActive]} onPress={()=>creatingPipeline?setPipelineTiming(value as typeof pipelineTiming):setKind(value as typeof kind)}><Text style={[styles.segmentText,(creatingPipeline ? pipelineTiming===value : kind===value)&&styles.segmentTextActive]}>{label}</Text></Pressable>)}</ScrollView>
@@ -807,9 +861,11 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   const pendingCreatedThreads = useRef(new Map<string, ThreadDto>());
   const refreshInFlight = useRef(false);
   const refreshAgain = useRef(false);
+  const lastRefreshStarted = useRef(0);
   const refresh = useCallback(async (): Promise<void> => {
     if (refreshInFlight.current) { refreshAgain.current = true; return; }
     refreshInFlight.current = true;
+    lastRefreshStarted.current = Date.now();
     const requestedQueueRevision = queueRevision.current;
     try {
       const [nextThreads, nextConfig, nextQueues, nextRequests, nextAutomations, nextNotifications, nextRateLimits] = await Promise.all([api.threads(), api.board().then(shared=>{preferences.receive(shared);return shared;}), api.queues(), api.requests(), api.automations().catch(() => []), api.notifications().catch(() => []), api.rateLimits().catch(() => null)]);
@@ -836,15 +892,19 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     finally {
       refreshInFlight.current = false;
       setLoading(false); setRefreshing(false);
-      if (refreshAgain.current) { refreshAgain.current = false; void refresh(); }
+      if (refreshAgain.current && !refreshTimer.current) {
+        refreshAgain.current = false;
+        refreshTimer.current = setTimeout(() => { refreshTimer.current = null; void refresh(); }, 2000);
+      } else refreshAgain.current = false;
     }
   }, [api, preferences]);
   const scheduleRefresh = useCallback(() => {
     if (refreshTimer.current) return;
+    const delay = Math.max(750, 4000 - (Date.now() - lastRefreshStarted.current));
     refreshTimer.current = setTimeout(() => {
       refreshTimer.current = null;
       void refresh();
-    }, 250);
+    }, delay);
   }, [refresh]);
   const markQueueChanged = useCallback(() => { queueRevision.current += 1; }, []);
   useEffect(() => {
@@ -869,7 +929,9 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
           setConfig(current=>current&&current.revision>shared.revision?current:shared);
         }
       }
-      scheduleRefresh();
+      if (event.method !== "board/queue/updated" && event.method !== "board/config/updated"
+        && (!event.method.startsWith("item/") || /request|approval/i.test(event.method))
+        && (!event.method.startsWith("turn/") || event.method === "turn/started" || event.method === "turn/completed")) scheduleRefresh();
     }, (online)=>{setConnected(online);if(online){if(selectedThreadIdRef.current)setEventRevision(value=>value+1);scheduleRefresh();}});
     const foreground = AppState.addEventListener("change", state=>{if(state==="active"){if(selectedThreadIdRef.current)setEventRevision(value=>value+1);scheduleRefresh();}});
     return () => {
@@ -897,7 +959,11 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   }, [projectOpen, selected]);
   const discovered = [...new Set(threads.map((thread) => categoryFromTitle(thread.name)))];
   const categories = [...(config?.categories || []), ...discovered.filter((value) => !config?.categories.includes(value))];
-  const projects = useMemo(() => projectBoards(threads, config?.projects || [], config?.projectNames || {}), [config?.projects, config?.projectNames, threads]);
+  const projects = useMemo(() => projectBoards(threads, config?.projects || [], config?.projectNames || {}).map((project) => {
+    const projectThreads = threads.filter((thread) => projectKey(thread.cwd) === project.key);
+    const customers = (config?.customers || []).filter((customer) => projectKey(customer.projectCwd) === project.key);
+    return { ...project, boardCount: filterCustomerBoardThreads(projectThreads, customers, null).length };
+  }), [config?.projects, config?.projectNames, config?.customers, threads]);
   const currentProjectCustomers = selectedProject === ALL_PROJECTS ? [] : (config?.customers || []).filter((customer) => projectKey(customer.projectCwd) === selectedProject);
   const currentCustomer = currentProjectCustomers.find((customer) => customer.id === selectedCustomerId) || null;
   const projectBaseThreads = selectedProject === ALL_PROJECTS ? threads : threads.filter((thread) => projectKey(thread.cwd) === selectedProject);
@@ -930,8 +996,21 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   }
   async function archiveProject(project: { key: string; label: string }) {
     const items = threads.filter((thread) => projectKey(thread.cwd) === project.key);
-    if (items.length === 0) { Alert.alert("Empty project", "This project has no conversations and will remain available."); return; }
-    Alert.alert("Archive project", `Archive ${items.length} tasks from “${project.label}”?`, [{ text: "Cancel", style: "cancel" }, { text: "Archive", style: "destructive", onPress: () => void Promise.all(items.map((thread) => api.archive(thread.id))).then(() => { setProjectOpen(false); setSelectedProject(ALL_PROJECTS); return refresh(); }).catch((error) => Alert.alert("Could not archive project", String(error))) }]);
+    const cwd = projects.find((item) => item.key === project.key)?.cwd;
+    if (!cwd) return;
+    Alert.alert("Remove project", `Remove “${project.label}” from the board and archive ${items.length} ${items.length === 1 ? "task" : "tasks"}? Files on disk and archived chat history will be kept.`, [{ text: "Cancel", style: "cancel" }, { text: "Remove", style: "destructive", onPress: () => void (async () => {
+      try {
+        for (const thread of items) await api.archive(thread.id);
+        const saved = await api.deleteProject(cwd);
+        setThreads((current) => current.filter((thread) => projectKey(thread.cwd) !== project.key));
+        setConfig(saved);
+        setProjectOpen(false);
+        setSelectedProject(ALL_PROJECTS);
+        setSelectedCustomerId(null);
+        await saveSelectedBoard(ALL_PROJECTS);
+        await refresh();
+      } catch (error) { Alert.alert("Could not remove project", error instanceof Error ? error.message : String(error)); }
+    })() }]);
   }
   function deleteCustomer(customer: ProjectCustomer) {
     Alert.alert("Delete customer", `Remove “${customer.name}”? Assigned conversations will return to the project board; their history will remain.`, [
@@ -1023,6 +1102,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
       customerId={currentCustomer?.id || null}
       customers={currentProjectCustomers}
       customerThreadCount={projectThreadCount}
+      customerThreadCounts={customerBoardCounts(projectBaseThreads, currentProjectCustomers)}
       showProject={selectedProject === ALL_PROJECTS}
       generalView={generalView}
       onGeneralViewChange={setGeneralView}
@@ -1058,10 +1138,10 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     </>}
     {automationAlert&&<Pressable style={styles.mobileAutomationAlert} onPress={()=>{setAutomationAlert(null);setResultNotification(automationAlert);void api.markNotificationsRead(automationAlert.id)}}><View style={styles.mobileAutomationAlertIcon}><MobileIcon name="zap" size={18} color={colors.primary}/></View><View style={styles.categoryCopy}><Text style={styles.automationName}>{automationOutcome(automationAlert.automation?.status).label}</Text><Text style={styles.automationDescription}>{automationAlert.automation?.name}</Text></View><MobileIcon name="chevron-right" size={18} color={colors.primary}/></Pressable>}
     {managing && config && <CategoryManager config={config} threads={threads} api={api} onClose={() => setManaging(false)} onSaved={refresh} onOpenTour={onOpenTour} onDisconnect={() => void onDisconnect()} />}
-    {automating && <AutomationManager api={api} automations={automations} threads={threads} categories={categories} onClose={() => setAutomating(false)} onChanged={refresh} />}
+    {automating && <AutomationManager api={api} automations={automations} threads={threads} customers={config?.customers || []} projectNames={config?.projectNames || {}} categories={categories} onClose={() => setAutomating(false)} onChanged={refresh} />}
     {creatingProject&&config&&<NewProjectModal config={config} api={api} onClose={()=>setCreatingProject(false)} onCreated={(cwd)=>{setCreatingProject(false);selectProjectBoard(projectKey(cwd));void refresh()}}/>}
     {renamingProject&&<RenameProjectModal key={projectKey(renamingProject.cwd)} project={renamingProject} api={api} onClose={()=>setRenamingProject(null)} onSaved={(saved)=>{setConfig(saved);setRenamingProject(null)}}/>}
-    {creatingTask && <NewTaskModal api={api} threads={threads} projects={config?.projects || []} projectNames={config?.projectNames || {}} categories={categories} defaultProjectKey={selectedProject === ALL_PROJECTS ? undefined : selectedProject} onClose={() => setCreatingTask(false)} onCreated={(thread) => { setCreatingTask(false); const customerId = currentCustomer && projectKey(currentCustomer.projectCwd) === projectKey(thread.cwd) ? currentCustomer.id : null; void retainCustomerThread(thread, customerId, true); }} />}
+    {creatingTask && <NewTaskModal api={api} threads={threads} projects={config?.projects || []} projectNames={config?.projectNames || {}} categories={categories} defaultProjectKey={selectedProject === ALL_PROJECTS ? undefined : selectedProject} defaultModel={preferences.getSnapshot().settings.model || ""} onClose={() => setCreatingTask(false)} onCreated={(thread) => { setCreatingTask(false); const customerId = currentCustomer && projectKey(currentCustomer.projectCwd) === projectKey(thread.cwd) ? currentCustomer.id : null; void retainCustomerThread(thread, customerId, true); }} />}
     {creatingCustomer&&config&&selectedProject!==ALL_PROJECTS&&<NewCustomerModal config={config} api={api} projectCwd={projects.find(project=>project.key===selectedProject)?.cwd||selectedProject} projectName={selectedProjectLabel} onClose={()=>setCreatingCustomer(false)} onCreated={(customer,saved)=>{setConfig(saved);setCreatingCustomer(false);setSelectedCustomerId(customer.id);setActiveCategory(null)}}/>}
     {assigningCustomerThread&&<MobileActionSheet title="Assign conversation" onClose={()=>setAssigningCustomerThread(null)} actions={[{label:"Project threads",icon:"folder",onPress:()=>{const thread=assigningCustomerThread;setAssigningCustomerThread(null);void assignThreadToCustomer(thread,null)}},...(config?.customers||[]).filter(customer=>projectKey(customer.projectCwd)===projectKey(assigningCustomerThread.cwd)).map(customer=>({label:customer.name,icon:"users" as const,onPress:()=>{const thread=assigningCustomerThread;setAssigningCustomerThread(null);void assignThreadToCustomer(thread,customer.id)}}))]}/>}
     {inboxOpen && <InboxModal api={api} items={notifications} initialTab={inboxInitialTab} onClose={()=>setInboxOpen(false)} onChanged={refresh} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item)}} onOpen={(id)=>{const thread=threads.find(item=>item.id===id);if(thread){setInboxOpen(false);openThread(thread)}}}/>}
@@ -1085,6 +1165,12 @@ function Root() {
 export default function App() { return <SafeAreaProvider><Root /></SafeAreaProvider>; }
 
 const styles = StyleSheet.create({
+  automationGroup: { marginBottom: 10, borderWidth: 1, borderColor: "#E1E3EA", borderRadius: 15, backgroundColor: "white", overflow: "hidden" },
+  automationGroupHeader: { minHeight: 58, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 10 },
+  automationGroupMark: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#6266EA" },
+  automationGroupTitle: { flex: 1, minWidth: 0, color: "#252832", fontSize: 14, fontWeight: "800" },
+  automationGroupCount: { minWidth: 22, textAlign: "center", color: "#7F8491", fontSize: 12, fontWeight: "700" },
+  automationGroupBody: { paddingHorizontal: 10, paddingBottom: 2 },
   workModeRow: { minHeight: 34, marginBottom: 5, flexDirection: "row", alignItems: "center", gap: 6 }, workModeLabel: { marginRight: 3, color: "#8A8F9B", fontSize: 8, fontWeight: "800", letterSpacing: 1 }, workModeButton: { minWidth: 62, height: 28, paddingHorizontal: 10, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 9, backgroundColor: "#FAFAFC" }, workModeButtonActive: { borderColor: "#8588EC", backgroundColor: "#EEEFFF" }, workModeText: { color: "#696E7B", fontSize: 10, fontWeight: "700" }, workModeTextActive: { color: "#5559D8" },
   taskPickerButton: { minHeight: 44, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 11, backgroundColor: "white" }, taskPickerButtonText: { flex: 1, marginRight: 10, color: "#292C36", fontSize: 12, fontWeight: "600" }, taskPickerBackdrop: { flex: 1, padding: 20, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(20,22,30,.45)" }, taskPickerModal: { width: "100%", maxWidth: 460, maxHeight: "75%", padding: 18, borderRadius: 18, backgroundColor: "white" }, taskPickerOption: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#ECEEF2" }, retryManyButton: { minHeight: 42, marginVertical: 10, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", alignSelf: "flex-end", gap: 8, borderWidth: 1, borderColor: "#DADCF2", borderRadius: 11, backgroundColor: "white" }, retryManyText: { color: "#5559D8", fontSize: 11, fontWeight: "700" }, retryManyActions: { marginTop: 14, flexDirection: "row", justifyContent: "flex-end", gap: 20 },
   connectionBanner: { minHeight: 40, paddingHorizontal: 16, justifyContent: "center", backgroundColor: "#FFF0ED" },
@@ -1131,7 +1217,7 @@ const styles = StyleSheet.create({
   automationHeaderNew: { width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 12, backgroundColor: "#1B1E2B" }, automationHeaderNewIcon: { color: "white", fontSize: 20, lineHeight: 22, fontWeight: "600" }, workflowCreateChoices: { gap: 9, marginBottom: 20 }, workflowCreateCard: { minHeight: 68, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 11, borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 15, backgroundColor: "white" }, automationEmpty: { minHeight: 260, alignItems: "center", justifyContent: "center", borderWidth: 1, borderStyle: "dashed", borderColor: "#D8DAE3", borderRadius: 18, backgroundColor: "rgba(255,255,255,.45)" }, automationComposer: { padding: 14, gap: 10, borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 17, backgroundColor: "white" }, segmented: { padding: 3, flexDirection: "row", borderRadius: 12, backgroundColor: "#EFF0F4" }, segment: { flex: 1, minHeight: 38, alignItems: "center", justifyContent: "center", borderRadius: 9 }, segmentActive: { backgroundColor: "#1B1E2B" }, segmentText: { color: "#727784", fontSize: 11, fontWeight: "700" }, segmentTextActive: { color: "white" }, fieldLabel: { marginTop: 5, color: "#8A8F9B", fontSize: 8, fontWeight: "800", letterSpacing: 1 }, miniChoices: { gap: 7 }, miniChoice: { maxWidth: 190, minHeight: 36, paddingHorizontal: 11, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E0E2E9", borderRadius: 11, backgroundColor: "#F9F9FB" }, miniChoiceActive: { borderColor: "#8588EC", backgroundColor: "#EEEFFF" }, miniChoiceText: { color: "#696E7B", fontSize: 10, fontWeight: "700" }, miniChoiceTextActive: { color: "#5559D8" }, promptInput: { minHeight: 76, textAlignVertical: "top" }, automationSectionTitle: { marginTop: 24, marginBottom: 10, marginLeft: 3, color: "#858A96", fontSize: 9, fontWeight: "800", letterSpacing: 1 }, automationCard: { marginBottom: 10, padding: 14, borderWidth: 1, borderColor: "#E1E3EA", borderRadius: 15, backgroundColor: "white" }, automationCardTop: { flexDirection: "row", alignItems: "center", gap: 11 }, automationIcon: { width: 36, height: 36, alignItems: "center", justifyContent: "center", borderRadius: 11, backgroundColor: "#EEEFFF" }, automationName: { color: "#252832", fontSize: 13, fontWeight: "800" }, automationDescription: { marginTop: 3, color: "#7F8491", fontSize: 10, lineHeight: 15 }, automationError: { marginTop: 4, color: "#B54A3C", fontSize: 9 }, toggle: { width: 42, height: 24, padding: 3, justifyContent: "center", borderRadius: 12, backgroundColor: "#D8DAE1" }, toggleOn: { backgroundColor: "#6266EA" }, toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: "white" }, toggleKnobOn: { alignSelf: "flex-end" }, deleteAutomation: { marginTop: 10, alignSelf: "flex-end", color: "#B54A3C", fontSize: 10, fontWeight: "700" },
   mobileChatToolbar: { flexDirection: "row", gap: 9, paddingHorizontal: 11, paddingTop: 9, backgroundColor: "white" }, mobileToolButton: { flex: 1, minWidth: 0, minHeight: 42, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 7, borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 11, backgroundColor: "#FAFAFC" }, mobileToolLabel: { color: "#858A96", fontSize: 9, fontWeight: "800" }, mobileToolValue: { flex: 1, minWidth: 0, color: "#5559D8", fontSize: 12, fontWeight: "800" }, mobileToolChevron: { color: "#858A96", fontSize: 16 }, mobileAttachmentButton: { width: 94, minHeight: 42, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 11, backgroundColor: "#FAFAFC" }, mobileAttachmentIcon: { color: "#5559D8", fontSize: 18, lineHeight: 20 }, mobileAttachmentLabel: { color: "#5559D8", fontSize: 10, fontWeight: "800" }, modelRequiredHint: { marginHorizontal: 13, marginTop: 5, color: "#A4493D", fontSize: 9, fontWeight: "700" }, toolModalBackdrop: { flex: 1, justifyContent: "flex-end", padding: 10, backgroundColor: "rgba(18,20,28,.42)" }, toolModal: { maxHeight: "88%", padding: 16, borderRadius: 20, backgroundColor: "#F8F8FA" }, attachModal: { padding: 16, borderRadius: 20, backgroundColor: "#F8F8FA" }, toolModalHeader: { marginBottom: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }, toolModalTitle: { color: "#1B1E2B", fontSize: 16, fontWeight: "800" }, toolModalSubtitle: { marginTop: 4, color: "#858A96", fontSize: 12 }, modalCloseButton: { width: 48, height: 48, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 10, backgroundColor: "#ECEEF3" }, modelOptionList: { marginBottom: 7, padding: 3, borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 12, backgroundColor: "white" }, modelOption: { minHeight: 50, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 9 }, modelOptionSelected: { backgroundColor: "#EEEFFF" }, modelOptionCopy: { flex: 1, minWidth: 0 }, modelOptionName: { color: "#252832", fontSize: 14, fontWeight: "800" }, modelOptionId: { marginTop: 3, color: "#858A96", fontSize: 11 }, modelOptionCheck: { color: "#5559D8", fontSize: 16, fontWeight: "800" }, toolSectionLabel: { marginTop: 16, marginBottom: 8, color: "#858A96", fontSize: 10, fontWeight: "900", letterSpacing: 1 }, toolChoiceRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 }, toolChoice: { minHeight: 44, paddingHorizontal: 10, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 9, backgroundColor: "white" }, toolChoiceSelected: { borderColor: "#777BE9", backgroundColor: "#EEEFFF" }, toolChoiceText: { color: "#717684", fontSize: 12, fontWeight: "700" }, toolChoiceTextSelected: { color: "#5559D8" }, toolModalFooter: { marginTop: 16, flexDirection: "row", justifyContent: "space-between", gap: 8 }, compactMobileButton: { minHeight: 40, paddingHorizontal: 12, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 10, backgroundColor: "white" }, compactMobileText: { color: "#5559D8", fontSize: 10, fontWeight: "800" }, toolDoneButton: { minHeight: 40, minWidth: 76, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", borderRadius: 10, backgroundColor: "#1B1E2B" }, toolDoneText: { color: "white", fontSize: 10, fontWeight: "800" }, attachChoice: { minHeight: 64, marginBottom: 4, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 11, borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 13, backgroundColor: "white" }, attachChoiceIcon: { width: 36, height: 36, alignItems: "center", justifyContent: "center", textAlign: "center", textAlignVertical: "center", borderRadius: 11, overflow: "hidden", color: "#5559D8", backgroundColor: "#EEEFFF", fontSize: 21 }, attachChoiceTitle: { color: "#252832", fontSize: 11, fontWeight: "800" }, attachChoiceSubtitle: { marginTop: 4, color: "#858A96", fontSize: 9 }, settingsRow: { minHeight: 64, marginBottom: 8, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderColor: "#E2E4EC", borderRadius: 13, backgroundColor: "white" },
   automationOutcome: { marginTop: 8, fontSize: 11, fontWeight: "800" }, outcomeSuccess: { color: "#177C50" }, outcomeFailed: { color: "#B34337" }, outcomeUnknown: { color: "#796026" },
-  automationEditActions: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8 },
+  automationEditActions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 8 },
   automationModes: { gap: 6, padding: 3, borderRadius: 12, backgroundColor: "#EFF0F4" }, automationMode: { minWidth: 76, minHeight: 38, alignItems: "center", justifyContent: "center", borderRadius: 9 }, automationModeActive: { backgroundColor: "#1B1E2B" },
   mobileWeekdays: { flexDirection: "row", justifyContent: "space-between", gap: 5 }, mobileWeekday: { flex: 1, height: 36, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E0E2E9", borderRadius: 10, backgroundColor: "#F9F9FB" },
   newTaskAttach: { minHeight: 38, alignSelf: "flex-start", paddingHorizontal: 12, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 10, backgroundColor: "white" }, newTaskAttachText: { color: "#5559D8", fontSize: 10, fontWeight: "800" },

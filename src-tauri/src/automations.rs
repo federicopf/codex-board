@@ -239,14 +239,22 @@ impl AutomationStore {
     }
 
     pub async fn retry(&self, id: &str) -> Result<(), String> {
+        self.run_manual(id, true).await
+    }
+
+    pub async fn run_now(&self, id: &str) -> Result<(), String> {
+        self.run_manual(id, false).await
+    }
+
+    async fn run_manual(&self, id: &str, retry: bool) -> Result<(), String> {
         let _mutation = self.mutation.lock().await;
         let automation = self.state.lock().await.automations.iter().find(|item| item.id == id).cloned()
             .ok_or_else(|| "Automation not found".to_owned())?;
-        if automation.last_result.as_ref().is_some_and(|result| result.status == "success") {
+        if retry && automation.last_result.as_ref().is_some_and(|result| result.status == "success") {
             return Err("L'ultima esecuzione è già riuscita. Aggiorna l'elenco dei risultati.".into());
         }
         if let Some(state) = self.coordinator.automation_run_state(id).await {
-            if state == "queued" { return self.coordinator.retry_pending_automation(id).await; }
+            if retry && state == "queued" { return self.coordinator.retry_pending_automation(id).await; }
             return Err("Automazione già in esecuzione o in coda: non verrà duplicata.".into());
         }
         match &automation.action {
@@ -1098,6 +1106,10 @@ mod tests {
         assert_eq!(reloaded.list().await[0].run_state.as_deref(), Some("queued"));
         let next_run = match reloaded.list().await[0].action { AutomationAction::RecurringMessage { next_run_at, .. } => next_run_at, _ => unreachable!() };
         assert!(reloaded.retry(&created.id).await.unwrap_err().contains("già in esecuzione o in coda"));
+        assert!(reloaded.run_now(&created.id).await.unwrap_err().contains("già in esecuzione o in coda"));
+        reloaded.record_completion(&created.id, "success", "Done", Vec::new(), 300).await.unwrap();
+        assert!(reloaded.retry(&created.id).await.unwrap_err().contains("già riuscita"));
+        assert!(reloaded.run_now(&created.id).await.unwrap_err().contains("già in esecuzione o in coda"));
         assert!(matches!(reloaded.list().await[0].action, AutomationAction::RecurringMessage { next_run_at, .. } if next_run_at == next_run));
         std::fs::remove_dir_all(directory).unwrap();
     }

@@ -13,8 +13,8 @@ use tokio::sync::{Mutex, broadcast};
 pub use coordinator::{QueuedMessage, SendOutcome, TurnCoordinator, TurnSettings};
 use process::RunningClient;
 use protocol::EventQueue;
-use types::{CodexErrorCode, ThreadListResponse, ThreadReadResponse};
-pub use types::{CodexErrorDto, CodexEventDto, ThreadDto};
+use types::{ThreadListResponse, ThreadReadResponse};
+pub use types::{CodexErrorCode, CodexErrorDto, CodexEventDto, ThreadDto};
 
 pub struct CodexClient {
     running: Mutex<Option<Arc<RunningClient>>>,
@@ -37,6 +37,14 @@ fn turn_input(text: &str, image_urls: Vec<String>) -> Vec<Value> {
     if !text.trim().is_empty() { input.push(json!({ "type": "text", "text": text })); }
     for url in image_urls { input.push(json!({ "type": "image", "url": url })); }
     input
+}
+
+fn initial_thread_params(cwd: &str, model: Option<&str>) -> Value {
+    json!({ "cwd": cwd, "model": model })
+}
+
+fn initial_turn_params(thread_id: &str, input: Vec<Value>, model: Option<&str>) -> Value {
+    json!({ "threadId": thread_id, "input": input, "model": model })
 }
 
 fn collaboration_mode(mode: String, model: Value, reasoning_effort: Value) -> Value {
@@ -368,6 +376,7 @@ impl CodexClient {
         name: String,
         prompt: String,
         image_urls: Vec<String>,
+        model: Option<String>,
     ) -> Result<ThreadDto, CodexErrorDto> {
         if cwd.trim().is_empty() || name.trim().is_empty() || prompt.trim().is_empty() {
             return Err(CodexErrorDto::new(
@@ -377,8 +386,9 @@ impl CodexClient {
         }
         let client = self.ensure_running().await?;
         let cwd = native_cwd(&cwd);
+        let model = model.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
         let result = client
-            .request("thread/start", json!({ "cwd": cwd }))
+            .request("thread/start", initial_thread_params(&cwd, model.as_deref()))
             .await?;
         let thread_id = result
             .pointer("/thread/id")
@@ -405,10 +415,7 @@ impl CodexClient {
         client
             .request(
                 "turn/start",
-                json!({
-                    "threadId": thread_id,
-                    "input": input
-                }),
+                initial_turn_params(&thread_id, input, model.as_deref()),
             )
             .await?;
         // Codex can acknowledge `turn/start` before the rollout JSONL has
@@ -687,6 +694,14 @@ impl Default for CodexClient {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selected_model_is_used_for_new_thread_and_its_first_turn() {
+        let thread = super::initial_thread_params("C:/work", Some("model-b"));
+        let turn = super::initial_turn_params("thread-a", super::turn_input("Start", vec![]), Some("model-b"));
+        assert_eq!(thread["model"], "model-b");
+        assert_eq!(turn["model"], "model-b");
+        assert_eq!(turn["input"][0]["text"], "Start");
+    }
     #[test]
     fn mobile_history_removes_inline_images_and_caps_large_text() {
         let item = serde_json::json!({

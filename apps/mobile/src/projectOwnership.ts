@@ -15,3 +15,8 @@ export function filterCustomerBoardThreads<T extends { id: string }>(threads: T[
     ? threads.filter((thread) => selectedCustomer.threadIds.includes(thread.id))
     : threads.filter((thread) => !customers.some((customer) => customer.threadIds.includes(thread.id)));
 }
+
+export function customerBoardCounts<T extends { id: string }>(threads: T[], customers: ProjectCustomer[]): Record<string, number> {
+  const visibleIds = new Set(threads.map((thread) => thread.id));
+  return Object.fromEntries(customers.map((customer) => [customer.id, customer.threadIds.filter((id) => visibleIds.has(id)).length]));
+}

@@ -545,6 +545,12 @@ body { min-width: 980px; }
 .general-tabs button { min-height: 34px; display: inline-flex; align-items: center; gap: 7px; padding: 0 13px; border: 0; border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
 .general-tabs button.active { color: var(--accent); background: var(--accent-soft); }
 .general-tabs svg { width: 14px; height: 14px; }
+.automation-project-group { margin-top: 10px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); overflow: hidden; }
+.automation-project-group .automation-project-heading { min-height: 52px; margin: 0; padding: 0 15px; cursor: pointer; list-style: none; }
+.automation-project-group .automation-project-heading::-webkit-details-marker { display: none; }
+.automation-project-heading > svg { width: 16px; height: 16px; color: var(--muted); transition: transform .15s; }
+.automation-project-group[open] .automation-project-heading > svg { transform: rotate(180deg); }
+.automation-project-group .automation-cards { padding: 0 12px 12px; }
 .sidebar-project-row { position: relative; display: flex; flex-wrap: wrap; align-items: stretch; }
 .sidebar-project-drop { position: absolute; z-index: 0; inset: 0; border: 1px solid transparent; border-radius: 11px; pointer-events: none; }
 .sidebar-project-drop.is-over { border-color: #999bff; background: rgba(133,136,255,.18); box-shadow: 0 0 0 2px rgba(133,136,255,.1); }

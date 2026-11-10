@@ -73,6 +73,12 @@ pub struct ProjectNameInput {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectPathInput {
+    pub cwd: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct FavoriteThreadInput {
     pub favorite: bool,
 }
@@ -205,6 +211,8 @@ struct CreateThreadBody {
     prompt: String,
     #[serde(default)]
     image_urls: Vec<String>,
+    #[serde(default)]
+    model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -295,6 +303,10 @@ impl RemoteGateway {
         save_project_name(&self.config, &self.config_path, input)
     }
 
+    pub fn delete_project(&self, cwd: &str) -> Result<BoardConfig, String> {
+        delete_project_config(&self.config, &self.config_path, cwd)
+    }
+
     pub fn set_turn_settings(&self, patch: TurnPreferencesPatch) -> Result<BoardConfig, String> {
         save_turn_settings(&self.config, &self.config_path, patch)
     }
@@ -365,6 +377,7 @@ impl RemoteGateway {
                 .route("/v1/board", get(get_board).put(put_board))
                 .route("/v1/customers/{id}", delete(delete_customer))
                 .route("/v1/projects/name", put(put_project_name))
+                .route("/v1/projects/remove", post(remove_project))
                 .route("/v1/turn-settings", put(put_turn_settings))
                 .route("/v1/threads/{id}/turn-settings", put(put_thread_turn_settings))
                 .route("/v1/threads/{id}/favorite", put(put_thread_favorite))
@@ -380,6 +393,7 @@ impl RemoteGateway {
                     "/v1/automations/{id}/retry",
                     post(retry_automation),
                 )
+                .route("/v1/automations/{id}/run", post(run_automation_now))
                 .route(
                     "/v1/notifications",
                     get(list_notifications).delete(clear_notifications),
@@ -664,6 +678,27 @@ fn save_project_name(
     }
     let mut next = current.clone();
     next.project_names.insert(key, name.to_owned());
+    next.revision = current.revision.saturating_add(1);
+    persist_config(path, &next)?;
+    *current = next.clone();
+    Ok(next)
+}
+
+fn delete_project_config(
+    state: &Arc<RwLock<BoardConfig>>,
+    path: &Path,
+    cwd: &str,
+) -> Result<BoardConfig, String> {
+    if cwd.trim().is_empty() { return Err("Project path is required".into()); }
+    let key = project_identity(cwd);
+    let mut current = state.write().map_err(|error| error.to_string())?;
+    if !current.projects.iter().any(|project| project_identity(project) == key) {
+        return Err("Project not found".into());
+    }
+    let mut next = current.clone();
+    next.projects.retain(|project| project_identity(project) != key);
+    next.customers.retain(|customer| project_identity(&customer.project_cwd) != key);
+    next.project_names.remove(&key);
     next.revision = current.revision.saturating_add(1);
     persist_config(path, &next)?;
     *current = next.clone();
@@ -955,8 +990,14 @@ async fn create_thread(
     };
     let thread = state
         .client
-        .create_thread(body.cwd, name, body.prompt, body.image_urls)
+        .create_thread(body.cwd, name, body.prompt, body.image_urls, body.model.clone())
         .await?;
+    if let Some(model) = body.model.filter(|value| !value.trim().is_empty()) {
+        let config = save_thread_turn_settings(&state.config, &state.config_path, &thread.id, TurnPreferencesPatch { model: Some(model), ..Default::default() })
+            .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("Conversation created, but its model preference could not be saved: {error}")))?;
+        state.client.emit_local_event("board/config/updated", serde_json::to_value(&config)
+            .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?).await;
+    }
     serde_json::to_value(thread)
         .map(Json)
         .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
@@ -1153,6 +1194,19 @@ async fn delete_customer(
     Ok(Json(config))
 }
 
+async fn remove_project(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(input): Json<ProjectPathInput>,
+) -> Result<Json<BoardConfig>, ApiError> {
+    authorized(&headers, &state)?;
+    let config = delete_project_config(&state.config, &state.config_path, &input.cwd)
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error))?;
+    state.client.emit_local_event("board/config/updated", serde_json::to_value(&config)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?).await;
+    Ok(Json(config))
+}
+
 async fn put_project_name(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -1252,6 +1306,16 @@ async fn retry_automation(
 ) -> Result<StatusCode, ApiError> {
     authorized(&headers, &state)?;
     state.automations.retry(&id).await.map_err(|error| ApiError(StatusCode::CONFLICT, error))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn run_automation_now(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, ApiError> {
+    authorized(&headers, &state)?;
+    state.automations.run_now(&id).await.map_err(|error| ApiError(StatusCode::CONFLICT, error))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1608,6 +1672,26 @@ mod tests {
         assert!(gateway.rename_project(ProjectNameInput { cwd: "C:\\Work\\Amati".into(), name: "  ".into() }).is_err());
         let disk: BoardConfig = crate::persistence::load_json_or_default(&directory.join("board-config.json"));
         assert_eq!(disk.project_names["c:/work/amati"], "Amati Studio");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn deleting_project_removes_empty_workspace_customers_and_name_persistently() {
+        let directory = std::env::temp_dir().join(format!("codex-board-project-delete-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        let gateway = RemoteGateway::prepare(&directory).unwrap();
+        let mut config = gateway.board_config();
+        config.projects = vec!["C:\\Work\\Amati".into(), "C:\\Work\\Other".into()];
+        config.customers = vec![ProjectCustomer { id: "customer-1".into(), project_cwd: "c:/work/amati/".into(), name: "Content".into(), thread_ids: vec![] }];
+        gateway.set_board_config(config).unwrap();
+        gateway.rename_project(ProjectNameInput { cwd: "C:\\Work\\Amati".into(), name: "Amati Studio".into() }).unwrap();
+        let saved = gateway.delete_project("c:/work/amati/").unwrap();
+        assert_eq!(saved.projects, vec!["C:\\Work\\Other"]);
+        assert!(saved.customers.is_empty());
+        assert!(!saved.project_names.contains_key("c:/work/amati"));
+        assert!(gateway.delete_project("C:\\Work\\Amati").is_err());
+        let disk: BoardConfig = crate::persistence::load_json_or_default(&directory.join("board-config.json"));
+        assert_eq!(disk.projects, saved.projects);
+        assert!(disk.customers.is_empty());
         std::fs::remove_dir_all(directory).unwrap();
     }
 

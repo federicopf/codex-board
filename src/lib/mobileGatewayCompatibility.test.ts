@@ -14,6 +14,15 @@ describe("OTA compatibility with installed desktop gateways",()=>{
   beforeEach(()=>{vi.mocked(loadLegacyTurnSettings).mockResolvedValue({});vi.mocked(saveLegacyTurnSettings).mockResolvedValue(undefined);});
   afterEach(()=>{vi.unstubAllGlobals();vi.clearAllMocks();});
 
+  it("removes a project through the authenticated board command",async()=>{
+    const fetch=vi.fn().mockResolvedValue(reply({...legacyBoard,projects:[]}));
+    vi.stubGlobal("fetch",fetch);
+    await new BoardApi({baseUrl:"http://fixture",token:"fixture"}).deleteProject("C:\\Work\\Amati");
+    expect(fetch).toHaveBeenCalledExactlyOnceWith("http://fixture/v1/projects/remove",expect.objectContaining({
+      method:"POST",body:JSON.stringify({cwd:"C:\\Work\\Amati"}),headers:expect.objectContaining({Authorization:"Bearer fixture"}),
+    }));
+  });
+
   it("keeps model choices on the phone when the gateway has no shared settings endpoint",async()=>{
     const fetch=vi.fn().mockImplementation(()=>Promise.resolve(reply(legacyBoard)));
     vi.stubGlobal("fetch",fetch);
@@ -86,5 +95,13 @@ describe("OTA compatibility with installed desktop gateways",()=>{
     expect(fetch.mock.calls[0][0]).toBe("http://fixture/v1/threads/thread-a/favorite");
     expect(fetch.mock.calls[0][1].method).toBe("PUT");
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ favorite: true });
+  });
+  it("sends a selected model when creating a conversation", async () => {
+    const fetch = vi.fn().mockResolvedValue(reply({ id: "new-thread", cwd: "C:\\work", name: "Review - New", preview: null, updatedAt: 1 }));
+    vi.stubGlobal("fetch", fetch);
+    const api = new BoardApi({ baseUrl: "http://fixture", token: "fixture" });
+    await api.createThread({ cwd: "C:\\work", category: "Review", title: "New", prompt: "Start", model: "model-b" });
+    expect(fetch.mock.calls[0][0]).toBe("http://fixture/v1/threads/new");
+    expect(JSON.parse(fetch.mock.calls[0][1].body).model).toBe("model-b");
   });
 });

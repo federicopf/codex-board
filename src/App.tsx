@@ -12,7 +12,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { asCodexError, clearNotifications, createThread, archiveThread, deleteCustomer as deleteCustomerApi, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, getRateLimits, interruptTurn, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameProject as renameProjectApi, renameThread, sendMessage, setBoardConfig, setThreadFavorite } from "./api";
+import { asCodexError, clearNotifications, createThread, archiveThread, deleteCustomer as deleteCustomerApi, deleteProject as deleteProjectApi, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, getRateLimits, interruptTurn, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameProject as renameProjectApi, renameThread, sendMessage, setBoardConfig, setThreadFavorite } from "./api";
 import type { BoardNotification, ProjectCustomer } from "@codex-board/protocol";
 import { turnPreferences } from "./lib/turnSettings";
 import { setTurnSettings } from "./api";
@@ -551,8 +551,9 @@ function App() {
   function archiveCurrentProject(projectKey = project) {
     if (projectKey === ALL_PROJECTS) return;
     const projectThreads = threadsRef.current.filter((item) => item.projectKey === projectKey);
-    if (!projectThreads.length) return;
-    const label = projects.find((item) => item.key === projectKey)?.label || projectKey;
+    const projectInfo = projects.find((item) => item.key === projectKey);
+    if (!projectInfo?.cwd) return;
+    const label = projectInfo.label;
     setArchiveDialog({ kind: "project", projectKey, title: label, threadIds: projectThreads.map((thread) => thread.id) });
   }
 
@@ -566,6 +567,17 @@ function App() {
         setThreads((current) => current.filter((item) => item.id !== archiveDialog.threadId));
       } else {
         for (const threadId of archiveDialog.threadIds) await archiveThread(threadId);
+        const projectCwd = projects.find((item) => item.key === archiveDialog.projectKey)?.cwd;
+        if (!projectCwd) throw new Error("Project not found.");
+        const saved = await deleteProjectApi(projectCwd);
+        projectPathsRef.current = saved.projects;
+        projectNamesRef.current = saved.projectNames || {};
+        customersRef.current = saved.customers || [];
+        setProjectPaths(saved.projects);
+        setProjectNames(projectNamesRef.current);
+        setCustomers(customersRef.current);
+        setThreads((current) => current.filter((thread) => thread.projectKey !== archiveDialog.projectKey));
+        if (project === archiveDialog.projectKey) selectProjectBoard(ALL_PROJECTS);
         setChatThreadId(null);
       }
       setArchiveDialog(null);
@@ -884,15 +896,15 @@ function App() {
       {renamingThread && <RenameThreadDialog key={renamingThread.id} thread={renamingThread} onClose={()=>setRenamingThreadId(null)} onRename={renameConversation}/>}
       {settingsOpen && <BoardSettingsDialog approvalMode={approvalMode} onApprovalMode={setApprovalMode} onClose={() => setSettingsOpen(false)} />}
       {remoteDialog && <RemoteDialog onClose={() => setRemoteDialog(false)} />}
-      {automationsDialog && <AutomationsDialog revision={automationRevision} threads={threads} categories={categories} onClose={() => setAutomationsDialog(false)} />}
-      {newTaskDialog && <NewTaskDialog threads={threads} projects={projects.filter((item) => item.cwd)} categories={categories} defaultProjectKey={project === ALL_PROJECTS ? undefined : project} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt, imageUrls) => { const created = await createThread(cwd, category, title, prompt, imageUrls); if (customerId) assignThreadToCustomer(created.id, customerId); retainCreatedThread(created); setNewTaskDialog(false); void refresh(true); }} />}
+      {automationsDialog && <AutomationsDialog revision={automationRevision} threads={threads} customers={customers} categories={categories} onClose={() => setAutomationsDialog(false)} />}
+      {newTaskDialog && <NewTaskDialog threads={threads} projects={projects.filter((item) => item.cwd)} categories={categories} defaultProjectKey={project === ALL_PROJECTS ? undefined : project} defaultModel={turnPreferences.getSnapshot().settings.model || ""} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt, imageUrls, model) => { const created = await createThread(cwd, category, title, prompt, imageUrls, model); if (customerId) assignThreadToCustomer(created.id, customerId); retainCreatedThread(created); setNewTaskDialog(false); void refresh(true); }} />}
       {newProjectDialog && <NewProjectDialog existingPaths={projectPaths} onClose={() => setNewProjectDialog(false)} onCreate={createProject} />}
       {renamingProjectKey && projects.find((item) => item.key === renamingProjectKey) && <RenameProjectDialog key={renamingProjectKey} project={projects.find((item) => item.key === renamingProjectKey)!} onClose={() => setRenamingProjectKey(null)} onRename={(name) => renameProject(renamingProjectKey, name)} />}
       {newCustomerProjectKey && <NewCustomerDialog projectLabel={projects.find((item) => item.key === newCustomerProjectKey)?.label || "Project"} existingNames={customers.filter((customer) => customer.projectCwd.replaceAll("\\", "/").toLocaleLowerCase() === (projects.find((item) => item.key === newCustomerProjectKey)?.cwd || "").replaceAll("\\", "/").toLocaleLowerCase()).map((customer) => customer.name)} onClose={() => setNewCustomerProjectKey(null)} onCreate={createCustomer} />}
       {productTour && <ProductTour onClose={() => { localStorage.setItem("codex-board.tour.v1", "done"); setProductTour(false); }} />}
       {inboxOpen && <InboxDialog items={notifications} initialTab={inboxInitialTab} onClose={()=>setInboxOpen(false)} onReadAll={()=>void markNotificationsRead().then(()=>listNotifications().then(setNotifications))} onClear={()=>void clearNotifications().then(()=>setNotifications([]))} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item);if(!item.read)void markNotificationsRead(item.id);}} onOpen={(threadId)=>{setInboxOpen(false);setChatThreadId(threadId);const item=notifications.find(entry=>entry.threadId===threadId&&!entry.read);if(item)void markNotificationsRead(item.id);}} />}
       {resultNotification && <AutomationResultDialog notification={resultNotification} onClose={()=>setResultNotification(null)} onBackToList={()=>{setResultNotification(null);setInboxInitialTab("automations");setInboxOpen(true);}} onOpenThread={(threadId)=>{setResultNotification(null);setChatThreadId(threadId);}} />}
-      {archiveDialog && <ConfirmArchiveDialog title={archiveDialog.kind === "thread" ? "Archive “" + archiveDialog.title + "”?" : "Archive project “" + archiveDialog.title + "”?"} description={archiveDialog.kind === "thread" ? "This removes the conversation from the active board while keeping its history safely in Codex archives." : "This archives " + archiveDialog.threadIds.length + " Codex conversation" + (archiveDialog.threadIds.length === 1 ? "" : "s") + ". Their history remains available in Codex archives."} confirmLabel={archiveDialog.kind === "thread" ? "Archive conversation" : "Archive project"} busy={archiveBusy} onCancel={() => { if (!archiveBusy) setArchiveDialog(null); }} onConfirm={() => void confirmArchive()} />}
+      {archiveDialog && <ConfirmArchiveDialog title={archiveDialog.kind === "thread" ? "Archive “" + archiveDialog.title + "”?" : "Remove project “" + archiveDialog.title + "”?"} description={archiveDialog.kind === "thread" ? "This removes the conversation from the active board while keeping its history safely in Codex archives." : "This removes the project and its customers from the board, and archives " + archiveDialog.threadIds.length + " conversation" + (archiveDialog.threadIds.length === 1 ? "" : "s") + ". Files on disk and archived chat history are kept."} confirmLabel={archiveDialog.kind === "thread" ? "Archive conversation" : "Remove project"} busy={archiveBusy} onCancel={() => { if (!archiveBusy) setArchiveDialog(null); }} onConfirm={() => void confirmArchive()} />}
       {customerToDelete && <ConfirmArchiveDialog title={`Delete customer “${customerToDelete.name}”?`} description="Assigned conversations will return to the project board. Their conversation history will not be deleted." confirmLabel="Delete customer" busyLabel="Deleting…" busy={customerDeleteBusy} onCancel={() => { if (!customerDeleteBusy) setCustomerToDelete(null); }} onConfirm={() => void confirmDeleteCustomer()} />}
       <aside className="toast-stack" aria-live="polite">
         {automationAlerts.map((item) => { const thread = item.threadId ? threadsRef.current.find((candidate) => candidate.id === item.threadId) : undefined; const projectLabel = thread?.projectLabel || "Codex Board"; return <button className="completion-toast automation-alert" key={item.id} onClick={()=>{setResultNotification(item);setAutomationAlerts((current)=>current.filter((entry)=>entry.id!==item.id));if(!item.read)void markNotificationsRead(item.id);}}><span className="toast-icon">⚡</span><span><strong>{projectLabel} · Automation completed</strong><small>{item.automation?.name}</small></span><i onClick={(event)=>{event.stopPropagation();setAutomationAlerts((current)=>current.filter((entry)=>entry.id!==item.id));}}>×</i></button>; })}

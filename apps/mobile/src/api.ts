@@ -53,6 +53,7 @@ export class BoardApi {
   async setThreadFavorite(id: string, favorite: boolean) { return this.resolveBoard(await this.request<BoardConfig>(`/v1/threads/${encodeURIComponent(id)}/favorite`, { method: "PUT", body: JSON.stringify({ favorite }) })); }
   async deleteCustomer(id: string) { return this.resolveBoard(await this.request<BoardConfig>(`/v1/customers/${encodeURIComponent(id)}`, { method: "DELETE" })); }
   async renameProject(cwd: string, name: string) { return this.resolveBoard(await this.request<BoardConfig>("/v1/projects/name", { method: "PUT", body: JSON.stringify({ cwd, name }) })); }
+  async deleteProject(cwd: string) { return this.resolveBoard(await this.request<BoardConfig>("/v1/projects/remove", { method: "POST", body: JSON.stringify({ cwd }) })); }
   async updateTurnSettings(settings: TurnSettings) {
     if (this.sharedTurnSettings === null) await this.board();
     if (this.sharedTurnSettings === false) {
@@ -88,6 +89,13 @@ export class BoardApi {
     try { return await this.request<void>(`/v1/automations/${encodeURIComponent(id)}/retry`, { method: "POST" }); }
     catch (error) {
       if (error instanceof Error && /404|405/.test(error.message)) throw new Error("Aggiorna Codex Board sul PC per rilanciare le automazioni.");
+      throw error;
+    }
+  }
+  async runAutomationNow(id: string) {
+    try { return await this.request<void>(`/v1/automations/${encodeURIComponent(id)}/run`, { method: "POST" }); }
+    catch (error) {
+      if (error instanceof Error && /404|405/.test(error.message)) throw new Error("Aggiorna Codex Board sul PC per avviare manualmente le automazioni.");
       throw error;
     }
   }

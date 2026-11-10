@@ -15,6 +15,7 @@ interface MobileBoardHomeProps {
   customerId: string | null;
   customers: ProjectCustomer[];
   customerThreadCount: number;
+  customerThreadCounts: Record<string, number>;
   showProject: boolean;
   generalView: "all" | "favorites";
   onGeneralViewChange: (view: "all" | "favorites") => void;
@@ -123,7 +124,7 @@ export function MobileBoardHome(props: MobileBoardHomeProps) {
             {props.customers.length>0&&<Text style={styles.customerListLabel}>CUSTOMERS</Text>}
             {props.customers.map(customer=>{const active=customer.id===props.customerId;return <View key={customer.id} style={[styles.customerPickerRow,active&&styles.customerPickerRowSelected]}>
               <Pressable style={styles.customerRowMain} onPress={()=>chooseCustomer(()=>props.onCustomer(customer.id))} accessibilityRole="button" accessibilityState={{selected:active}}>
-                <View style={[styles.customerRowIcon,active&&styles.customerRowIconSelected]}><MobileIcon name="users" size={18} color={active?"white":colors.textMuted}/></View><View style={styles.customerRowCopy}><Text numberOfLines={1} style={styles.customerRowName}>{customer.name}</Text><Text style={styles.customerRowMeta}>Customer conversations</Text></View><Text style={styles.customerRowCount}>{customer.threadIds.length}</Text>{active&&<MobileIcon name="check" size={19} color={colors.primary}/>}
+                <View style={[styles.customerRowIcon,active&&styles.customerRowIconSelected]}><MobileIcon name="users" size={18} color={active?"white":colors.textMuted}/></View><View style={styles.customerRowCopy}><Text numberOfLines={1} style={styles.customerRowName}>{customer.name}</Text><Text style={styles.customerRowMeta}>Customer conversations</Text></View><Text style={styles.customerRowCount}>{props.customerThreadCounts[customer.id] || 0}</Text>{active&&<MobileIcon name="check" size={19} color={colors.primary}/>}
               </Pressable>
               <Pressable style={styles.customerDelete} onPress={()=>chooseCustomer(()=>props.onDeleteCustomer(customer))} accessibilityRole="button" accessibilityLabel={`Delete customer ${customer.name}`}><MobileIcon name="trash-2" size={17} color={colors.textSoft}/></Pressable>
             </View>;})}

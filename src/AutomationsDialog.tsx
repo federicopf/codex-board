@@ -1,18 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { automationOutcome, automationEditFields, automationUpdateInput, automationDateTimeValue, automationIntervalMinutes, formatAutomationInterval } from "@codex-board/protocol";
-import type { Automation, AutomationIntervalUnit, CreateAutomationInput } from "@codex-board/protocol";
+import { automationOutcome, automationEditFields, automationUpdateInput, automationDateTimeValue, automationIntervalMinutes, formatAutomationInterval, groupAutomationsByOwner } from "@codex-board/protocol";
+import type { Automation, AutomationIntervalUnit, CreateAutomationInput, ProjectCustomer } from "@codex-board/protocol";
 import { createAutomation, deleteAutomation, listAutomations, retryAutomation, setAutomationEnabled, updateAutomation } from "./api";
 import type { BoardThread } from "./types";
 import { Icon } from "./ui/Icon";
 import { RetryAutomationButton } from "./RetryAutomationButton";
+import { RunAutomationButton } from "./RunAutomationButton";
 
 type Kind = "recurringMessage" | "scheduledMessage" | "calendarMessage";
 type DialogView = "overview" | "createAutomation" | "createPipeline";
 const DAYS = [[1, "Mon"], [2, "Tue"], [3, "Wed"], [4, "Thu"], [5, "Fri"], [6, "Sat"], [0, "Sun"]] as const;
 const ALL_PROJECTS = "__all__";
-const BOARD_WIDE = "__board__";
-
-type AutomationGroup = { key: string; label: string; automations: Automation[] };
 type PipelineAction = Extract<Automation["action"], { kind: "categoryPipeline" } | { kind: "scheduledCategoryPipeline" }>;
 
 function ScheduleTaskPicker({ tasks, selectedId, onSelect }: { tasks: BoardThread[]; selectedId: string; onSelect: (id: string) => void }) {
@@ -71,7 +69,7 @@ function nextRunCopy(automation: Automation): string {
   return `Next · ${new Date(nextRun).toLocaleString([], { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}`;
 }
 
-export function AutomationsDialog({ threads, categories, onClose, revision = 0 }: { threads: BoardThread[]; categories: string[]; onClose: () => void; revision?: number }) {
+export function AutomationsDialog({ threads, customers = [], categories, onClose, revision = 0 }: { threads: BoardThread[]; customers?: ProjectCustomer[]; categories: string[]; onClose: () => void; revision?: number }) {
   const [items, setItems] = useState<Automation[]>([]);
   const [editing, setEditing] = useState<Automation | null>(null);
   const [view, setView] = useState<DialogView>("overview");
@@ -94,37 +92,24 @@ export function AutomationsDialog({ threads, categories, onClose, revision = 0 }
   const recurringMinutes = automationIntervalMinutes(Number.parseInt(intervalValue, 10), intervalUnit);
   const threadNames = useMemo(() => new Map(threads.map((thread) => [thread.id, thread.displayTitle])), [threads]);
   const threadsById = useMemo(() => new Map(threads.map((thread) => [thread.id, thread])), [threads]);
-  const groups = useMemo<AutomationGroup[]>(() => {
-    const grouped = new Map<string, AutomationGroup>();
-    for (const automation of items) {
-      const action = automation.action;
-      const pipeline = isPipelineAction(action);
-      const thread = pipeline ? null : threadsById.get(action.threadId);
-      const key = pipeline ? BOARD_WIDE : thread?.projectKey || "__unknown__";
-      const label = pipeline ? "Board-wide pipelines" : thread?.projectLabel || "Unavailable project";
-      if (projectFilter !== ALL_PROJECTS && projectFilter !== key) continue;
-      const group = grouped.get(key) || { key, label, automations: [] };
-      group.automations.push(automation);
-      grouped.set(key, group);
-    }
-    return [...grouped.values()]
-      .sort((left, right) => left.key === BOARD_WIDE ? 1 : right.key === BOARD_WIDE ? -1 : left.label.localeCompare(right.label))
-      .map((group) => ({ ...group, automations: group.automations.sort((left, right) => {
+  const allGroups = useMemo(() => {
+    const grouped = groupAutomationsByOwner(items, (id) => {
+      const thread = threadsById.get(id);
+      if (!thread) return null;
+      const customer = customers.find((item) => item.threadIds.includes(id));
+      return { projectKey: thread.projectKey, projectLabel: thread.projectLabel, customerId: customer?.id, customerName: customer?.name };
+    });
+    return grouped.map((group) => ({ ...group, automations: group.automations.sort((left, right) => {
         if (left.enabled !== right.enabled) return left.enabled ? -1 : 1;
         return (automationNextRun(left) ?? Number.MAX_SAFE_INTEGER) - (automationNextRun(right) ?? Number.MAX_SAFE_INTEGER) || left.name.localeCompare(right.name);
       }) }));
-  }, [items, projectFilter, threadsById]);
+  }, [items, threadsById, customers]);
+  const groups = allGroups.filter((group) => projectFilter === ALL_PROJECTS || group.projectKey === projectFilter);
   const projectOptions = useMemo(() => {
     const options = new Map<string, string>();
-    for (const automation of items) {
-      if (isPipelineAction(automation.action)) options.set(BOARD_WIDE, "Board-wide pipelines");
-      else {
-        const thread = threadsById.get(automation.action.threadId);
-        options.set(thread?.projectKey || "__unknown__", thread?.projectLabel || "Unavailable project");
-      }
-    }
+    for (const group of allGroups) options.set(group.projectKey, group.projectLabel);
     return [...options].sort((left, right) => left[1].localeCompare(right[1]));
-  }, [items, threadsById]);
+  }, [allGroups]);
   const activeCount = items.filter((automation) => automation.enabled).length;
   const nextDayCount = items.filter((automation) => {
     const nextRun = automationNextRun(automation);
@@ -192,8 +177,10 @@ export function AutomationsDialog({ threads, categories, onClose, revision = 0 }
       {error && <p role="alert" className="automation-form-error">{error}</p>}
       {items.length === 0 && <div className="automation-empty">No automations yet.</div>}
       {items.length > 0 && groups.length === 0 && <div className="automation-empty">No automations for this project.</div>}
-      {groups.map((group) => <section className="automation-project-group" key={group.key}><div className="automation-project-heading"><div><span className="automation-project-mark" /> <strong>{group.label}</strong></div><span>{group.automations.length}</span></div><div className="automation-cards">{group.automations.map((automation) => <article className="automation-item" key={automation.id}><div className="automation-card-top"><span className="automation-kind">{isPipeline(automation) ? "→" : automation.action.kind === "scheduledMessage" ? "◷" : "↻"}</span><span className={`automation-status${automation.enabled ? " enabled" : ""}`}>{automation.enabled ? "Active" : "Paused"}</span></div><strong className="automation-card-title">{automation.name}</strong><p>{automationCopy(automation, threadNames)}</p><em className={automation.enabled ? "" : "paused"}>{nextRunCopy(automation)}</em>{automation.runState && <span className="automation-outcome unknown">{automation.runState === "queued" ? "Queued" : "Running"}</span>}
-        {automation.lastResult ? <div className="automation-last-result"><span className={`automation-outcome ${automationOutcome(automation.lastResult.status).tone}`}>{automationOutcome(automation.lastResult.status).label}</span><p>{automation.lastResult.summary}</p></div> : automation.lastError ? <small>{automation.lastError}</small> : <span className="automation-outcome unknown">No verified result yet</span>}{automation.lastResult && automationOutcome(automation.lastResult.status).retryable && <RetryAutomationButton key={automation.lastResult.finishedAt} id={automation.id} disabled={automation.runState === "running"} onAccepted={refresh}/>}<div className="automation-card-actions"><button aria-label={automation.enabled ? `Pause ${automation.name}` : `Resume ${automation.name}`} className={automation.enabled ? "automation-toggle on" : "automation-toggle"} onClick={() => void setAutomationEnabled(automation.id, !automation.enabled).then(refresh)}><i /></button><button type="button" className="automation-edit" aria-label={`Edit ${automation.name}`} onClick={() => edit(automation)}><Icon name="edit" width={16} height={16} /> Edit</button><button type="button" className="automation-delete" aria-label={`Delete ${automation.name}`} title="Delete workflow" onClick={() => void deleteAutomation(automation.id).then(refresh)}><Icon name="trash" width={20} height={20}/></button></div></article>)}</div></section>)}
+      {groups.map((group, index) => <details className="automation-project-group" key={group.key} open={index === 0}>
+        <summary className="automation-project-heading"><div><span className="automation-project-mark" /> <strong>{group.label}</strong></div><span>{group.automations.length}</span><Icon name="chevronDown" /></summary>
+        <div className="automation-cards">{group.automations.map((automation) => <article className="automation-item" key={automation.id}><div className="automation-card-top"><span className="automation-kind">{isPipeline(automation) ? "→" : automation.action.kind === "scheduledMessage" ? "◷" : "↻"}</span><span className={`automation-status${automation.enabled ? " enabled" : ""}`}>{automation.enabled ? "Active" : "Paused"}</span></div><strong className="automation-card-title">{automation.name}</strong><p>{automationCopy(automation, threadNames)}</p><em className={automation.enabled ? "" : "paused"}>{nextRunCopy(automation)}</em>{automation.runState && <span className="automation-outcome unknown">{automation.runState === "queued" ? "Queued" : "Running"}</span>}
+        {automation.lastResult ? <div className="automation-last-result"><span className={`automation-outcome ${automationOutcome(automation.lastResult.status).tone}`}>{automationOutcome(automation.lastResult.status).label}</span><p>{automation.lastResult.summary}</p></div> : automation.lastError ? <small>{automation.lastError}</small> : <span className="automation-outcome unknown">No verified result yet</span>}{automation.lastResult && automationOutcome(automation.lastResult.status).retryable && <RetryAutomationButton key={automation.lastResult.finishedAt} id={automation.id} disabled={automation.runState === "running"} onAccepted={refresh}/>}<RunAutomationButton id={automation.id} name={automation.name} disabled={Boolean(automation.runState)} onAccepted={refresh}/><div className="automation-card-actions"><button aria-label={automation.enabled ? `Pause ${automation.name}` : `Resume ${automation.name}`} className={automation.enabled ? "automation-toggle on" : "automation-toggle"} onClick={() => void setAutomationEnabled(automation.id, !automation.enabled).then(refresh)}><i /></button><button type="button" className="automation-edit" aria-label={`Edit ${automation.name}`} onClick={() => edit(automation)}><Icon name="edit" width={16} height={16} /> Edit</button><button type="button" className="automation-delete" aria-label={`Delete ${automation.name}`} title="Delete workflow" onClick={() => void deleteAutomation(automation.id).then(refresh)}><Icon name="trash" width={20} height={20}/></button></div></article>)}</div></details>)}
     </div>}
   </section></div>;
 }

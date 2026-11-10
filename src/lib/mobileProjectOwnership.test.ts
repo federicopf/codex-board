@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectCustomer } from "@codex-board/protocol";
-import { filterCustomerBoardThreads, projectKey } from "../../apps/mobile/src/projectOwnership";
+import { customerBoardCounts, filterCustomerBoardThreads, projectKey } from "../../apps/mobile/src/projectOwnership";
 import { normalizeProjectPath } from "./projects";
 
 describe("mobile customer boards", () => {
@@ -34,5 +34,12 @@ describe("mobile customer boards", () => {
     expect(filterCustomerBoardThreads(projectThreads, projectCustomers, null).map((thread) => thread.id)).toEqual(["generic"]);
     expect(filterCustomerBoardThreads(projectThreads, projectCustomers, "a").map((thread) => thread.id)).toEqual(["owned-a"]);
     expect(filterCustomerBoardThreads(projectThreads, projectCustomers, "b").map((thread) => thread.id)).toEqual(["owned-b"]);
+    expect(customerBoardCounts(projectThreads, projectCustomers)).toEqual({ a: 1, b: 1 });
+  });
+
+  it("does not count stale or archived customer thread IDs", () => {
+    const customers: ProjectCustomer[] = [{ id: "a", name: "Amati", projectCwd: "C:/Work/Project", threadIds: ["visible", "archived", "other-project"] }];
+    const visibleProjectThreads = [{ id: "visible" }];
+    expect(customerBoardCounts(visibleProjectThreads, customers)).toEqual({ a: 1 });
   });
 });

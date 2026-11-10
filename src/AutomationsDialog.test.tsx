@@ -33,6 +33,18 @@ describe("workflow editing", () => {
     fireEvent.click(button);
     await waitFor(() => expect(deleteAutomation).toHaveBeenCalledExactlyOnceWith("stable"));
   });
+  it("separates a project's own workflows from a customer's dropdown", async () => {
+    vi.mocked(listAutomations).mockResolvedValue([
+      recurring,
+      { ...recurring, id: "customer", name: "Content check", action: { kind: "recurringMessage", threadId: "customer-thread", prompt: "Check", everyMinutes: 120, nextRunAt: 42 } },
+    ]);
+    const customerThread = { ...threads[0], id: "customer-thread", displayTitle: "Content" };
+    render(<AutomationsDialog threads={[...threads, customerThread]} customers={[{ id: "content", projectCwd: "/test", name: "Amati Content", threadIds: ["customer-thread"] }]} categories={["Review"]} onClose={vi.fn()} />);
+    await screen.findByText("Test project › Amati Content");
+    expect(screen.getByText("Test project", { selector: "summary strong" })).toBeTruthy();
+    fireEvent.click(screen.getByText("Test project › Amati Content"));
+    expect(screen.getByRole("button", { name: "Edit Content check" })).toBeTruthy();
+  });
   it("shows last-run outcome separately from schedule state and blocks duplicate retries", async () => {
     vi.mocked(listAutomations).mockResolvedValue([{ ...recurring, enabled: true, runState: "running",
       lastResult: { status: "failed", summary: "Access expired", finishedAt: 1 } }]);
@@ -42,6 +54,12 @@ describe("workflow editing", () => {
     expect(screen.getByText("Failed")).toBeTruthy();
     expect(screen.getByText("Running")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Run Daily check now" })).toHaveProperty("disabled", true);
+  });
+  it("offers a manual run even when the last result succeeded and the schedule is paused", async () => {
+    vi.mocked(listAutomations).mockResolvedValue([{ ...recurring, lastResult: { status: "success", summary: "Done", finishedAt: 20 } }]);
+    mount();
+    expect(await screen.findByRole("button", { name: "Run Daily check now" })).toHaveProperty("disabled", false);
   });
   it("prefills and updates the existing automation without recreating it", async () => {
     mount();

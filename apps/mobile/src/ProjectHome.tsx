@@ -4,7 +4,7 @@ import { colors } from "./theme";
 import { MobileIcon } from "./MobileIcon";
 import { MobileActionSheet } from "./MobileActionSheet";
 
-interface ProjectChoice { key: string; label: string; cwd: string; count: number; }
+interface ProjectChoice { key: string; label: string; cwd: string; count: number; boardCount: number; }
 export function ProjectHome({ projects, totalCount, loading, refreshing, connected, lastProject, onOpen, onRename, onArchive, onCreate, onRefresh, usage }: {
   projects: ProjectChoice[];
   totalCount: number;
@@ -35,7 +35,7 @@ export function ProjectHome({ projects, totalCount, loading, refreshing, connect
       renderItem={({item})=><View style={styles.project}>
         <Pressable style={styles.projectMain} onPress={()=>onOpen(item.key)} accessibilityRole="button" accessibilityLabel={`Open ${item.label}`}>
           <View style={styles.projectIcon}><MobileIcon name="folder" size={23} color={colors.primary}/></View>
-          <View style={styles.projectCopy}><Text style={styles.projectName} numberOfLines={1}>{item.label}</Text><Text style={styles.projectMeta}>{item.count} active {item.count===1?"task":"tasks"}</Text><Text style={styles.path} numberOfLines={1} ellipsizeMode="middle">{item.cwd}</Text></View>
+          <View style={styles.projectCopy}><Text style={styles.projectName} numberOfLines={1}>{item.label}</Text><Text style={styles.projectMeta}>{item.boardCount} project {item.boardCount===1?"task":"tasks"}{item.count>item.boardCount?` · ${item.count-item.boardCount} customer ${item.count-item.boardCount===1?"task":"tasks"}`:""}</Text><Text style={styles.path} numberOfLines={1} ellipsizeMode="middle">{item.cwd}</Text></View>
         </Pressable>
         <Pressable style={styles.projectAction} onPress={()=>setActions(item)} accessibilityRole="button" accessibilityLabel={`Actions for ${item.label}`}><MobileIcon name="more-horizontal" color={colors.textMuted}/></Pressable>
       </View>}
@@ -43,7 +43,7 @@ export function ProjectHome({ projects, totalCount, loading, refreshing, connect
     {actions&&<MobileActionSheet title={actions.label} onClose={()=>setActions(null)} actions={[
       {label:"Open project",icon:"folder",onPress:()=>onOpen(actions.key)},
       {label:"Rename project",icon:"edit-2",onPress:()=>onRename(actions)},
-      {label:`Archive ${actions.count} conversations`,icon:"archive",destructive:true,onPress:()=>onArchive(actions)},
+      {label:`Remove project${actions.count ? ` · archive ${actions.count} conversations` : ""}`,icon:"trash-2",destructive:true,onPress:()=>onArchive(actions)},
     ]}/>}
   </View>;
 }

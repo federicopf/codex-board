@@ -23,8 +23,8 @@ export async function renameThread(threadId: string, newName: string): Promise<T
 export async function archiveThread(threadId: string): Promise<void> {
   return invoke("archive_thread", { threadId });
 }
-export async function createThread(cwd: string, category: string, title: string, prompt: string, imageUrls: string[] = []): Promise<ThreadDto> {
-  return invoke<ThreadDto>("create_thread", { cwd, category, title, prompt, imageUrls: imageUrls.length ? imageUrls : null });
+export async function createThread(cwd: string, category: string, title: string, prompt: string, imageUrls: string[] = [], model?: string): Promise<ThreadDto> {
+  return invoke<ThreadDto>("create_thread", { cwd, category, title, prompt, imageUrls: imageUrls.length ? imageUrls : null, model: model || null });
 }
 export async function forkThread(threadId: string, category: string, title: string, lastTurnId?: string | null): Promise<ThreadDto> {
   return invoke<ThreadDto>("fork_thread", { threadId, category, title, lastTurnId: lastTurnId || null });
@@ -65,10 +65,12 @@ export async function setThreadFavorite(threadId: string, favorite: boolean): Pr
 export async function deleteCustomer(customerId: string): Promise<BoardConfig> { return invoke<BoardConfig>("delete_customer", { customerId }); }
 export async function setTurnSettings(settings: TurnSettings, initializeOnly = false): Promise<BoardConfig> { return invoke<BoardConfig>("set_turn_settings", { settings: { ...settings, initializeOnly } }); }
 export async function renameProject(cwd: string, name: string): Promise<BoardConfig> { return invoke<BoardConfig>("rename_project", { input: { cwd, name } }); }
+export async function deleteProject(cwd: string): Promise<BoardConfig> { return invoke<BoardConfig>("delete_project", { cwd }); }
 export async function setThreadTurnSettings(threadId: string, settings: TurnSettings): Promise<BoardConfig> { return invoke<BoardConfig>("set_thread_turn_settings", { threadId, settings }); }
 export async function listAutomations(): Promise<Automation[]> { return invoke<Automation[]>("list_automations"); }
 export async function createAutomation(input: CreateAutomationInput): Promise<Automation> { return invoke<Automation>("create_automation", { input }); }
 export async function retryAutomation(id: string): Promise<void> { return invoke("retry_automation", { id }); }
+export async function runAutomationNow(id: string): Promise<void> { return invoke("run_automation_now", { id }); }
 export async function updateAutomation(id: string, input: CreateAutomationInput): Promise<Automation> { return invoke<Automation>("update_automation", { id, input }); }
 export async function setAutomationEnabled(id: string, enabled: boolean): Promise<Automation> { return invoke<Automation>("set_automation_enabled", { id, input: { enabled } }); }
 export async function deleteAutomation(id: string): Promise<boolean> { return invoke<boolean>("delete_automation", { id }); }

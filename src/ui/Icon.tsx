@@ -17,6 +17,7 @@ export type IconName =
   | "move"
   | "plus"
   | "paperclip"
+  | "play"
   | "refresh"
   | "remote"
   | "search"
@@ -42,6 +43,7 @@ const paths: Record<IconName, ReactNode> = {
   move: <><path d="M5 9 2 12l3 3" /><path d="M9 5 12 2l3 3" /><path d="m15 19-3 3-3-3" /><path d="m19 9 3 3-3 3" /><path d="M2 12h20M12 2v20" /></>,
   plus: <path d="M12 5v14M5 12h14" />,
   paperclip: <path d="m21.4 11.6-8.5 8.5a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />,
+  play: <path d="m8 5 11 7-11 7V5Z" />,
   refresh: <><path d="M20 6v5h-5" /><path d="M4 18v-5h5" /><path d="M18.5 9A7 7 0 0 0 6 6.5L4 11M5.5 15A7 7 0 0 0 18 17.5l2-4.5" /></>,
   remote: <><path d="M5 12.5a10 10 0 0 1 14 0" /><path d="M8.5 16a5 5 0 0 1 7 0" /><circle cx="12" cy="20" r="1" fill="currentColor" stroke="none" /></>,
   search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></>,

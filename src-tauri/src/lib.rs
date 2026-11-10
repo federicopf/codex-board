@@ -85,20 +85,27 @@ async fn archive_thread(
 #[tauri::command]
 async fn create_thread(
     client: tauri::State<'_, Arc<CodexClient>>,
+    gateway: tauri::State<'_, RemoteGateway>,
     cwd: String,
     category: String,
     title: String,
     prompt: String,
     image_urls: Option<Vec<String>>,
+    model: Option<String>,
 ) -> Result<ThreadDto, CodexErrorDto> {
     let name = if category.trim().is_empty() || category == "Uncategorized" {
         title.trim().to_owned()
     } else {
         format!("{} - {}", category.trim(), title.trim())
     };
-    client
-        .create_thread(cwd, name, prompt, image_urls.unwrap_or_default())
-        .await
+    let thread = client.create_thread(cwd, name, prompt, image_urls.unwrap_or_default(), model.clone()).await?;
+    if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
+        let saved = gateway.set_thread_turn_settings(&thread.id, TurnPreferencesPatch { model: Some(model), ..Default::default() })
+            .map_err(|error| CodexErrorDto::new(codex::CodexErrorCode::RequestFailed, "Conversation created, but its model preference could not be saved").with_details(error))?;
+        client.emit_local_event("board/config/updated", serde_json::to_value(&saved)
+            .map_err(|error| CodexErrorDto::new(codex::CodexErrorCode::ProtocolError, "Could not announce conversation model").with_details(error.to_string()))?).await;
+    }
+    Ok(thread)
 }
 
 #[tauri::command]
@@ -267,6 +274,20 @@ async fn rename_project(
 }
 
 #[tauri::command]
+async fn delete_project(
+    gateway: tauri::State<'_, RemoteGateway>,
+    client: tauri::State<'_, Arc<CodexClient>>,
+    cwd: String,
+) -> Result<BoardConfig, String> {
+    let saved = gateway.delete_project(&cwd)?;
+    client.emit_local_event(
+        "board/config/updated",
+        serde_json::to_value(&saved).map_err(|error| error.to_string())?,
+    ).await;
+    Ok(saved)
+}
+
+#[tauri::command]
 async fn set_turn_settings(
     gateway: tauri::State<'_, RemoteGateway>,
     client: tauri::State<'_, Arc<CodexClient>>,
@@ -323,6 +344,11 @@ async fn create_automation(
 #[tauri::command]
 async fn retry_automation(store: tauri::State<'_, Arc<AutomationStore>>, id: String) -> Result<(), String> {
     store.retry(&id).await
+}
+
+#[tauri::command]
+async fn run_automation_now(store: tauri::State<'_, Arc<AutomationStore>>, id: String) -> Result<(), String> {
+    store.run_now(&id).await
 }
 
 #[tauri::command]
@@ -427,6 +453,7 @@ pub fn run() {
             set_thread_favorite,
             delete_customer,
             rename_project,
+            delete_project,
             set_turn_settings,
             set_thread_turn_settings,
             tailscale_status,
@@ -435,6 +462,7 @@ pub fn run() {
             create_automation,
             update_automation,
             retry_automation,
+            run_automation_now,
             set_automation_enabled,
             delete_automation,
             list_notifications,

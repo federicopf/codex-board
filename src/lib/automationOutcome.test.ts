@@ -19,6 +19,13 @@ describe("automation outcome contract", () => {
     expect(fetch).toHaveBeenCalledExactlyOnceWith("http://fixture/v1/automations/a%2F1/retry",
       expect.objectContaining({ method: "POST", headers: expect.objectContaining({ Authorization: "Bearer test" }) }));
   });
+  it("runs one automation through the authenticated backend", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    await new BoardApi({ baseUrl: "http://fixture", token: "test" }).runAutomationNow("a/1");
+    expect(fetch).toHaveBeenCalledExactlyOnceWith("http://fixture/v1/automations/a%2F1/run",
+      expect.objectContaining({ method: "POST", headers: expect.objectContaining({ Authorization: "Bearer test" }) }));
+  });
   it("explains a missing backend capability without sending fallback turns", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
     vi.stubGlobal("fetch", fetch);

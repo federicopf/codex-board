@@ -57,7 +57,7 @@ export interface RemoteHealth {
 export interface QueuedMessage { id: string; text: string; imageUrl?: string; imageUrls?: string[]; }
 export interface SendOutcome { queued: boolean; messageId?: string | null; turn?: JsonValue; }
 export interface PendingRemoteRequest { requestId: JsonValue; method: string; params: JsonValue; }
-export interface CreateThreadInput { cwd: string; category: string; title: string; prompt: string; imageUrls?: string[]; }
+export interface CreateThreadInput { cwd: string; category: string; title: string; prompt: string; imageUrls?: string[]; model?: string; }
 export interface ForkThreadInput { category: string; title: string; lastTurnId?: string | null; }
 export interface AutomationResultDetails {
   id: string;
@@ -119,6 +119,30 @@ export type AutomationAction =
     | { kind: "categoryPipeline"; fromCategory: string; toCategory: string; afterMinutes: number }
     | { kind: "scheduledCategoryPipeline"; fromCategory: string; toCategory: string; runAt: number };
 export interface Automation { id: string; name: string; enabled: boolean; action: AutomationAction; lastRunAt: number | null; lastError: string | null; lastResult?: AutomationRunResult | null; runState?: "queued" | "running" | null; }
+
+export interface AutomationOwner { projectKey: string; projectLabel: string; customerId?: string; customerName?: string; }
+export interface AutomationGroup { key: string; projectKey: string; projectLabel: string; label: string; automations: Automation[]; }
+
+export function groupAutomationsByOwner(items: Automation[], ownerFor: (threadId: string) => AutomationOwner | null): AutomationGroup[] {
+  const groups = new Map<string, AutomationGroup>();
+  for (const automation of items) {
+    const action = automation.action;
+    const pipeline = action.kind === "categoryPipeline" || action.kind === "scheduledCategoryPipeline";
+    const owner = pipeline ? null : ownerFor(action.threadId);
+    const projectKey = pipeline ? "__board__" : owner?.projectKey || "__unknown__";
+    const projectLabel = pipeline ? "Board-wide pipelines" : owner?.projectLabel || "Unavailable project";
+    const key = owner?.customerId ? `${projectKey}::customer::${owner.customerId}` : projectKey;
+    const label = pipeline ? "Board-wide pipelines" : owner ? owner.customerName ? `${owner.projectLabel} › ${owner.customerName}` : owner.projectLabel : "Unavailable project";
+    const group = groups.get(key) || { key, projectKey, projectLabel, label, automations: [] };
+    group.automations.push(automation);
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((a, b) =>
+    a.projectKey === "__board__" ? 1 : b.projectKey === "__board__" ? -1
+      : a.projectKey === b.projectKey ? (a.key === a.projectKey ? -1 : b.key === b.projectKey ? 1 : a.label.localeCompare(b.label))
+      : a.projectLabel.localeCompare(b.projectLabel)
+  );
+}
 export type CreateAutomationInput =
     | { name: string; action: { kind: "recurringMessage"; threadId: string; prompt: string; everyMinutes: number; startInMinutes: number } }
     | { name: string; action: { kind: "scheduledMessage"; threadId: string; prompt: string; runAt: number } }
