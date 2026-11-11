@@ -128,6 +128,7 @@ export interface BoardWorkspaceProps {
   customers: ProjectCustomer[];
   search: string;
   projects: ProjectInfo[];
+  archivedProjects: ProjectInfo[];
   projectStats: Record<string, { working: number }>;
   displayedCategories: string[];
   filteredThreads: BoardThread[];
@@ -163,6 +164,8 @@ export interface BoardWorkspaceProps {
   onStop: (threadId: string) => void;
 
   onDeleteProject: (projectKey: string) => void;
+  onArchiveProject: (projectKey: string) => void;
+  onRestoreProject: (projectKey: string) => void;
   onRenameProject: (projectKey: string) => void;
   onDeleteCustomer: (customerId: string) => void;
   rateLimits: JsonValue | null;
@@ -181,6 +184,7 @@ function usageDetails(value: JsonValue | null): { used: number | null; resetsAt:
 
 export function BoardWorkspace(props: BoardWorkspaceProps) {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => props.project === ALL_PROJECTS ? new Set() : new Set([props.project]));
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [sidebarActions, setSidebarActions] = useState<{ kind: "project"; key: string } | { kind: "customer"; id: string } | null>(null);
   useEffect(() => {
     if (props.project !== ALL_PROJECTS) setExpandedProjects((current) => new Set(current).add(props.project));
@@ -191,7 +195,8 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [sidebarActions]);
-  const actionProject = sidebarActions?.kind === "project" ? props.projects.find((item) => item.key === sidebarActions.key) : null;
+  const actionProject = sidebarActions?.kind === "project" ? [...props.projects, ...props.archivedProjects].find((item) => item.key === sidebarActions.key) : null;
+  const actionProjectArchived = !!actionProject && props.archivedProjects.some((item) => item.key === actionProject.key);
   const actionCustomer = sidebarActions?.kind === "customer" ? props.customers.find((item) => item.id === sidebarActions.id) : null;
   const projectLabel = props.project === ALL_PROJECTS ? "General" : props.projects.find((item) => item.key === props.project)?.label || "Project";
   const selectedCustomer = props.customers.find((customer) => customer.id === props.customerId);
@@ -229,6 +234,10 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
               </div>)}
             </div>;
           })}
+          <div className="sidebar-archive-section">
+            <button type="button" className="sidebar-archive-heading" aria-expanded={archivedOpen} onClick={() => setArchivedOpen((value) => !value)}><Icon name="archive" /><span>Archived projects</span><small>{props.archivedProjects.length}</small><Icon name="chevronDown" /></button>
+            {archivedOpen && (props.archivedProjects.length ? props.archivedProjects.map((item) => <div className="sidebar-archived-project" key={item.key}><span title={item.cwd}>{item.label}</span><button type="button" aria-label={`Restore project ${item.label}`} title="Restore project" onClick={() => props.onRestoreProject(item.key)}><Icon name="restore" /></button><button type="button" aria-label={`Actions for project ${item.label}`} title="Project actions" onClick={() => setSidebarActions({ kind: "project", key: item.key })}><Icon name="more" /></button></div>) : <p className="sidebar-archive-empty">No archived projects</p>)}
+          </div>
         </div>
         <div className="sidebar-footer">
           <button className="sidebar-link remote-link" onClick={props.onRemote}><Icon name="remote" /><span>Remote access</span><i /></button>
@@ -241,6 +250,7 @@ export function BoardWorkspace(props: BoardWorkspaceProps) {
         <section className="sidebar-actions-dialog" role="dialog" aria-modal="true" aria-label={`${actionProject ? "Project" : "Customer"} actions`}>
           <header><div><span className="eyebrow">{actionProject ? "Project" : "Customer"}</span><h2>{actionProject?.label || actionCustomer?.name}</h2></div><button type="button" className="sidebar-actions-close" aria-label="Close actions" autoFocus onClick={() => setSidebarActions(null)}>×</button></header>
           {actionProject && <button type="button" className="sidebar-actions-option" onClick={() => { setSidebarActions(null); props.onRenameProject(actionProject.key); }}><Icon name="edit" /> Rename project</button>}
+          {actionProject && <button type="button" className="sidebar-actions-option" onClick={() => { setSidebarActions(null); if (actionProjectArchived) props.onRestoreProject(actionProject.key); else props.onArchiveProject(actionProject.key); }}><Icon name={actionProjectArchived ? "restore" : "archive"} /> {actionProjectArchived ? "Restore project" : "Archive project"}</button>}
           {actionProject && <button type="button" className="sidebar-actions-option destructive" onClick={() => { setSidebarActions(null); props.onDeleteProject(actionProject.key); }}><Icon name="trash" /> Remove project</button>}
           {actionCustomer && <button type="button" className="sidebar-actions-option destructive" onClick={() => { setSidebarActions(null); props.onDeleteCustomer(actionCustomer.id); }}><Icon name="trash" /> Remove customer</button>}
         </section>

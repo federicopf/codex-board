@@ -40,6 +40,8 @@ pub struct BoardConfig {
     #[serde(default)]
     pub projects: Vec<String>,
     #[serde(default)]
+    pub archived_projects: Vec<String>,
+    #[serde(default)]
     pub project_names: HashMap<String, String>,
     #[serde(default)]
     pub customers: Vec<ProjectCustomer>,
@@ -76,6 +78,13 @@ pub struct ProjectNameInput {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectPathInput {
     pub cwd: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectArchiveInput {
+    pub cwd: String,
+    pub archived: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,6 +133,7 @@ impl Default for BoardConfig {
         Self {
             categories: Vec::new(),
             projects: Vec::new(),
+            archived_projects: Vec::new(),
             project_names: HashMap::new(),
             customers: Vec::new(),
             approval_mode: default_approval_mode(),
@@ -307,6 +317,10 @@ impl RemoteGateway {
         delete_project_config(&self.config, &self.config_path, cwd)
     }
 
+    pub fn set_project_archived(&self, cwd: &str, archived: bool) -> Result<BoardConfig, String> {
+        save_project_archive(&self.config, &self.config_path, cwd, archived)
+    }
+
     pub fn set_turn_settings(&self, patch: TurnPreferencesPatch) -> Result<BoardConfig, String> {
         save_turn_settings(&self.config, &self.config_path, patch)
     }
@@ -378,6 +392,7 @@ impl RemoteGateway {
                 .route("/v1/customers/{id}", delete(delete_customer))
                 .route("/v1/projects/name", put(put_project_name))
                 .route("/v1/projects/remove", post(remove_project))
+                .route("/v1/projects/archive", put(put_project_archive))
                 .route("/v1/turn-settings", put(put_turn_settings))
                 .route("/v1/threads/{id}/turn-settings", put(put_thread_turn_settings))
                 .route("/v1/threads/{id}/favorite", put(put_thread_favorite))
@@ -619,6 +634,7 @@ fn save_board_config(
     config.turn_settings = current.turn_settings.clone();
     config.thread_turn_settings = current.thread_turn_settings.clone();
     config.project_names = current.project_names.clone();
+    config.archived_projects = current.archived_projects.clone();
     config.favorite_thread_ids = current.favorite_thread_ids.clone();
     config.revision = current.revision.saturating_add(1);
     persist_config(path, &config)?;
@@ -699,6 +715,29 @@ fn delete_project_config(
     next.projects.retain(|project| project_identity(project) != key);
     next.customers.retain(|customer| project_identity(&customer.project_cwd) != key);
     next.project_names.remove(&key);
+    next.archived_projects.retain(|project| project != &key);
+    next.revision = current.revision.saturating_add(1);
+    persist_config(path, &next)?;
+    *current = next.clone();
+    Ok(next)
+}
+
+fn save_project_archive(
+    state: &Arc<RwLock<BoardConfig>>,
+    path: &Path,
+    cwd: &str,
+    archived: bool,
+) -> Result<BoardConfig, String> {
+    if cwd.trim().is_empty() { return Err("Project path is required".into()); }
+    let key = project_identity(cwd);
+    let mut current = state.write().map_err(|error| error.to_string())?;
+    if !current.projects.iter().any(|project| project_identity(project) == key) {
+        return Err("Project not found".into());
+    }
+    if current.archived_projects.contains(&key) == archived { return Ok(current.clone()); }
+    let mut next = current.clone();
+    if archived { next.archived_projects.push(key); }
+    else { next.archived_projects.retain(|project| project != &key); }
     next.revision = current.revision.saturating_add(1);
     persist_config(path, &next)?;
     *current = next.clone();
@@ -1207,6 +1246,19 @@ async fn remove_project(
     Ok(Json(config))
 }
 
+async fn put_project_archive(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(input): Json<ProjectArchiveInput>,
+) -> Result<Json<BoardConfig>, ApiError> {
+    authorized(&headers, &state)?;
+    let config = save_project_archive(&state.config, &state.config_path, &input.cwd, input.archived)
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error))?;
+    state.client.emit_local_event("board/config/updated", serde_json::to_value(&config)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?).await;
+    Ok(Json(config))
+}
+
 async fn put_project_name(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -1684,14 +1736,39 @@ mod tests {
         config.customers = vec![ProjectCustomer { id: "customer-1".into(), project_cwd: "c:/work/amati/".into(), name: "Content".into(), thread_ids: vec![] }];
         gateway.set_board_config(config).unwrap();
         gateway.rename_project(ProjectNameInput { cwd: "C:\\Work\\Amati".into(), name: "Amati Studio".into() }).unwrap();
+        gateway.set_project_archived("C:\\Work\\Amati", true).unwrap();
         let saved = gateway.delete_project("c:/work/amati/").unwrap();
         assert_eq!(saved.projects, vec!["C:\\Work\\Other"]);
         assert!(saved.customers.is_empty());
         assert!(!saved.project_names.contains_key("c:/work/amati"));
+        assert!(saved.archived_projects.is_empty());
         assert!(gateway.delete_project("C:\\Work\\Amati").is_err());
         let disk: BoardConfig = crate::persistence::load_json_or_default(&directory.join("board-config.json"));
         assert_eq!(disk.projects, saved.projects);
         assert!(disk.customers.is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn archived_projects_restore_without_losing_customers_and_survive_stale_board_writes() {
+        let directory = std::env::temp_dir().join(format!("codex-board-project-archive-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        let gateway = RemoteGateway::prepare(&directory).unwrap();
+        let mut config = gateway.board_config();
+        config.projects = vec!["C:\\Work\\Amati".into()];
+        config.customers = vec![ProjectCustomer { id: "customer-1".into(), project_cwd: "C:\\Work\\Amati".into(), name: "Content".into(), thread_ids: vec!["thread-1".into()] }];
+        gateway.set_board_config(config).unwrap();
+        let stale = gateway.board_config();
+        let archived = gateway.set_project_archived("c:/work/amati/", true).unwrap();
+        assert_eq!(archived.archived_projects, vec!["c:/work/amati"]);
+        assert_eq!(gateway.set_project_archived("C:\\Work\\Amati", true).unwrap().revision, archived.revision);
+        assert_eq!(gateway.set_board_config(stale).unwrap().archived_projects, archived.archived_projects);
+        let restored = gateway.set_project_archived("C:\\Work\\Amati", false).unwrap();
+        assert!(restored.archived_projects.is_empty());
+        assert_eq!(restored.customers[0].thread_ids, vec!["thread-1"]);
+        assert_eq!(restored.projects, vec!["C:\\Work\\Amati"]);
+        assert!(gateway.set_project_archived("C:\\Work\\Other", true).is_err());
+        let disk: BoardConfig = crate::persistence::load_json_or_default(&directory.join("board-config.json"));
+        assert!(disk.archived_projects.is_empty());
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -1740,6 +1817,7 @@ mod tests {
                 gateway.set_board_config(BoardConfig {
                     categories: vec![category.into()],
                     projects: vec!["C:\\work\\demo".into()],
+                    archived_projects: Vec::new(),
                     project_names: HashMap::new(),
                     customers: Vec::new(),
                     approval_mode: "auto".into(),

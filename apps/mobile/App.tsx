@@ -565,8 +565,9 @@ function MoveDialog({ thread, categories, api, onClose, onMoved }: { thread: Thr
   return <Modal transparent animationType="fade" onRequestClose={() => { if (!busy) onClose(); }}><View style={styles.modalBackdrop}><Pressable disabled={busy} style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close move task dialog"/><View style={styles.moveDialog}><View style={styles.sheetHandle} /><Text style={styles.moveEyebrow}>MOVE TASK</Text><Text style={styles.moveTitle} numberOfLines={2}>{displayTitle(thread.name, thread.preview)}</Text><Text style={styles.moveSubtitle}>Choose the next board stage.</Text><ScrollView style={styles.moveOptions}>{categories.map((category) => { const selected = category === current; return <Pressable key={category} disabled={busy || selected} style={[styles.moveOption, selected && styles.moveOptionSelected]} onPress={() => void move(category)}><View style={[styles.categoryDot, selected && styles.categoryDotSelected]} /><Text style={[styles.moveOptionText, selected && styles.moveOptionTextSelected]}>{category}</Text>{selected ? <Text style={styles.currentLabel}>CURRENT</Text> : <MobileIcon name="chevron-right" size={18} color={colors.textMuted}/>}</Pressable>; })}</ScrollView><Pressable style={styles.moveCancel} onPress={onClose}><Text style={styles.moveCancelText}>Cancel</Text></Pressable></View></View></Modal>;
 }
 
-function NewTaskModal({ api, threads, projects, projectNames, categories, defaultProjectKey, defaultModel, onClose, onCreated }: { api: BoardApi; threads: ThreadDto[]; projects: string[]; projectNames: Record<string, string>; categories: string[]; defaultProjectKey?: string; defaultModel: string; onClose: () => void; onCreated: (thread: ThreadDto) => void }) {
-  const choices = projectBoards(threads, projects, projectNames).filter((project) => project.key !== "__local__");
+function NewTaskModal({ api, threads, projects, projectNames, archivedProjects, categories, defaultProjectKey, defaultModel, onClose, onCreated }: { api: BoardApi; threads: ThreadDto[]; projects: string[]; projectNames: Record<string, string>; archivedProjects: string[]; categories: string[]; defaultProjectKey?: string; defaultModel: string; onClose: () => void; onCreated: (thread: ThreadDto) => void }) {
+  const archivedKeys = new Set(archivedProjects.map(projectKey));
+  const choices = projectBoards(threads, projects, projectNames).filter((project) => project.key !== "__local__" && !archivedKeys.has(project.key));
   const [cwd, setCwd] = useState(choices.find((project) => project.key === defaultProjectKey)?.cwd || choices[0]?.cwd || ""); const [category, setCategory] = useState(categories[0] || "Uncategorized"); const [title, setTitle] = useState(""); const [prompt, setPrompt] = useState(""); const [busy, setBusy] = useState(false);
   const [model, setModel] = useState(defaultModel);
   const [models, setModels] = useState<Array<{ id: string; name: string }>>([]);
@@ -957,14 +958,17 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   }, [projectOpen, selected]);
   const discovered = [...new Set(threads.map((thread) => categoryFromTitle(thread.name)))];
   const categories = [...(config?.categories || []), ...discovered.filter((value) => !config?.categories.includes(value))];
-  const projects = useMemo(() => projectBoards(threads, config?.projects || [], config?.projectNames || {}).map((project) => {
+  const allProjects = useMemo(() => projectBoards(threads, config?.projects || [], config?.projectNames || {}).map((project) => {
     const projectThreads = threads.filter((thread) => projectKey(thread.cwd) === project.key);
     const customers = (config?.customers || []).filter((customer) => projectKey(customer.projectCwd) === project.key);
     return { ...project, boardCount: filterCustomerBoardThreads(projectThreads, customers, null).length };
   }), [config?.projects, config?.projectNames, config?.customers, threads]);
+  const archivedKeys = new Set((config?.archivedProjects || []).map(projectKey));
+  const projects = allProjects.filter((project) => !archivedKeys.has(project.key));
+  const archivedProjects = allProjects.filter((project) => archivedKeys.has(project.key));
   const currentProjectCustomers = selectedProject === ALL_PROJECTS ? [] : (config?.customers || []).filter((customer) => projectKey(customer.projectCwd) === selectedProject);
   const currentCustomer = currentProjectCustomers.find((customer) => customer.id === selectedCustomerId) || null;
-  const projectBaseThreads = selectedProject === ALL_PROJECTS ? threads : threads.filter((thread) => projectKey(thread.cwd) === selectedProject);
+  const projectBaseThreads = selectedProject === ALL_PROJECTS ? threads.filter((thread) => !archivedKeys.has(projectKey(thread.cwd))) : threads.filter((thread) => projectKey(thread.cwd) === selectedProject);
   const favoriteIds = new Set(config?.favoriteThreadIds || []);
   const projectThreads = selectedProject === ALL_PROJECTS ? (generalView === "favorites" ? projectBaseThreads.filter((thread) => favoriteIds.has(thread.id)) : projectBaseThreads) : filterCustomerBoardThreads(projectBaseThreads, currentProjectCustomers, currentCustomer?.id || null);
   const projectThreadCount = filterCustomerBoardThreads(projectBaseThreads, currentProjectCustomers, null).length;
@@ -994,7 +998,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   }
   async function archiveProject(project: { key: string; label: string }) {
     const items = threads.filter((thread) => projectKey(thread.cwd) === project.key);
-    const cwd = projects.find((item) => item.key === project.key)?.cwd;
+    const cwd = allProjects.find((item) => item.key === project.key)?.cwd;
     if (!cwd) return;
     Alert.alert("Remove project", `Remove “${project.label}” from the board and archive ${items.length} ${items.length === 1 ? "task" : "tasks"}? Files on disk and archived chat history will be kept.`, [{ text: "Cancel", style: "cancel" }, { text: "Remove", style: "destructive", onPress: () => void (async () => {
       try {
@@ -1009,6 +1013,18 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
         await refresh();
       } catch (error) { Alert.alert("Could not remove project", error instanceof Error ? error.message : String(error)); }
     })() }]);
+  }
+  async function setProjectArchived(project: { key: string; label: string; cwd: string }, archived: boolean) {
+    try {
+      const saved = await api.setProjectArchived(project.cwd, archived);
+      setConfig(saved);
+      if (archived && selectedProject === project.key) {
+        setProjectOpen(false);
+        setSelectedProject(ALL_PROJECTS);
+        setSelectedCustomerId(null);
+        await saveSelectedBoard(ALL_PROJECTS);
+      }
+    } catch (error) { Alert.alert(archived ? "Could not archive project" : "Could not restore project", error instanceof Error ? error.message : String(error)); }
   }
   function deleteCustomer(customer: ProjectCustomer) {
     Alert.alert("Delete customer", `Remove “${customer.name}”? Assigned conversations will return to the project board; their history will remain.`, [
@@ -1084,12 +1100,14 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
       loading={loading}
       refreshing={refreshing}
       projects={projects}
-      totalCount={threads.length}
+      archivedProjects={archivedProjects}
+      totalCount={threads.filter((thread) => !archivedKeys.has(projectKey(thread.cwd))).length}
       lastProject={selectedProject}
       usage={usageSnapshot(rateLimits)}
       onOpen={selectProjectBoard}
       onRename={(project)=>setRenamingProject(project)}
       onArchive={archiveProject}
+      onSetArchived={(project, archived) => void setProjectArchived(project, archived)}
       onCreate={()=>setCreatingProject(true)}
       onRefresh={pullToRefresh}
     /> : <MobileBoardHome
@@ -1139,7 +1157,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     {automating && <AutomationManager api={api} automations={automations} threads={threads} customers={config?.customers || []} projectNames={config?.projectNames || {}} categories={categories} onClose={() => setAutomating(false)} onChanged={refresh} />}
     {creatingProject&&config&&<NewProjectModal config={config} api={api} onClose={()=>setCreatingProject(false)} onCreated={(cwd)=>{setCreatingProject(false);selectProjectBoard(projectKey(cwd));void refresh()}}/>}
     {renamingProject&&<RenameProjectModal key={projectKey(renamingProject.cwd)} project={renamingProject} api={api} onClose={()=>setRenamingProject(null)} onSaved={(saved)=>{setConfig(saved);setRenamingProject(null)}}/>}
-    {creatingTask && <NewTaskModal api={api} threads={threads} projects={config?.projects || []} projectNames={config?.projectNames || {}} categories={categories} defaultProjectKey={selectedProject === ALL_PROJECTS ? undefined : selectedProject} defaultModel={preferences.getSnapshot().settings.model || ""} onClose={() => setCreatingTask(false)} onCreated={(thread) => { setCreatingTask(false); const customerId = currentCustomer && projectKey(currentCustomer.projectCwd) === projectKey(thread.cwd) ? currentCustomer.id : null; void retainCustomerThread(thread, customerId, true); }} />}
+    {creatingTask && <NewTaskModal api={api} threads={threads} projects={config?.projects || []} projectNames={config?.projectNames || {}} archivedProjects={config?.archivedProjects || []} categories={categories} defaultProjectKey={selectedProject === ALL_PROJECTS ? undefined : selectedProject} defaultModel={preferences.getSnapshot().settings.model || ""} onClose={() => setCreatingTask(false)} onCreated={(thread) => { setCreatingTask(false); const customerId = currentCustomer && projectKey(currentCustomer.projectCwd) === projectKey(thread.cwd) ? currentCustomer.id : null; void retainCustomerThread(thread, customerId, true); }} />}
     {creatingCustomer&&config&&selectedProject!==ALL_PROJECTS&&<NewCustomerModal config={config} api={api} projectCwd={projects.find(project=>project.key===selectedProject)?.cwd||selectedProject} projectName={selectedProjectLabel} onClose={()=>setCreatingCustomer(false)} onCreated={(customer,saved)=>{setConfig(saved);setCreatingCustomer(false);setSelectedCustomerId(customer.id);setActiveCategory(null)}}/>}
     {assigningCustomerThread&&<MobileActionSheet title="Assign conversation" onClose={()=>setAssigningCustomerThread(null)} actions={[{label:"Project threads",icon:"folder",onPress:()=>{const thread=assigningCustomerThread;setAssigningCustomerThread(null);void assignThreadToCustomer(thread,null)}},...(config?.customers||[]).filter(customer=>projectKey(customer.projectCwd)===projectKey(assigningCustomerThread.cwd)).map(customer=>({label:customer.name,icon:"users" as const,onPress:()=>{const thread=assigningCustomerThread;setAssigningCustomerThread(null);void assignThreadToCustomer(thread,customer.id)}}))]}/>}
     {inboxOpen && <InboxModal api={api} items={notifications} initialTab={inboxInitialTab} onClose={()=>setInboxOpen(false)} onChanged={refresh} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item)}} onOpen={(id)=>{const thread=threads.find(item=>item.id===id);if(thread){setInboxOpen(false);openThread(thread)}}}/>}

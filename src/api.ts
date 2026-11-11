@@ -5,7 +5,7 @@ import type { BoardNotification, ProjectCustomer } from "@codex-board/protocol";
 
 export interface GatewayInfo { running: boolean; port: number; token: string; error?: string | null; }
 export interface TailscaleInfo { installed: boolean; online: boolean; dnsName?: string | null; baseUrl?: string | null; error?: string | null; }
-export interface BoardConfig { categories: string[]; projects: string[]; projectNames?: Record<string, string>; customers: ProjectCustomer[]; approvalMode: "auto" | "ask"; turnSettings: TurnSettings; threadTurnSettings?: Record<string, TurnSettings>; favoriteThreadIds?: string[]; revision: number; }
+export interface BoardConfig { categories: string[]; projects: string[]; archivedProjects?: string[]; projectNames?: Record<string, string>; customers: ProjectCustomer[]; approvalMode: "auto" | "ask"; turnSettings: TurnSettings; threadTurnSettings?: Record<string, TurnSettings>; favoriteThreadIds?: string[]; revision: number; }
 
 export async function listThreads(): Promise<ThreadDto[]> {
   return invoke<ThreadDto[]>("list_threads");
@@ -66,6 +66,7 @@ export async function deleteCustomer(customerId: string): Promise<BoardConfig> {
 export async function setTurnSettings(settings: TurnSettings, initializeOnly = false): Promise<BoardConfig> { return invoke<BoardConfig>("set_turn_settings", { settings: { ...settings, initializeOnly } }); }
 export async function renameProject(cwd: string, name: string): Promise<BoardConfig> { return invoke<BoardConfig>("rename_project", { input: { cwd, name } }); }
 export async function deleteProject(cwd: string): Promise<BoardConfig> { return invoke<BoardConfig>("delete_project", { cwd }); }
+export async function setProjectArchived(cwd: string, archived: boolean): Promise<BoardConfig> { return invoke<BoardConfig>("set_project_archived", { cwd, archived }); }
 export async function setThreadTurnSettings(threadId: string, settings: TurnSettings): Promise<BoardConfig> { return invoke<BoardConfig>("set_thread_turn_settings", { threadId, settings }); }
 export async function listAutomations(): Promise<Automation[]> { return invoke<Automation[]>("list_automations"); }
 export async function createAutomation(input: CreateAutomationInput): Promise<Automation> { return invoke<Automation>("create_automation", { input }); }

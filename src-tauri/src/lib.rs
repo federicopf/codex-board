@@ -288,6 +288,21 @@ async fn delete_project(
 }
 
 #[tauri::command]
+async fn set_project_archived(
+    gateway: tauri::State<'_, RemoteGateway>,
+    client: tauri::State<'_, Arc<CodexClient>>,
+    cwd: String,
+    archived: bool,
+) -> Result<BoardConfig, String> {
+    let saved = gateway.set_project_archived(&cwd, archived)?;
+    client.emit_local_event(
+        "board/config/updated",
+        serde_json::to_value(&saved).map_err(|error| error.to_string())?,
+    ).await;
+    Ok(saved)
+}
+
+#[tauri::command]
 async fn set_turn_settings(
     gateway: tauri::State<'_, RemoteGateway>,
     client: tauri::State<'_, Arc<CodexClient>>,
@@ -454,6 +469,7 @@ pub fn run() {
             delete_customer,
             rename_project,
             delete_project,
+            set_project_archived,
             set_turn_settings,
             set_thread_turn_settings,
             tailscale_status,

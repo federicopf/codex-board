@@ -54,6 +54,7 @@ export class BoardApi {
   async deleteCustomer(id: string) { return this.resolveBoard(await this.request<BoardConfig>(`/v1/customers/${encodeURIComponent(id)}`, { method: "DELETE" })); }
   async renameProject(cwd: string, name: string) { return this.resolveBoard(await this.request<BoardConfig>("/v1/projects/name", { method: "PUT", body: JSON.stringify({ cwd, name }) })); }
   async deleteProject(cwd: string) { return this.resolveBoard(await this.request<BoardConfig>("/v1/projects/remove", { method: "POST", body: JSON.stringify({ cwd }) })); }
+  async setProjectArchived(cwd: string, archived: boolean) { return this.resolveBoard(await this.request<BoardConfig>("/v1/projects/archive", { method: "PUT", body: JSON.stringify({ cwd, archived }) })); }
   async updateTurnSettings(settings: TurnSettings) {
     if (this.sharedTurnSettings === null) await this.board();
     if (this.sharedTurnSettings === false) {

@@ -12,7 +12,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { asCodexError, clearNotifications, createThread, archiveThread, deleteCustomer as deleteCustomerApi, deleteProject as deleteProjectApi, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, getRateLimits, interruptTurn, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameProject as renameProjectApi, renameThread, sendMessage, setBoardConfig, setThreadFavorite } from "./api";
+import { asCodexError, clearNotifications, createThread, archiveThread, deleteCustomer as deleteCustomerApi, deleteProject as deleteProjectApi, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, getRateLimits, interruptTurn, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameProject as renameProjectApi, renameThread, sendMessage, setBoardConfig, setProjectArchived as setProjectArchivedApi, setThreadFavorite } from "./api";
 import type { BoardNotification, ProjectCustomer } from "@codex-board/protocol";
 import { turnPreferences } from "./lib/turnSettings";
 import { setTurnSettings } from "./api";
@@ -59,7 +59,7 @@ import {
   renameCategory,
   saveCategoryOrder,
 } from "./lib/categoryOrder";
-import { ALL_PROJECTS, projectOptions, buildProjectMap, sameProjectPath } from "./lib/projects";
+import { ALL_PROJECTS, projectOptions, buildProjectMap, normalizeProjectPath, sameProjectPath } from "./lib/projects";
 import { buildThreadTitle, threadCategories, UNCATEGORIZED } from "./lib/threadStatus";
 import type { BoardThread, CodexError, CodexEvent, JsonValue, QueuedMessage, SequencedCodexEvent, ThreadDto, TurnSettings } from "./types";
 type JsonObject = Record<string, JsonValue>;
@@ -102,6 +102,7 @@ function App() {
   const [newProjectDialog, setNewProjectDialog] = useState(false);
   const [projectPaths, setProjectPaths] = useState<string[]>([]);
   const [projectNames, setProjectNames] = useState<Record<string, string>>({});
+  const [archivedProjectKeys, setArchivedProjectKeys] = useState<string[]>([]);
   const [renamingProjectKey, setRenamingProjectKey] = useState<string | null>(null);
   const [customers, setCustomers] = useState<ProjectCustomer[]>([]);
   const [customerToDelete, setCustomerToDelete] = useState<ProjectCustomer | null>(null);
@@ -226,6 +227,7 @@ function App() {
       setFavoriteIds(new Set(config.favoriteThreadIds || []));
       setProjectPaths(projects);
       setProjectNames(projectNamesRef.current);
+      setArchivedProjectKeys(config.archivedProjects || []);
       setApprovalMode(mode);
       boardConfigReady.current = true;
     }).catch((cause) => { if (!cancelled) { turnPreferences.unavailable(cause); setError(asCodexError(cause)); } });
@@ -341,6 +343,7 @@ function App() {
             const nextProjectNames = Object.fromEntries(Object.entries(record(config.projectNames)).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
             projectNamesRef.current = nextProjectNames;
             setProjectNames(nextProjectNames);
+            setArchivedProjectKeys(Array.isArray(config.archivedProjects) ? config.archivedProjects.filter((key): key is string => typeof key === "string") : []);
             setFavoriteIds(new Set(Array.isArray(config.favoriteThreadIds) ? config.favoriteThreadIds.filter((id): id is string => typeof id === "string") : []));
             setThreads((current) => toBoardThreads(current, nextProjectNames));
             setProjectPaths(nextProjects);
@@ -382,7 +385,7 @@ function App() {
     return () => { stopped = true; window.clearInterval(timer); };
   }, [refresh, setThreadWorking, showToast]);
 
-  const projects = useMemo(() => {
+  const allProjects = useMemo(() => {
     const raw = threads.map(({ id, name, preview, cwd, updatedAt }) => ({
       id,
       name,
@@ -392,6 +395,9 @@ function App() {
     }));
     return projectOptions(buildProjectMap(raw, projectPaths, projectNames));
   }, [projectPaths, projectNames, threads]);
+  const archivedProjectSet = useMemo(() => new Set(archivedProjectKeys.map(normalizeProjectPath)), [archivedProjectKeys]);
+  const projects = useMemo(() => allProjects.filter((item) => !archivedProjectSet.has(item.key)), [allProjects, archivedProjectSet]);
+  const archivedProjects = useMemo(() => allProjects.filter((item) => archivedProjectSet.has(item.key)), [allProjects, archivedProjectSet]);
 
   useEffect(() => {
     const discovered = threads.flatMap((thread) => thread.cwd ? [thread.cwd] : []);
@@ -428,13 +434,23 @@ function App() {
   }
 
   async function renameProject(projectKey: string, name: string) {
-    const cwd = projects.find((item) => item.key === projectKey)?.cwd;
+    const cwd = allProjects.find((item) => item.key === projectKey)?.cwd;
     if (!cwd) throw new Error("Project not found.");
     const saved = await renameProjectApi(cwd, name);
     const names = saved.projectNames || {};
     projectNamesRef.current = names;
     setProjectNames(names);
     setThreads((current) => toBoardThreads(current, names));
+  }
+
+  async function setProjectArchived(projectKey: string, archived: boolean) {
+    const cwd = allProjects.find((item) => item.key === projectKey)?.cwd;
+    if (!cwd) return;
+    try {
+      const saved = await setProjectArchivedApi(cwd, archived);
+      setArchivedProjectKeys(saved.archivedProjects || []);
+      if (archived && project === projectKey) selectProjectBoard(ALL_PROJECTS);
+    } catch (cause) { setError(asCodexError(cause)); }
   }
 
   function selectCustomerBoard(projectKey: string, nextCustomerId: string | null) {
@@ -479,7 +495,7 @@ function App() {
     persistBoardConfig(categoryOrder, approvalModeRef.current, projectPathsRef.current, next);
   }
 
-  const projectThreads = useMemo(() => project === ALL_PROJECTS ? threads : threads.filter((item) => item.projectKey === project), [project, threads]);
+  const projectThreads = useMemo(() => project === ALL_PROJECTS ? threads.filter((item) => !archivedProjectSet.has(item.projectKey)) : threads.filter((item) => item.projectKey === project), [project, threads, archivedProjectSet]);
   const visibleThreads = useMemo(() => {
     if (project === ALL_PROJECTS) return generalView === "favorites" ? projectThreads.filter((thread) => favoriteIds.has(thread.id)) : projectThreads;
     const customer = customers.find((item) => item.id === customerId);
@@ -551,7 +567,7 @@ function App() {
   function archiveCurrentProject(projectKey = project) {
     if (projectKey === ALL_PROJECTS) return;
     const projectThreads = threadsRef.current.filter((item) => item.projectKey === projectKey);
-    const projectInfo = projects.find((item) => item.key === projectKey);
+    const projectInfo = allProjects.find((item) => item.key === projectKey);
     if (!projectInfo?.cwd) return;
     const label = projectInfo.label;
     setArchiveDialog({ kind: "project", projectKey, title: label, threadIds: projectThreads.map((thread) => thread.id) });
@@ -567,7 +583,7 @@ function App() {
         setThreads((current) => current.filter((item) => item.id !== archiveDialog.threadId));
       } else {
         for (const threadId of archiveDialog.threadIds) await archiveThread(threadId);
-        const projectCwd = projects.find((item) => item.key === archiveDialog.projectKey)?.cwd;
+        const projectCwd = allProjects.find((item) => item.key === archiveDialog.projectKey)?.cwd;
         if (!projectCwd) throw new Error("Project not found.");
         const saved = await deleteProjectApi(projectCwd);
         projectPathsRef.current = saved.projects;
@@ -575,6 +591,7 @@ function App() {
         customersRef.current = saved.customers || [];
         setProjectPaths(saved.projects);
         setProjectNames(projectNamesRef.current);
+        setArchivedProjectKeys(saved.archivedProjects || []);
         setCustomers(customersRef.current);
         setThreads((current) => current.filter((thread) => thread.projectKey !== archiveDialog.projectKey));
         if (project === archiveDialog.projectKey) selectProjectBoard(ALL_PROJECTS);
@@ -821,6 +838,7 @@ function App() {
           customers={customers}
           search={search}
           projects={projects}
+          archivedProjects={archivedProjects}
           projectStats={projectStats}
           displayedCategories={displayedCategories}
           filteredThreads={filteredThreads}
@@ -855,6 +873,8 @@ function App() {
           onDelete={archiveConversation}
           onStop={(threadId) => void stopThread(threadId)}
           onDeleteProject={(projectKey) => archiveCurrentProject(projectKey)}
+          onArchiveProject={(projectKey) => void setProjectArchived(projectKey, true)}
+          onRestoreProject={(projectKey) => void setProjectArchived(projectKey, false)}
           onRenameProject={setRenamingProjectKey}
           onDeleteCustomer={(customerId) => setCustomerToDelete(customers.find((customer) => customer.id === customerId) || null)}
           onRename={(category) => setCategoryDialog({ mode: "rename", category })}
@@ -899,7 +919,7 @@ function App() {
       {automationsDialog && <AutomationsDialog revision={automationRevision} threads={threads} customers={customers} categories={categories} onClose={() => setAutomationsDialog(false)} />}
       {newTaskDialog && <NewTaskDialog threads={threads} projects={projects.filter((item) => item.cwd)} categories={categories} defaultProjectKey={project === ALL_PROJECTS ? undefined : project} defaultModel={turnPreferences.getSnapshot().settings.model || ""} onClose={() => setNewTaskDialog(false)} onCreate={async (cwd, category, title, prompt, imageUrls, model) => { const created = await createThread(cwd, category, title, prompt, imageUrls, model); if (customerId) assignThreadToCustomer(created.id, customerId); retainCreatedThread(created); setNewTaskDialog(false); void refresh(true); }} />}
       {newProjectDialog && <NewProjectDialog existingPaths={projectPaths} onClose={() => setNewProjectDialog(false)} onCreate={createProject} />}
-      {renamingProjectKey && projects.find((item) => item.key === renamingProjectKey) && <RenameProjectDialog key={renamingProjectKey} project={projects.find((item) => item.key === renamingProjectKey)!} onClose={() => setRenamingProjectKey(null)} onRename={(name) => renameProject(renamingProjectKey, name)} />}
+      {renamingProjectKey && allProjects.find((item) => item.key === renamingProjectKey) && <RenameProjectDialog key={renamingProjectKey} project={allProjects.find((item) => item.key === renamingProjectKey)!} onClose={() => setRenamingProjectKey(null)} onRename={(name) => renameProject(renamingProjectKey, name)} />}
       {newCustomerProjectKey && <NewCustomerDialog projectLabel={projects.find((item) => item.key === newCustomerProjectKey)?.label || "Project"} existingNames={customers.filter((customer) => customer.projectCwd.replaceAll("\\", "/").toLocaleLowerCase() === (projects.find((item) => item.key === newCustomerProjectKey)?.cwd || "").replaceAll("\\", "/").toLocaleLowerCase()).map((customer) => customer.name)} onClose={() => setNewCustomerProjectKey(null)} onCreate={createCustomer} />}
       {productTour && <ProductTour onClose={() => { localStorage.setItem("codex-board.tour.v1", "done"); setProductTour(false); }} />}
       {inboxOpen && <InboxDialog items={notifications} initialTab={inboxInitialTab} onClose={()=>setInboxOpen(false)} onReadAll={()=>void markNotificationsRead().then(()=>listNotifications().then(setNotifications))} onClear={()=>void clearNotifications().then(()=>setNotifications([]))} onOpenResult={(item)=>{setInboxOpen(false);setResultNotification(item);if(!item.read)void markNotificationsRead(item.id);}} onOpen={(threadId)=>{setInboxOpen(false);setChatThreadId(threadId);const item=notifications.find(entry=>entry.threadId===threadId&&!entry.read);if(item)void markNotificationsRead(item.id);}} />}

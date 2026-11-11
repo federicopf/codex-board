@@ -10,7 +10,7 @@ function workspaceProps(): BoardWorkspaceProps {
   return {
     project: "/work/amati", generalView: "all", favoriteIds: new Set(), customerId: null,
     customers: [{ id: "content", name: "Amati Content", projectCwd: "/work/amati", threadIds: [] }],
-    search: "", projects: [{ key: "/work/amati", label: "Amati", cwd: "/work/amati" }],
+    search: "", projects: [{ key: "/work/amati", label: "Amati", cwd: "/work/amati" }], archivedProjects: [],
     projectStats: {}, displayedCategories: [], filteredThreads: [], visibleThreadCount: 0,
     workingCount: 0, pendingIds: new Set(), workingIds: new Set(), queues: {}, notifications: [],
     refreshing: false, onProjectChange: noop, onGeneralViewChange: noop, onToggleFavorite: noop,
@@ -18,7 +18,7 @@ function workspaceProps(): BoardWorkspaceProps {
     onRefresh: noop, onCategories: noop, onAutomations: noop, onNewTask: noop, onNewProject: noop,
     onSettings: noop, onGuide: noop, onInbox: noop, onRemote: noop, onOpen: noop, onMove: noop,
     onFork: noop, onRename: noop, onRenameThread: noop, onDelete: noop, onStop: noop,
-    onDeleteProject: vi.fn(), onRenameProject: vi.fn(), onDeleteCustomer: vi.fn(), rateLimits: null,
+    onDeleteProject: vi.fn(), onRenameProject: vi.fn(), onArchiveProject: vi.fn(), onRestoreProject: vi.fn(), onDeleteCustomer: vi.fn(), rateLimits: null,
   };
 }
 
@@ -37,6 +37,23 @@ it("keeps customer dropdown separate from project rename and removal actions", (
   fireEvent.click(screen.getByRole("button", { name: "Actions for project Amati" }));
   fireEvent.click(screen.getByRole("button", { name: "Remove project" }));
   expect(props.onDeleteProject).toHaveBeenCalledExactlyOnceWith("/work/amati");
+});
+
+it("archives from project actions and restores from the archived dropdown", () => {
+  const props = workspaceProps();
+  const view = render(<BoardWorkspace {...props}/>);
+  fireEvent.click(screen.getByRole("button", { name: "Actions for project Amati" }));
+  fireEvent.click(screen.getByRole("button", { name: "Archive project" }));
+  expect(props.onArchiveProject).toHaveBeenCalledExactlyOnceWith("/work/amati");
+  expect(props.onDeleteProject).not.toHaveBeenCalled();
+
+  view.rerender(<BoardWorkspace {...props} projects={[]} archivedProjects={props.projects} project="__all_projects__"/>);
+  fireEvent.click(screen.getByRole("button", { name: /Archived projects/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Restore project Amati" }));
+  expect(props.onRestoreProject).toHaveBeenCalledExactlyOnceWith("/work/amati");
+  fireEvent.click(screen.getByRole("button", { name: "Actions for project Amati" }));
+  fireEvent.click(screen.getByRole("button", { name: "Restore project" }));
+  expect(props.onRestoreProject).toHaveBeenCalledTimes(2);
 });
 
 it("opens customer removal in a popup and closes it with Escape", () => {

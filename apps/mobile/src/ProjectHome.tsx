@@ -5,8 +5,9 @@ import { MobileIcon } from "./MobileIcon";
 import { MobileActionSheet } from "./MobileActionSheet";
 
 interface ProjectChoice { key: string; label: string; cwd: string; count: number; boardCount: number; }
-export function ProjectHome({ projects, totalCount, loading, refreshing, connected, lastProject, onOpen, onRename, onArchive, onCreate, onRefresh, usage }: {
+export function ProjectHome({ projects, archivedProjects, totalCount, loading, refreshing, connected, lastProject, onOpen, onRename, onArchive, onSetArchived, onCreate, onRefresh, usage }: {
   projects: ProjectChoice[];
+  archivedProjects: ProjectChoice[];
   totalCount: number;
   loading: boolean;
   refreshing: boolean;
@@ -15,14 +16,17 @@ export function ProjectHome({ projects, totalCount, loading, refreshing, connect
   onOpen: (key: string) => void;
   onRename: (project: ProjectChoice) => void;
   onArchive: (project: ProjectChoice) => void;
+  onSetArchived: (project: ProjectChoice, archived: boolean) => void;
   onCreate: () => void;
   onRefresh: () => void;
   usage: { used: number | null; resetsAt: number | null };
 }) {
   const [query,setQuery]=useState("");
   const [actions,setActions]=useState<ProjectChoice|null>(null);
+  const [archivedOpen,setArchivedOpen]=useState(false);
   const visible=projects.filter(project=>`${project.label} ${project.cwd}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const last=projects.find(project=>project.key===lastProject);
+  const archivedVisible=archivedProjects.filter(project=>`${project.label} ${project.cwd}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   return <View style={styles.page}>
     <View style={styles.header}>
       <View style={styles.heading}><Text style={styles.title}>Projects</Text><View style={styles.connection}><View style={[styles.dot,{backgroundColor:connected?colors.success:colors.warning}]}/><Text style={styles.connectionText}>{connected?"Connected to your PC":"Reconnecting…"}</Text></View></View>
@@ -39,10 +43,11 @@ export function ProjectHome({ projects, totalCount, loading, refreshing, connect
         </Pressable>
         <Pressable style={styles.projectAction} onPress={()=>setActions(item)} accessibilityRole="button" accessibilityLabel={`Actions for ${item.label}`}><MobileIcon name="more-horizontal" color={colors.textMuted}/></Pressable>
       </View>}
-      ListFooterComponent={!loading?<View style={styles.footer}><Pressable style={styles.overview} onPress={()=>onOpen("__all_projects__")} accessibilityRole="button"><MobileIcon name="grid" color={colors.textMuted}/><View style={styles.projectCopy}><Text style={styles.overviewTitle}>General</Text><Text style={styles.projectMeta}>{totalCount} tasks · All and Favorites</Text></View><MobileIcon name="chevron-right" color={colors.textMuted} size={18}/></Pressable>{usage.used!==null&&<Text style={styles.usage}>{usage.used}% usage{usage.resetsAt?` · resets ${new Date(usage.resetsAt*1000).toLocaleString()}`:""}</Text>}</View>:null}/>
+      ListFooterComponent={!loading?<View style={styles.footer}><Pressable style={styles.overview} onPress={()=>onOpen("__all_projects__")} accessibilityRole="button"><MobileIcon name="grid" color={colors.textMuted}/><View style={styles.projectCopy}><Text style={styles.overviewTitle}>General</Text><Text style={styles.projectMeta}>{totalCount} tasks · All and Favorites</Text></View><MobileIcon name="chevron-right" color={colors.textMuted} size={18}/></Pressable><Pressable style={styles.archiveHeading} onPress={()=>setArchivedOpen(value=>!value)} accessibilityRole="button" accessibilityState={{expanded:archivedOpen}}><MobileIcon name="archive" size={18} color={colors.textMuted}/><Text style={styles.archiveTitle}>Archived projects ({archivedProjects.length})</Text><MobileIcon name={archivedOpen?"chevron-up":"chevron-down"} size={18} color={colors.textMuted}/></Pressable>{archivedOpen&&(archivedVisible.length?archivedVisible.map(item=><View style={styles.archivedRow} key={item.key}><Text style={styles.archivedName} numberOfLines={1}>{item.label}</Text><Pressable style={styles.restoreButton} onPress={()=>onSetArchived(item,false)} accessibilityRole="button" accessibilityLabel={`Restore project ${item.label}`}><MobileIcon name="rotate-ccw" size={17} color={colors.primary}/><Text style={styles.restoreText}>Restore</Text></Pressable><Pressable style={styles.archivedActions} onPress={()=>setActions(item)} accessibilityRole="button" accessibilityLabel={`Actions for ${item.label}`}><MobileIcon name="more-horizontal" size={19} color={colors.textMuted}/></Pressable></View>):<Text style={styles.archiveEmpty}>{query?"No matching archived projects":"No archived projects"}</Text>)}{usage.used!==null&&<Text style={styles.usage}>{usage.used}% usage{usage.resetsAt?` · resets ${new Date(usage.resetsAt*1000).toLocaleString()}`:""}</Text>}</View>:null}/>
     {actions&&<MobileActionSheet title={actions.label} onClose={()=>setActions(null)} actions={[
-      {label:"Open project",icon:"folder",onPress:()=>onOpen(actions.key)},
+      ...(!archivedProjects.some(project=>project.key===actions.key)?[{label:"Open project",icon:"folder" as const,onPress:()=>onOpen(actions.key)}]:[]),
       {label:"Rename project",icon:"edit-2",onPress:()=>onRename(actions)},
+      {label:archivedProjects.some(project=>project.key===actions.key)?"Restore project":"Archive project",icon:archivedProjects.some(project=>project.key===actions.key)?"rotate-ccw":"archive",onPress:()=>onSetArchived(actions,!archivedProjects.some(project=>project.key===actions.key))},
       {label:`Remove project${actions.count ? ` · archive ${actions.count} conversations` : ""}`,icon:"trash-2",destructive:true,onPress:()=>onArchive(actions)},
     ]}/>}
   </View>;
@@ -54,5 +59,6 @@ const styles=StyleSheet.create({
   list:{flex:1},listContent:{paddingHorizontal:16,paddingBottom:20},resume:{minHeight:84,marginBottom:20,padding:16,flexDirection:"row",alignItems:"center",gap:10,borderRadius:18,backgroundColor:colors.primarySoft},resumeCopy:{flex:1,minWidth:0},resumeLabel:{fontSize:10,fontWeight:"700",letterSpacing:.8,color:colors.primary},resumeTitle:{marginTop:6,fontSize:16,fontWeight:"600",color:colors.text},resumeAction:{fontSize:13,fontWeight:"600",color:colors.primary},
   project:{minHeight:98,marginBottom:10,flexDirection:"row",alignItems:"center",borderWidth:1,borderColor:colors.border,borderRadius:18,backgroundColor:colors.surface},projectMain:{flex:1,minWidth:0,padding:16,paddingRight:0,flexDirection:"row",alignItems:"center",gap:13},projectIcon:{width:44,height:44,alignItems:"center",justifyContent:"center",borderRadius:13,backgroundColor:colors.primarySoft},projectCopy:{flex:1,minWidth:0},projectName:{fontSize:17,fontWeight:"600",color:colors.text},projectMeta:{marginTop:5,fontSize:12,color:colors.textMuted},path:{marginTop:5,fontSize:10,color:colors.textSoft},projectAction:{width:48,height:56,alignItems:"center",justifyContent:"center"},
   footer:{marginTop:12},overview:{minHeight:76,padding:14,flexDirection:"row",alignItems:"center",gap:13,borderRadius:16,borderWidth:1,borderColor:colors.border},overviewTitle:{fontSize:14,fontWeight:"600",color:colors.text},usage:{marginTop:16,fontSize:11,lineHeight:17,textAlign:"center",color:colors.textMuted},
+  archiveHeading:{minHeight:50,marginTop:16,paddingHorizontal:14,flexDirection:"row",alignItems:"center",gap:10,borderTopWidth:1,borderColor:colors.border},archiveTitle:{flex:1,fontSize:14,fontWeight:"600",color:colors.textMuted},archivedRow:{minHeight:54,marginBottom:6,paddingHorizontal:12,flexDirection:"row",alignItems:"center",gap:8,borderWidth:1,borderColor:colors.border,borderRadius:12,backgroundColor:colors.surface},archivedName:{flex:1,minWidth:0,fontSize:14,fontWeight:"600",color:colors.text},restoreButton:{minHeight:40,flexDirection:"row",alignItems:"center",gap:5,paddingHorizontal:4},restoreText:{fontSize:12,fontWeight:"600",color:colors.primary},archivedActions:{width:38,height:42,alignItems:"center",justifyContent:"center"},archiveEmpty:{padding:14,fontSize:12,color:colors.textMuted},
   empty:{minHeight:220,padding:24,alignItems:"center",justifyContent:"center"},emptyTitle:{marginTop:16,fontSize:17,fontWeight:"700",color:colors.text},emptyText:{marginTop:8,fontSize:13,lineHeight:20,textAlign:"center",color:colors.textMuted},emptyButton:{marginTop:16,minHeight:48,paddingHorizontal:20,justifyContent:"center",borderRadius:14,backgroundColor:colors.ink},emptyButtonText:{color:"white",fontSize:14,fontWeight:"600"},
 });

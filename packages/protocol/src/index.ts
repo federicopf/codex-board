@@ -14,6 +14,7 @@ export interface ThreadDto {
 export interface BoardConfig {
   categories: string[];
   projects: string[];
+  archivedProjects?: string[];
   projectNames?: Record<string, string>;
   customers?: ProjectCustomer[];
   approvalMode: "auto" | "ask";
