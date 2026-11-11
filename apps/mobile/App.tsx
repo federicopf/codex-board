@@ -17,6 +17,7 @@ import { BoardApi } from "./src/api";
 import { ChatDraftStore } from "@codex-board/protocol";
 import { createMobileDrafts } from "./src/chatDrafts";
 import { readChatHistoryCache, writeChatHistoryCache } from "./src/chatHistoryCache";
+import { chatMessageText } from "./src/chatMessageText";
 import { ChatKeyboardFrame } from "./src/ChatKeyboardFrame";
 import { RetryAutomationAction } from "./src/RetryAutomationAction";
 import { RunAutomationAction } from "./src/RunAutomationAction";
@@ -124,12 +125,9 @@ function conversation(thread: JsonObject | null): ChatLine[] {
       const type = string(item.type);
       const id = string(item.id) || `${lines.length}`;
       if (type === "userMessage") {
-        const content = Array.isArray(item.content)
-          ? item.content.map((part) => string(object(part).text)).filter(Boolean).join("\n")
-          : string(item.content);
-        lines.push({ id, role: "user", text: visibleUserMessage(content) });
+        lines.push({ id, role: "user", text: visibleUserMessage(chatMessageText(item)) });
       } else if (type === "agentMessage") {
-        lines.push({ id, role: "assistant", text: string(item.text) });
+        lines.push({ id, role: "assistant", text: chatMessageText(item) });
       } else if (type === "imageView" || type === "imageGeneration") {
         const imagePath = string(item.path) || string(item.savedPath);
         if (imagePath) lines.push({ id, role: "image", text: string(item.revisedPrompt) || string(item.result), imagePath, status: string(item.status) });

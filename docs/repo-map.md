@@ -71,6 +71,7 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 - `packages/protocol/src/turnSettings.ts` contiene `ThreadTurnSettingsSync`, che isola le patch per chat, ignora snapshot vecchi e attende la conferma prima dell'invio; `src/lib/turnSettings.ts` collega lo store alla UI desktop.
 - Ownership mobile: `apps/mobile/src/projectOwnership.ts` normalizza i path Windows/WSL come desktop e separa thread generici dai thread clienti; i contatori cliente usano solo thread visibili, e `ProjectHome.tsx` distingue task generici e task cliente. Test mirati in `src/lib/mobileProjectOwnership.test.ts`.
 - Refresh mobile: `apps/mobile/App.tsx` ignora gli eventi di streaming `item/*` non decisionali e gli aggiornamenti di coda/config gia applicati localmente, distanziando i refresh completi. La cache chat in memoria conserva solo gli ultimi 10 messaggi per massimo 3 thread; le pagine piu vecchie restano caricabili su scroll.
+- Testo chat mobile: `apps/mobile/src/chatMessageText.ts` legge `AgentMessage.content[]` nel formato rollout corrente e conserva il fallback legacy `text`; `App.tsx` lo usa per messaggi utente e assistente. Regressione in `src/lib/mobileChatMessageText.test.ts`.
 - Compatibilita OTA: `apps/mobile/src/api.ts` riconosce i gateway precedenti senza `turnSettings`, conserva le scelte sul telefono in SecureStore e permette di continuare col modello ereditato dalla conversazione. La sincronizzazione completa si attiva con desktop 0.2.8.
 
 ### Shared protocol
