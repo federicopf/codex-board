@@ -47,4 +47,15 @@ describe("MarkdownContent", () => {
     const html = renderToStaticMarkup(<MarkdownContent>{"![Generated](/home/codex/output/rendered.png)"}</MarkdownContent>);
     expect(html).toContain("chat-generated-image-placeholder");
   });
+
+  it("renders local development addresses as clickable links", () => {
+    const markdown = renderToStaticMarkup(<MarkdownContent>{"[Preview](http://localhost:3000)"}</MarkdownContent>);
+    expect(markdown).toContain('href="http://localhost:3000"');
+    const bare = renderToStaticMarkup(<MarkdownContent>{"Preview: localhost:3000"}</MarkdownContent>);
+    expect(bare).toContain('href="http://localhost:3000"');
+    const explicitLocal = renderToStaticMarkup(<MarkdownContent>{"[Preview](localhost:3000)"}</MarkdownContent>);
+    expect(explicitLocal).toContain('href="http://localhost:3000"');
+    const inlineCode = renderToStaticMarkup(<MarkdownContent>{"Preview: `http://localhost:3000`"}</MarkdownContent>);
+    expect(inlineCode).toContain('href="http://localhost:3000"');
+  });
 });

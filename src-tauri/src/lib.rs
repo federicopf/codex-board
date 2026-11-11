@@ -19,10 +19,16 @@ use tauri::Manager;
 
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
-    if !url.starts_with("https://") && !url.starts_with("http://") && !url.starts_with("file:///") {
+    let url = url.trim();
+    let lower = url.to_ascii_lowercase();
+    if !lower.starts_with("https://") && !lower.starts_with("http://") && !lower.starts_with("file:///") {
         return Err("Only http(s) and local file links can be opened".into());
     }
-    opener::open(url).map_err(|error| error.to_string())
+    if lower.starts_with("file:///") {
+        opener::open(url).map_err(|error| error.to_string())
+    } else {
+        opener::open_browser(url).map_err(|error| error.to_string())
+    }
 }
 
 #[tauri::command]

@@ -35,6 +35,10 @@ function localPathToFileUrl(path: string) {
   return normalized.startsWith("/") ? `file://${encodeURI(normalized)}` : `file:///${encodeURI(normalized)}`;
 }
 
+function normalizeLocalAddress(href: string): string {
+  return /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{2,5})?(?:[/?#]|$)/i.test(href) ? `http://${href}` : href;
+}
+
 function linkifyLocalPaths(source: string) {
   let fenced = false;
   return source.split("\n").map((line) => {
@@ -48,25 +52,32 @@ function linkifyLocalPaths(source: string) {
       if (!path || path.includes("\\n")) return match;
       return `${prefix}[${path}](${localPathToFileUrl(path)})`;
     });
-    const quotedUnixPaths = windowsPaths.replace(/`((?:\/mnt\/[A-Za-z](?:\/|$)|\/(?:home|tmp|workspace|workspaces|root|opt|var)\/)[^`\r\n]+)`/g, (_match, rawPath) => {
+    const quotedLocalAddresses = windowsPaths.replace(/`((?:https?:\/\/)?(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{2,5})?(?:\/[^`\r\n]*)?)`/gi, (_match, address) => {
+      return `[${address}](${normalizeLocalAddress(address)})`;
+    });
+    const quotedUnixPaths = quotedLocalAddresses.replace(/`((?:\/mnt\/[A-Za-z](?:\/|$)|\/(?:home|tmp|workspace|workspaces|root|opt|var)\/)[^`\r\n]+)`/g, (_match, rawPath) => {
       const path = rawPath.replace(/[.,;:)]+$/, "");
       return `[${path}](${localPathToFileUrl(path)})`;
     });
-    return quotedUnixPaths.replace(/(^|[\s(:])((?:\/mnt\/[A-Za-z](?:\/|$)|\/(?:home|tmp|workspace|workspaces|root|opt|var)\/)[^<>\"|?*\s]+)/g, (match, prefix, rawPath) => {
+    const linkedPaths = quotedUnixPaths.replace(/(^|[\s(:])((?:\/mnt\/[A-Za-z](?:\/|$)|\/(?:home|tmp|workspace|workspaces|root|opt|var)\/)[^<>\"|?*\s]+)/g, (match, prefix, rawPath) => {
       const path = rawPath.replace(/[.,;:)]+$/, "");
       return path ? `${prefix}[${path}](${localPathToFileUrl(path)})` : match;
+    });
+    return linkedPaths.replace(/(^|[\s(])((?:localhost|127\.0\.0\.1|\[::1\]):\d{2,5}(?:\/[^\s<>)\]]*)?)/gi, (_match, prefix, rawAddress) => {
+      const address = rawAddress.replace(/[.,;:]+$/, "");
+      return `${prefix}[${address}](http://${address})`;
     });
   }).join("\n");
 }
 
 export function MarkdownContent({ children }: { children: string }) {
-  const [pathError, setPathError] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
   const openLink = (href: string | undefined) => {
     if (!href) return;
-    setPathError(null);
+    setLinkError(null);
     if (href.startsWith("/") || /^[A-Za-z]:\\/.test(href) || href.startsWith("\\\\")) {
       void invoke("open_local_path", { path: href }).catch((error: unknown) => {
-        setPathError(error instanceof Error ? error.message : String(error));
+        setLinkError(error instanceof Error ? error.message : String(error));
       });
       return;
     }
@@ -75,18 +86,18 @@ export function MarkdownContent({ children }: { children: string }) {
       if (!localPath) return;
       if (!/^[A-Za-z]:\\/.test(localPath) && !localPath.startsWith("\\\\")) {
         void invoke("open_local_path", { path: localPath }).catch((error: unknown) => {
-          setPathError(error instanceof Error ? error.message : String(error));
+          setLinkError(error instanceof Error ? error.message : String(error));
         });
         return;
       }
-      void invoke("open_external_url", { url: href }).catch(() => {
-        window.open(href, "_blank", "noopener,noreferrer");
+      void invoke("open_external_url", { url: href }).catch((error: unknown) => {
+        setLinkError(error instanceof Error ? error.message : String(error));
       });
       return;
     }
     if (!/^https?:\/\//i.test(href)) return;
-    void invoke("open_external_url", { url: href }).catch(() => {
-      window.open(href, "_blank", "noopener,noreferrer");
+    void invoke("open_external_url", { url: href }).catch((error: unknown) => {
+      setLinkError(error instanceof Error ? error.message : String(error));
     });
   };
 
@@ -98,13 +109,13 @@ export function MarkdownContent({ children }: { children: string }) {
         components={{
           a: ({ href, children: label }) => (
             <a
-              href={href}
+              href={href ? normalizeLocalAddress(href) : href}
               title={href}
               target="_blank"
               rel="noreferrer"
               onClick={(event) => {
                 event.preventDefault();
-                openLink(href);
+                openLink(href ? normalizeLocalAddress(href) : href);
               }}
             >
               {label}
@@ -115,7 +126,7 @@ export function MarkdownContent({ children }: { children: string }) {
       >
         {linkifyLocalPaths(formatCodexDirectives(children))}
       </ReactMarkdown>
-      {pathError && <div className="local-path-error" role="alert">Could not open this file from Windows: {pathError}</div>}
+      {linkError && <div className="local-path-error" role="alert">Could not open this link from Windows: {linkError}</div>}
     </div>
   );
 }

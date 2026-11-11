@@ -74,6 +74,7 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 - Refresh mobile: `apps/mobile/App.tsx` ignora gli eventi di streaming `item/*` non decisionali e gli aggiornamenti di coda/config gia applicati localmente, distanziando i refresh completi. La cache chat in memoria conserva solo gli ultimi 10 messaggi per massimo 3 thread; le pagine piu vecchie restano caricabili su scroll.
 - Testo chat mobile: `apps/mobile/src/chatMessageText.ts` legge `AgentMessage.content[]` nel formato rollout corrente e conserva il fallback legacy `text`; `App.tsx` lo usa per messaggi utente e assistente. Regressione in `src/lib/mobileChatMessageText.test.ts`.
 - Compatibilita OTA: `apps/mobile/src/api.ts` riconosce i gateway precedenti senza `turnSettings`, conserva le scelte sul telefono in SecureStore e permette di continuare col modello ereditato dalla conversazione. La sincronizzazione completa si attiva con desktop 0.2.8.
+- Link desktop: `src/MarkdownContent.tsx` rende cliccabili i path locali e gli indirizzi localhost nella chat; `open_external_url` in `src-tauri/src/lib.rs` apre gli URL web col browser Windows predefinito e mostra gli errori all'utente. Test mirati `src/MarkdownContent.test.tsx` e `src/MarkdownContent.links.test.tsx`.
 
 ### Shared protocol
 
