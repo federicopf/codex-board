@@ -90,6 +90,41 @@ export interface BoardNotification {
   automation?: AutomationResultDetails | null;
 }
 
+export interface AutomationNotificationContext {
+  projectKey: string;
+  projectLabel: string;
+  taskLabel: string;
+  customerName?: string;
+}
+
+export function automationNotificationContext(
+  notification: BoardNotification,
+  ownerForThread: (threadId: string) => AutomationNotificationContext | null,
+): AutomationNotificationContext {
+  if (!notification.threadId) return { projectKey: "__board__", projectLabel: "Board-wide", taskLabel: "Pipeline" };
+  return ownerForThread(notification.threadId) || {
+    projectKey: "__unknown__", projectLabel: "Unavailable project", taskLabel: "Conversation unavailable",
+  };
+}
+
+export function automationNotificationScope(context: AutomationNotificationContext): string {
+  return [context.projectLabel, context.customerName, context.taskLabel].filter(Boolean).join(" › ");
+}
+
+export function groupAutomationNotifications(
+  notifications: BoardNotification[],
+  ownerForThread: (threadId: string) => AutomationNotificationContext | null,
+) {
+  const groups = new Map<string, { key: string; label: string; items: { notification: BoardNotification; context: AutomationNotificationContext }[] }>();
+  for (const notification of notifications.filter((item) => item.automation).sort((a, b) => b.createdAt - a.createdAt)) {
+    const context = automationNotificationContext(notification, ownerForThread);
+    const group = groups.get(context.projectKey) || { key: context.projectKey, label: context.projectLabel, items: [] };
+    group.items.push({ notification, context });
+    groups.set(context.projectKey, group);
+  }
+  return [...groups.values()].sort((a, b) => b.items[0].notification.createdAt - a.items[0].notification.createdAt);
+}
+
 const directiveLabels: Record<string, string> = {
   "git-stage": "Stage changes",
   "git-commit": "Commit changes",

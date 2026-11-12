@@ -612,3 +612,31 @@ body { min-width: 980px; }
 .automation-card-actions .automation-delete { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; height: 44px; padding: 0; margin: 0; border-radius: 10px; line-height: 1; }
 .automation-card-actions .automation-delete:hover { background: #FFF0ED; }
 .automation-card-actions .automation-delete:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Give each workflow enough width for its target, schedule, and latest result. */
+.automations-dialog { width: min(1080px, 96vw); }
+.automation-project-heading strong { font-size: 14px; }
+.automation-project-heading > span { min-width: 26px; height: 26px; font-size: 11px; }
+.automation-cards { grid-template-columns: repeat(auto-fit, minmax(min(100%, 350px), 1fr)); gap: 12px; }
+.automation-cards .automation-item { min-height: 0; padding: 17px; gap: 9px; }
+.automation-cards .automation-card-title { overflow: visible; white-space: normal; font-size: 16px; line-height: 1.3; }
+.automation-cards .automation-item p { min-height: 0; font-size: 12px; line-height: 1.45; }
+.automation-cards .automation-card-target { color: var(--text); font-size: 13px; font-weight: 700; }
+.automation-cards .automation-item em { margin-top: 2px; font-size: 11px; }
+.automation-cards .automation-last-result { gap: 7px; margin-top: 5px; padding-top: 10px; border-top: 1px solid var(--border); }
+.automation-cards .automation-last-result p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.automation-card-actions { margin-top: auto; }
+
+.inbox-dialog { width: min(760px, 96vw); }
+.inbox-project-group { margin-bottom: 18px; }
+.inbox-project-group h3 { display: flex; align-items: center; justify-content: space-between; margin: 0 4px 9px; color: var(--text); font-size: 14px; }
+.inbox-project-group h3 small { color: var(--muted); font-size: 11px; }
+.inbox-project-group .inbox-item { grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 14px; padding: 15px 16px; }
+.inbox-item-main { min-width: 0; display: grid; gap: 5px; }
+.inbox-project-group .inbox-item strong { font-size: 14px; }
+.inbox-context { color: var(--accent); font-size: 12px; font-weight: 700; }
+.inbox-result-summary { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.inbox-item-meta { display: grid; justify-items: end; gap: 8px; white-space: nowrap; }
+.inbox-item-meta time { font-size: 10px; }
+.inbox-item.read { opacity: 1; background: #f8f9fb; }
+.automation-result-scope { color: var(--accent); font-size: 12px; font-weight: 700; }

@@ -16,12 +16,13 @@ describe("AutomationResultDialog", () => {
       createdAt: 1_700_000_000_000,
       read: false,
       automation: { id: "a-1", name: "Daily report", result: "Found **3 records** and updated the report.", noteworthy: ["The first retry recovered a timeout."], status: "completed", durationMs: 1500 },
-    }} onClose={vi.fn()} onOpenThread={onOpenThread} />);
+    }} threads={[{ id: "t-1", name: "Review - Sales", preview: null, cwd: "/amati", updatedAt: 1, category: "Review", displayTitle: "Sales", effectiveTitle: "Review - Sales", projectKey: "/amati", projectLabel: "Amati" }]} onClose={vi.fn()} onOpenThread={onOpenThread} />);
     expect(screen.getByRole("dialog", { name: "Daily report" })).toBeTruthy();
     expect(screen.getByText("3 records")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Summary" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Worth noting" })).toBeTruthy();
     expect(screen.getByText("The first retry recovered a timeout.")).toBeTruthy();
+    expect(screen.getByText("Amati › Sales")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Open full conversation" }));
     expect(onOpenThread).toHaveBeenCalledWith("t-1");
   });

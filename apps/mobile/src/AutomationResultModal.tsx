@@ -1,13 +1,17 @@
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Markdown from "react-native-markdown-display";
-import { automationOutcome, formatCodexDirectives } from "@codex-board/protocol";
-import type { BoardNotification } from "@codex-board/protocol";
+import { automationNotificationContext, automationNotificationScope, automationOutcome, displayTitle, formatCodexDirectives } from "@codex-board/protocol";
+import type { BoardNotification, ProjectCustomer, ThreadDto } from "@codex-board/protocol";
 import { colors, radius, shadows, spacing } from "./theme";
 import { MobileIcon } from "./MobileIcon";
 import { RetryAutomationAction } from "./RetryAutomationAction";
+import { projectKey } from "./projectOwnership";
 
-export function AutomationResultModal({ notification, onClose, onOpenThread, onBackToList, onRetry }: {
+export function AutomationResultModal({ notification, threads, customers, projectNames, onClose, onOpenThread, onBackToList, onRetry }: {
   notification: BoardNotification;
+  threads: ThreadDto[];
+  customers: ProjectCustomer[];
+  projectNames: Record<string, string>;
   onClose: () => void;
   onOpenThread: (threadId: string) => void;
   onBackToList?: () => void;
@@ -17,6 +21,14 @@ export function AutomationResultModal({ notification, onClose, onOpenThread, onB
   if (!result) return null;
   const outcome = automationOutcome(result.status);
   const failed = outcome.tone !== "success";
+  const context = automationNotificationContext(notification, (id) => {
+    const thread = threads.find((item) => item.id === id);
+    if (!thread) return null;
+    const key = projectKey(thread.cwd);
+    const customer = customers.find((item) => item.threadIds.includes(id));
+    const pathLabel = (thread.cwd || "Local project").split(/[\\/]/).filter(Boolean).at(-1) || "Local project";
+    return { projectKey: key, projectLabel: projectNames[key] || pathLabel, taskLabel: displayTitle(thread.name, thread.preview), customerName: customer?.name };
+  });
   return (
     <Modal transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
@@ -24,7 +36,7 @@ export function AutomationResultModal({ notification, onClose, onOpenThread, onB
         <View style={styles.dialog}>
           <View style={styles.header}>
             <View style={[styles.statusIcon,failed&&styles.statusIconFailed,outcome.tone==="unknown"&&{backgroundColor:"#FFF6DD"}]}><MobileIcon name={outcome.tone === "unknown" ? "help-circle" : failed ? "alert-circle" : "check-circle"} size={20} color={outcome.tone==="unknown"?"#796026":failed?colors.danger:colors.success}/></View>
-            <View style={styles.headerCopy}><Text style={styles.eyebrow}>AUTOMATION RESULT</Text><Text style={styles.title}>{result.name}</Text><Text style={styles.meta}>{outcome.label}{result.durationMs?` · ${Math.max(1,Math.round(result.durationMs/1000))}s`:""}</Text></View>
+            <View style={styles.headerCopy}><Text style={styles.eyebrow}>AUTOMATION RESULT</Text><Text style={styles.title}>{result.name}</Text><Text style={styles.scope}>{automationNotificationScope(context)}</Text><Text style={styles.meta}>{outcome.label}{result.durationMs?` · ${Math.max(1,Math.round(result.durationMs/1000))}s`:""}</Text></View>
             <Pressable hitSlop={10} style={styles.close} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close result"><MobileIcon name="x" size={22} color={colors.textMuted}/></Pressable>
           </View>
           <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
@@ -54,7 +66,7 @@ const styles=StyleSheet.create({
   dialog:{maxHeight:"78%",overflow:"hidden",borderRadius:radius.xl,backgroundColor:colors.surface,...shadows.card},
   header:{padding:spacing.lg,flexDirection:"row",alignItems:"center",gap:spacing.md,borderBottomWidth:StyleSheet.hairlineWidth,borderColor:colors.border},
   statusIcon:{width:42,height:42,alignItems:"center",justifyContent:"center",borderRadius:13,backgroundColor:"#E8F8F0"},statusIconFailed:{backgroundColor:"#FFF0ED"},statusSymbol:{color:colors.success,fontSize:18,fontWeight:"800"},statusSymbolFailed:{color:colors.danger},
-  headerCopy:{minWidth:0,flex:1},eyebrow:{color:colors.primary,fontSize:8,fontWeight:"800",letterSpacing:1},title:{marginTop:4,color:colors.text,fontSize:18,fontWeight:"800",letterSpacing:-.5},meta:{marginTop:4,color:colors.textMuted,fontSize:9},close:{width:48,height:48,alignItems:"center",justifyContent:"center",borderRadius:11,backgroundColor:colors.surfaceMuted},closeText:{color:colors.textMuted,fontSize:23,lineHeight:25},
+  headerCopy:{minWidth:0,flex:1},eyebrow:{color:colors.primary,fontSize:8,fontWeight:"800",letterSpacing:1},title:{marginTop:4,color:colors.text,fontSize:18,fontWeight:"800",letterSpacing:-.5},scope:{marginTop:5,color:colors.primary,fontSize:12,lineHeight:17,fontWeight:"700"},meta:{marginTop:4,color:colors.textMuted,fontSize:10},close:{width:48,height:48,alignItems:"center",justifyContent:"center",borderRadius:11,backgroundColor:colors.surfaceMuted},closeText:{color:colors.textMuted,fontSize:23,lineHeight:25},
   body:{maxHeight:390},bodyContent:{padding:spacing.xl},reportSection:{},noteworthySection:{marginTop:spacing.lg,paddingTop:spacing.lg,borderTopWidth:StyleSheet.hairlineWidth,borderColor:colors.border},sectionHeading:{marginBottom:spacing.sm,color:colors.textMuted,fontSize:9,fontWeight:"800",letterSpacing:1},noteItem:{marginTop:6,color:colors.text,fontSize:12,lineHeight:18},emptyNotes:{color:colors.textMuted,fontSize:12},footer:{padding:spacing.md,flexDirection:"row",flexWrap:"wrap",justifyContent:"flex-end",gap:spacing.sm,borderTopWidth:StyleSheet.hairlineWidth,borderColor:colors.border},secondary:{minHeight:42,paddingHorizontal:spacing.lg,alignItems:"center",justifyContent:"center",borderWidth:1,borderColor:colors.border,borderRadius:radius.md},secondaryText:{color:colors.text,fontSize:11,fontWeight:"700"},primary:{minHeight:42,paddingHorizontal:spacing.lg,alignItems:"center",justifyContent:"center",borderRadius:radius.md,backgroundColor:colors.ink},primaryText:{color:"white",fontSize:11,fontWeight:"700"},
 });
 

@@ -1,10 +1,13 @@
-import { automationOutcome } from "@codex-board/protocol";
+import { automationNotificationContext, automationNotificationScope, automationOutcome } from "@codex-board/protocol";
 import { RetryAutomationButton } from "./RetryAutomationButton";
-import type { BoardNotification } from "@codex-board/protocol";
+import type { BoardNotification, ProjectCustomer } from "@codex-board/protocol";
 import { MarkdownContent } from "./MarkdownContent";
+import type { BoardThread } from "./types";
 
-export function AutomationResultDialog({ notification, onClose, onOpenThread, onBackToList }: {
+export function AutomationResultDialog({ notification, threads = [], customers = [], onClose, onOpenThread, onBackToList }: {
   notification: BoardNotification;
+  threads?: BoardThread[];
+  customers?: ProjectCustomer[];
   onClose: () => void;
   onOpenThread: (threadId: string) => void;
   onBackToList?: () => void;
@@ -13,6 +16,12 @@ export function AutomationResultDialog({ notification, onClose, onOpenThread, on
   if (!result) return null;
   const outcome = automationOutcome(result.status);
   const failed = outcome.tone !== "success";
+  const context = automationNotificationContext(notification, (id) => {
+    const thread = threads.find((item) => item.id === id);
+    if (!thread) return null;
+    const customer = customers.find((item) => item.threadIds.includes(id));
+    return { projectKey: thread.projectKey, projectLabel: thread.projectLabel, taskLabel: thread.displayTitle, customerName: customer?.name };
+  });
   return (
     <div className="dialog-backdrop automation-result-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="automation-result-dialog" role="dialog" aria-modal="true" aria-labelledby="automation-result-title">
@@ -21,6 +30,7 @@ export function AutomationResultDialog({ notification, onClose, onOpenThread, on
           <div>
             <span className="eyebrow">Automation result</span>
             <h2 id="automation-result-title">{result.name}</h2>
+            <p className="automation-result-scope">{automationNotificationScope(context)}</p>
             <p>{outcome.label}{result.durationMs ? ` · ${Math.max(1, Math.round(result.durationMs / 1000))}s` : ""}</p>
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Close">×</button>

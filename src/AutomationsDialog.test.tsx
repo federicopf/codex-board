@@ -24,6 +24,12 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("workflow editing", () => {
+  it("shows the linked task separately from the schedule", async () => {
+    vi.mocked(listAutomations).mockResolvedValue([{ ...recurring, action: { kind: "calendarMessage", threadId: "t", prompt: "Check", weekdays: [1], minuteOfDay: 540, timezoneOffsetMinutes: 0, nextRunAt: 100 } }]);
+    mount();
+    expect(await screen.findByText("Task · Test")).toBeTruthy();
+    expect(screen.getByText("Mon · 09:00")).toBeTruthy();
+  });
   it("uses an accessible trash icon without a visible Delete label", async () => {
     vi.mocked(deleteAutomation).mockResolvedValue(true);
     mount();
