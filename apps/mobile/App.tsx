@@ -18,6 +18,7 @@ import { ChatDraftStore } from "@codex-board/protocol";
 import { createMobileDrafts } from "./src/chatDrafts";
 import { readChatHistoryCache, writeChatHistoryCache } from "./src/chatHistoryCache";
 import { chatMessageText } from "./src/chatMessageText";
+import { reconcilePendingChatMessages, type PendingChatMessage } from "./src/chatPendingMessages";
 import { ChatKeyboardFrame } from "./src/ChatKeyboardFrame";
 import { RetryAutomationAction } from "./src/RetryAutomationAction";
 import { RunAutomationAction } from "./src/RunAutomationAction";
@@ -327,7 +328,7 @@ function RequestCard({ request, api, onDone }: { request: PendingRemoteRequest; 
   </View>;
 }
 
-function MobileChatComposer({ threadId, api, working, preferences, onChanged, onQueueChanged, drafts }: { threadId: string; api: BoardApi; working: boolean; preferences: ThreadTurnSettingsSync; onChanged: () => void; onQueueChanged: () => void; drafts: ChatDraftStore }) {
+function MobileChatComposer({ threadId, api, working, preferences, onChanged, onQueueChanged, onPending, onSendFinished, drafts }: { threadId: string; api: BoardApi; working: boolean; preferences: ThreadTurnSettingsSync; onChanged: () => void; onQueueChanged: () => void; onPending: (id: string, text: string, imageCount: number) => void; onSendFinished: (id: string, queued: boolean) => void; drafts: ChatDraftStore }) {
   const insets = useSafeAreaInsets();
   const subscribeDraft = useCallback((listener: () => void) => drafts.subscribe(threadId, listener), [drafts, threadId]);
   const draftSnapshot = useCallback(() => drafts.getSnapshot(threadId), [drafts, threadId]);
@@ -359,14 +360,18 @@ function MobileChatComposer({ threadId, api, working, preferences, onChanged, on
     const text = draft.trim();
     if ((!text && attachments.length === 0) || sendingRef.current || !draftReady) return;
     sendingRef.current = true; setBusy(true);
+    let pendingId: string | null = null;
     try {
       const confirmed = await threadPreferences.flush();
       if (!confirmed.model && api.sharedTurnSettings !== false) { setActiveTool("model"); return; }
+      pendingId = `pending-${Date.now()}-${Math.random()}`;
+      onPending(pendingId, text, attachments.length);
       const outcome = await api.send(threadId, text, attachments.map((attachment) => attachment.dataUrl), confirmed.model ? { ...confirmed, mode: workMode } : undefined);
+      onSendFinished(pendingId, outcome.queued);
       if (outcome.queued) onQueueChanged();
       drafts.accepted(threadId, saved); onChanged();
     }
-    catch (error) { Alert.alert("Could not send", error instanceof Error ? error.message : String(error)); }
+    catch (error) { if (pendingId) onSendFinished(pendingId, true); Alert.alert("Could not send", error instanceof Error ? error.message : String(error)); }
     finally { sendingRef.current = false; setBusy(false); }
   }
 
@@ -427,6 +432,7 @@ function Chat({ thread, projectName, api, queue, requests, eventRevision, prefer
   const [historyLoading, setHistoryLoading] = useState(!loaded);
   const [historyRefreshing, setHistoryRefreshing] = useState(false);
   const [historyLoadingOlder, setHistoryLoadingOlder] = useState(false);
+  const [pendingSent, setPendingSent] = useState<PendingChatMessage[]>([]);
   const hasHistory = useRef(Boolean(loaded));
   const loadedRef = useRef(loaded);
   const loadingOlderRef = useRef(false);
@@ -434,7 +440,10 @@ function Chat({ thread, projectName, api, queue, requests, eventRevision, prefer
   const historyRequest = useRef(0);
   const historyNetworkPendingRef = useRef(false);
   const lines = useMemo(() => conversation(loaded), [loaded]);
-  const timeline = useMemo(() => [...lines].reverse(), [lines]);
+  const timeline = useMemo(() => [
+    ...pendingSent.map((message): ChatLine => ({ id: message.id, role: "user", text: message.text || `${message.imageCount} image${message.imageCount === 1 ? "" : "s"} attached` })).reverse(),
+    ...lines.slice().reverse(),
+  ], [lines, pendingSent]);
   const refresh = useCallback(() => {
     const request = ++historyRequest.current;
     historyNetworkPendingRef.current = true;
@@ -444,6 +453,7 @@ function Chat({ thread, projectName, api, queue, requests, eventRevision, prefer
         if (request !== historyRequest.current) return;
         const merged = loadedRef.current?._staleCache === true ? next : mergeThreadPage(loadedRef.current, next);
         rememberThread(thread.id, merged); loadedRef.current = merged; hasHistory.current = true; setLoaded(merged); setHistoryError(null);
+        setPendingSent(current => reconcilePendingChatMessages(current, merged));
         void writeChatHistoryCache(api.historyCacheScope(), thread.id, merged);
       })
       .catch((error) => { if (request === historyRequest.current) setHistoryError(error instanceof Error ? error.message : String(error)); })
@@ -479,6 +489,7 @@ function Chat({ thread, projectName, api, queue, requests, eventRevision, prefer
       .then((page) => {
         const merged = mergeThreadPage(loadedRef.current, page);
         rememberThread(thread.id, merged); loadedRef.current = merged; hasHistory.current = true; setLoaded(merged);
+        setPendingSent(current => reconcilePendingChatMessages(current, merged));
       })
       .catch((error) => Alert.alert("Could not load older messages", error instanceof Error ? error.message : String(error)))
       .finally(() => { loadingOlderRef.current = false; setHistoryLoadingOlder(false); });
@@ -486,6 +497,20 @@ function Chat({ thread, projectName, api, queue, requests, eventRevision, prefer
   useEffect(refresh, [refresh]);
   useEffect(() => { if (eventRevision > 0) refresh(); }, [eventRevision, refresh]);
   useEffect(() => () => { historyRequest.current += 1; }, []);
+  const onPending = useCallback((id: string, text: string, imageCount: number) => {
+    const pagination = object(loadedRef.current?._pagination);
+    const messages = Array.isArray(loadedRef.current?.messages) ? loadedRef.current.messages : [];
+    const lastIndex = object(messages.at(-1)).index;
+    const afterIndex = typeof pagination.total === "number" ? pagination.total : typeof lastIndex === "number" ? lastIndex + 1 : 0;
+    setPendingSent(current => [...current, { id, text, imageCount, afterIndex, accepted: false }]);
+  }, []);
+  const onSendFinished = useCallback((id: string, queued: boolean) => {
+    if (queued) setPendingSent(current => current.filter(message => message.id !== id));
+    else {
+      setPendingSent(current => current.map(message => message.id === id ? { ...message, accepted: true } : message));
+      refresh();
+    }
+  }, [refresh]);
 
   const turnId = activeTurnId(loaded);
   return <ChatKeyboardFrame>
@@ -502,7 +527,7 @@ function Chat({ thread, projectName, api, queue, requests, eventRevision, prefer
       {queue.length > 0 && <View style={styles.queueBox}><Text style={styles.requestTitle}>{queue.length} queued</Text>{queue.map((message, index) => { const count = message.imageUrls?.length || Number(Boolean(message.imageUrl)); return <View key={message.id} style={styles.queueRow}><Text style={styles.queueIndex}>{index + 1}</Text><Text style={styles.queueText}>{message.text || `${count} image${count === 1 ? "" : "s"} attached`}</Text><Pressable onPress={() => void api.removeQueued(thread.id, message.id).then(() => { onQueueChanged(); onChanged(); })}><MobileIcon name="x" size={18} color={colors.textMuted}/></Pressable></View>; })}</View>}
       {requests.map((request) => <RequestCard key={JSON.stringify(request.requestId)} request={request} api={api} onDone={onChanged} />)}
     </>} />
-    <View style={{ backgroundColor: "white" }}><MobileChatComposer drafts={drafts} key={thread.id} threadId={thread.id} api={api} working={Boolean(turnId)} preferences={preferences} onChanged={onChanged} onQueueChanged={onQueueChanged} /></View>
+    <View style={{ backgroundColor: "white" }}><MobileChatComposer drafts={drafts} key={thread.id} threadId={thread.id} api={api} working={Boolean(turnId)} preferences={preferences} onChanged={onChanged} onQueueChanged={onQueueChanged} onPending={onPending} onSendFinished={onSendFinished} /></View>
     {actionsOpen&&<MobileActionSheet title="Conversation" onClose={()=>setActionsOpen(false)} actions={[
       {label:"Rename conversation",icon:"edit-2",onPress:onRename},
       {label:"Fork conversation",icon:"git-branch",onPress:onFork},
