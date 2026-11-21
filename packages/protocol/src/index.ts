@@ -1,5 +1,6 @@
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export { defaultTurnSettings, TurnSettingsSync, ThreadTurnSettingsSync, type TurnSettingsSnapshot } from "./turnSettings";
+export { projectSetupPreview, type CreateProjectInput } from "./projectSetup";
 
 export interface ThreadDto {
   id: string;

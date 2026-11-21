@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { CodexError, CodexEvent, CodexThread, JsonValue, QueuedMessage, SendOutcome, ThreadDto, TurnSettings } from "./types";
-import type { Automation, CreateAutomationInput } from "@codex-board/protocol";
+import type { Automation, CreateAutomationInput, CreateProjectInput } from "@codex-board/protocol";
 import type { BoardNotification, ProjectCustomer } from "@codex-board/protocol";
 
 export interface GatewayInfo { running: boolean; port: number; token: string; error?: string | null; }
@@ -61,6 +61,7 @@ export async function getTailscaleStatus(): Promise<TailscaleInfo> { return invo
 export async function configureTailscaleServe(): Promise<TailscaleInfo> { return invoke<TailscaleInfo>("configure_tailscale_serve"); }
 export async function getBoardConfig(): Promise<BoardConfig> { return invoke<BoardConfig>("get_board_config"); }
 export async function setBoardConfig(config: BoardConfig): Promise<BoardConfig> { return invoke<BoardConfig>("set_board_config", { config }); }
+export async function createProject(input: CreateProjectInput): Promise<{ cwd: string; config: BoardConfig }> { return invoke("create_project", { input }); }
 export async function setThreadFavorite(threadId: string, favorite: boolean): Promise<BoardConfig> { return invoke<BoardConfig>("set_thread_favorite", { threadId, favorite }); }
 export async function deleteCustomer(customerId: string): Promise<BoardConfig> { return invoke<BoardConfig>("delete_customer", { customerId }); }
 export async function setTurnSettings(settings: TurnSettings, initializeOnly = false): Promise<BoardConfig> { return invoke<BoardConfig>("set_turn_settings", { settings: { ...settings, initializeOnly } }); }

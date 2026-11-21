@@ -14,6 +14,7 @@ Codex Board is an unofficial, open-source board and chat client for local Codex 
 - Native conversation forks from cards or chat, copying the complete history or branching from any completed turn on desktop and mobile.
 - Rename conversations from cards or chat on desktop and mobile while preserving their category, project and history.
 - New Codex tasks can be created from desktop or mobile, with project, category, title and first message.
+- Create a project folder from desktop or mobile using a Windows path or a WSL path relative to `/var/www/`; optionally continue straight to a new chat. WSL projects are registered with their `\\wsl$\<distribution>\var\www\...` path.
 - Backend-owned FIFO follow-up queue shared by desktop and mobile and persisted across restarts.
 - Automatic or manual command, file-change and permission approvals.
 - Working indicators on cards and a persistent in-app Inbox for completions, errors and approval requests.

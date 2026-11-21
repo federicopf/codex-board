@@ -9,9 +9,9 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Markdown from "react-native-markdown-display";
 import {
-  automationOutcome, automationEditFields, automationUpdateInput, automationDateTimeValue, automationIntervalMinutes, categoryFromTitle, displayTitle as formatTaskTitle, formatAutomationInterval, formatCodexDirectives, groupAutomationsByOwner, parsePairingPayload, threadNameWithTitle, ThreadTurnSettingsSync,
+  automationOutcome, automationEditFields, automationUpdateInput, automationDateTimeValue, automationIntervalMinutes, categoryFromTitle, displayTitle as formatTaskTitle, formatAutomationInterval, formatCodexDirectives, groupAutomationsByOwner, parsePairingPayload, projectSetupPreview, threadNameWithTitle, ThreadTurnSettingsSync,
   type Automation, type BoardConfig, type BoardNotification, type ProjectCustomer, type CreateAutomationInput, type JsonValue, type PairingCredential,
-  type PendingRemoteRequest, type QueuedMessage, type ThreadDto, type TurnSettings,
+  type CreateProjectInput, type PendingRemoteRequest, type QueuedMessage, type ThreadDto, type TurnSettings,
 } from "@codex-board/protocol";
 import { BoardApi } from "./src/api";
 import { ChatDraftStore } from "@codex-board/protocol";
@@ -631,12 +631,34 @@ function NewTaskModal({ api, threads, projects, projectNames, archivedProjects, 
     <Pressable disabled={busy || uploading || !cwd || !title.trim() || !prompt.trim() || !model} style={[styles.primaryButton, (busy || uploading || !cwd || !title.trim() || !prompt.trim() || !model) && styles.disabled]} onPress={() => void create()}>{busy ? <ActivityIndicator color="white" /> : <Text style={styles.primaryButtonText}>Create and start</Text>}</Pressable></ScrollView></SafeAreaView></Modal>;
 }
 
-function NewProjectModal({ config, api, onClose, onCreated }: { config: BoardConfig; api: BoardApi; onClose: () => void; onCreated: (cwd: string) => void }) {
-  const [cwd, setCwd] = useState("");
+function NewProjectModal({ config, api, onClose, onCreated }: { config: BoardConfig; api: BoardApi; onClose: () => void; onCreated: (cwd: string, saved: BoardConfig, openChat: boolean) => void }) {
+  const [kind, setKind] = useState<CreateProjectInput["kind"]>("windows");
+  const [path, setPath] = useState("");
+  const [distribution, setDistribution] = useState("Debian");
   const [busy, setBusy] = useState(false);
-  const duplicate = config.projects.some((path) => projectKey(path) === projectKey(cwd));
-  async function create() { const path = cwd.trim(); if (!path || duplicate) return; setBusy(true); try { await api.updateBoard({ ...config, projects: [...config.projects, path] }); onCreated(path); } catch (error) { Alert.alert("Could not create project", error instanceof Error ? error.message : String(error)); } finally { setBusy(false); } }
-  return <Modal animationType="slide" onRequestClose={onClose}><SafeAreaView style={styles.page}><View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Cancel new project" style={styles.chatBackButton} onPress={onClose}><MobileIcon name="x" size={24} color={colors.text}/></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>Create project</Text><Text style={styles.headerMeta}>Register a working folder on the connected PC</Text></View></View><View style={styles.newTaskMobile}><Text style={styles.fieldLabel}>WORKING FOLDER</Text><TextInput autoFocus style={styles.smallInput} value={cwd} onChangeText={setCwd} placeholder="C:\\Users\\you\\Projects\\my-project" autoCapitalize="none" autoCorrect={false}/>{duplicate&&<Text style={styles.automationError}>This project already exists.</Text>}<Pressable disabled={busy||!cwd.trim()||duplicate} style={[styles.primaryButton,(busy||!cwd.trim()||duplicate)&&styles.disabled]} onPress={()=>void create()}>{busy?<ActivityIndicator color="white"/>:<Text style={styles.primaryButtonText}>Create project</Text>}</Pressable></View></SafeAreaView></Modal>;
+  const input = { kind, path, distribution };
+  const preview = projectSetupPreview(input);
+  const duplicate = Boolean(preview.cwd) && config.projects.some((existing) => projectKey(existing) === projectKey(preview.cwd));
+  async function create(openChat: boolean) {
+    if (preview.error || duplicate || busy) return;
+    setBusy(true);
+    try { const created = await api.createProject(input); onCreated(created.cwd, created.config, openChat); }
+    catch (error) { Alert.alert("Could not create project", error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  }
+  return <Modal animationType="slide" onRequestClose={onClose}><SafeAreaView style={styles.page}>
+    <View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Cancel new project" style={styles.chatBackButton} onPress={onClose}><MobileIcon name="x" size={24} color={colors.text}/></Pressable><View style={styles.headerCopy}><Text style={styles.headerTitle}>Create project</Text><Text style={styles.headerMeta}>Create its folder on the connected PC</Text></View></View>
+    <ScrollView contentContainerStyle={styles.newTaskMobile} keyboardShouldPersistTaps="handled">
+      <Text style={styles.fieldLabel}>LOCATION</Text><View style={styles.miniChoices}>{(["windows", "wsl"] as const).map(value => <Pressable key={value} style={[styles.miniChoice, kind === value && styles.miniChoiceActive]} onPress={() => { setKind(value); setPath(""); }}><Text style={[styles.miniChoiceText, kind === value && styles.miniChoiceTextActive]}>{value === "wsl" ? "WSL · /var/www/" : "Windows"}</Text></Pressable>)}</View>
+      {kind === "wsl" && <><Text style={styles.fieldLabel}>WSL DISTRIBUTION</Text><TextInput style={styles.smallInput} value={distribution} onChangeText={setDistribution} placeholder="Debian" autoCapitalize="none" autoCorrect={false}/></>}
+      <Text style={styles.fieldLabel}>{kind === "wsl" ? "FOLDER UNDER /VAR/WWW/" : "WINDOWS FOLDER"}</Text><TextInput autoFocus style={styles.smallInput} value={path} onChangeText={setPath} placeholder={kind === "wsl" ? "personal-projects/tkss-valencia" : "C:\\Users\\you\\Projects\\my-project"} autoCapitalize="none" autoCorrect={false}/>
+      {preview.cwd ? <Text selectable style={styles.automationDescription}>{preview.cwd}</Text> : null}
+      {path.trim() && preview.error ? <Text style={styles.automationError}>{preview.error}</Text> : null}
+      {duplicate && <Text style={styles.automationError}>This project already exists.</Text>}
+      <Pressable disabled={busy || Boolean(preview.error) || duplicate} style={[styles.primaryButton,(busy || Boolean(preview.error) || duplicate) && styles.disabled]} onPress={() => void create(false)}>{busy ? <ActivityIndicator color="white"/> : <Text style={styles.primaryButtonText}>Create project</Text>}</Pressable>
+      <Pressable disabled={busy || Boolean(preview.error) || duplicate} style={[styles.primaryButton,(busy || Boolean(preview.error) || duplicate) && styles.disabled]} onPress={() => void create(true)}><Text style={styles.primaryButtonText}>Create and start chat</Text></Pressable>
+    </ScrollView>
+  </SafeAreaView></Modal>;
 }
 
 function RenameProjectModal({ project, api, onClose, onSaved }: { project: { cwd: string; label: string }; api: BoardApi; onClose: () => void; onSaved: (config: BoardConfig) => void }) {
@@ -1181,7 +1203,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     {automationAlert&&<Pressable style={styles.mobileAutomationAlert} onPress={()=>{setAutomationAlert(null);setResultNotification(automationAlert);void api.markNotificationsRead(automationAlert.id)}}><View style={styles.mobileAutomationAlertIcon}><MobileIcon name="zap" size={18} color={colors.primary}/></View><View style={styles.categoryCopy}><Text style={styles.automationName}>{automationAlert.automation?.name || "Automation"}</Text><Text style={styles.automationDescription} numberOfLines={2}>{alertProject} · {alertThread ? displayTitle(alertThread.name, alertThread.preview) : "Pipeline"} · {automationOutcome(automationAlert.automation?.status).label}</Text></View><MobileIcon name="chevron-right" size={18} color={colors.primary}/></Pressable>}
     {managing && config && <CategoryManager config={config} threads={threads} api={api} onClose={() => setManaging(false)} onSaved={refresh} onOpenTour={onOpenTour} onDisconnect={() => void onDisconnect()} />}
     {automating && <AutomationManager api={api} automations={automations} threads={threads} customers={config?.customers || []} projectNames={config?.projectNames || {}} categories={categories} onClose={() => setAutomating(false)} onChanged={refresh} />}
-    {creatingProject&&config&&<NewProjectModal config={config} api={api} onClose={()=>setCreatingProject(false)} onCreated={(cwd)=>{setCreatingProject(false);selectProjectBoard(projectKey(cwd));void refresh()}}/>}
+    {creatingProject&&config&&<NewProjectModal config={config} api={api} onClose={()=>setCreatingProject(false)} onCreated={(cwd,saved,openChat)=>{setConfig(saved);setCreatingProject(false);selectProjectBoard(projectKey(cwd));if(openChat)setTimeout(()=>setCreatingTask(true),350);void refresh()}}/>}
     {renamingProject&&<RenameProjectModal key={projectKey(renamingProject.cwd)} project={renamingProject} api={api} onClose={()=>setRenamingProject(null)} onSaved={(saved)=>{setConfig(saved);setRenamingProject(null)}}/>}
     {creatingTask && <NewTaskModal api={api} threads={threads} projects={config?.projects || []} projectNames={config?.projectNames || {}} archivedProjects={config?.archivedProjects || []} categories={categories} defaultProjectKey={selectedProject === ALL_PROJECTS ? undefined : selectedProject} defaultModel={preferences.getSnapshot().settings.model || ""} onClose={() => setCreatingTask(false)} onCreated={(thread) => { setCreatingTask(false); const customerId = currentCustomer && projectKey(currentCustomer.projectCwd) === projectKey(thread.cwd) ? currentCustomer.id : null; void retainCustomerThread(thread, customerId, true); }} />}
     {creatingCustomer&&config&&selectedProject!==ALL_PROJECTS&&<NewCustomerModal config={config} api={api} projectCwd={projects.find(project=>project.key===selectedProject)?.cwd||selectedProject} projectName={selectedProjectLabel} onClose={()=>setCreatingCustomer(false)} onCreated={(customer,saved)=>{setConfig(saved);setCreatingCustomer(false);setSelectedCustomerId(customer.id);setActiveCategory(null)}}/>}

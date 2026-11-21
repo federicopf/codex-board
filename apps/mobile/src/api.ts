@@ -1,4 +1,4 @@
-import type { Automation, BoardConfig, BoardNotification, CodexEvent, CreateAutomationInput, CreateThreadInput, ForkThreadInput, JsonValue, PairingCredential, PendingRemoteRequest, QueuedMessage, RemoteHealth, SendOutcome, ThreadDto, TurnSettings } from "@codex-board/protocol";
+import type { Automation, BoardConfig, BoardNotification, CodexEvent, CreateAutomationInput, CreateProjectInput, CreateThreadInput, ForkThreadInput, JsonValue, PairingCredential, PendingRemoteRequest, QueuedMessage, RemoteHealth, SendOutcome, ThreadDto, TurnSettings } from "@codex-board/protocol";
 import { loadLegacyTurnSettings, saveLegacyTurnSettings } from "./connection";
 
 type WebSocketWithHeaders = new (url: string, protocols?: string | string[] | null, options?: { headers?: Record<string, string> }) => WebSocket;
@@ -50,6 +50,10 @@ export class BoardApi {
   forkThread(id: string, input: ForkThreadInput) { return this.request<ThreadDto>(`/v1/threads/${encodeURIComponent(id)}/fork`, { method: "POST", body: JSON.stringify(input) }); }
   async board() { return this.resolveBoard(await this.request<BoardConfig>("/v1/board")); }
   async updateBoard(config: BoardConfig) { return this.resolveBoard(await this.request<BoardConfig>("/v1/board", { method: "PUT", body: JSON.stringify(config) })); }
+  async createProject(input: CreateProjectInput) {
+    const created = await this.request<{ cwd: string; config: BoardConfig }>("/v1/projects/create", { method: "POST", body: JSON.stringify(input) });
+    return { ...created, config: await this.resolveBoard(created.config) };
+  }
   async setThreadFavorite(id: string, favorite: boolean) { return this.resolveBoard(await this.request<BoardConfig>(`/v1/threads/${encodeURIComponent(id)}/favorite`, { method: "PUT", body: JSON.stringify({ favorite }) })); }
   async deleteCustomer(id: string) { return this.resolveBoard(await this.request<BoardConfig>(`/v1/customers/${encodeURIComponent(id)}`, { method: "DELETE" })); }
   async renameProject(cwd: string, name: string) { return this.resolveBoard(await this.request<BoardConfig>("/v1/projects/name", { method: "PUT", body: JSON.stringify({ cwd, name }) })); }

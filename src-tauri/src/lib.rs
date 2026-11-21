@@ -5,6 +5,7 @@ mod notifications;
 mod persistence;
 mod remote;
 mod local_paths;
+mod project_setup;
 
 use automations::{Automation, AutomationEnabledInput, AutomationStore, CreateAutomationInput};
 use codex::{
@@ -13,6 +14,7 @@ use codex::{
 };
 use notifications::{BoardNotification, NotificationStore};
 use remote::{BoardConfig, GatewayInfo, ProjectNameInput, RemoteGateway, TailscaleInfo, TurnPreferencesPatch};
+use project_setup::CreateProjectInput;
 use serde_json::Value;
 use std::sync::Arc;
 use tauri::Manager;
@@ -234,6 +236,19 @@ async fn set_board_config(
         )
         .await;
     Ok(saved)
+}
+
+#[tauri::command]
+async fn create_project(
+    gateway: tauri::State<'_, RemoteGateway>,
+    client: tauri::State<'_, Arc<CodexClient>>,
+    input: CreateProjectInput,
+) -> Result<remote::CreatedProject, String> {
+    let cwd = tauri::async_runtime::spawn_blocking(move || project_setup::create_project_directory(&input))
+        .await.map_err(|error| error.to_string())??;
+    let created = gateway.register_project(cwd)?;
+    client.emit_local_event("board/config/updated", serde_json::to_value(&created.config).map_err(|error| error.to_string())?).await;
+    Ok(created)
 }
 
 #[tauri::command]
@@ -471,6 +486,7 @@ pub fn run() {
             gateway_info,
             get_board_config,
             set_board_config,
+            create_project,
             set_thread_favorite,
             delete_customer,
             rename_project,

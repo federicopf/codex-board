@@ -12,7 +12,8 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { asCodexError, clearNotifications, createThread, archiveThread, deleteCustomer as deleteCustomerApi, deleteProject as deleteProjectApi, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, getRateLimits, interruptTurn, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameProject as renameProjectApi, renameThread, sendMessage, setBoardConfig, setProjectArchived as setProjectArchivedApi, setThreadFavorite } from "./api";
+import { asCodexError, clearNotifications, createProject as createProjectApi, createThread, archiveThread, deleteCustomer as deleteCustomerApi, deleteProject as deleteProjectApi, drainCodexEvents, forkThread, getBoardConfig, getMessageQueues, getRateLimits, interruptTurn, listNotifications, listThreads, markNotificationsRead, removeQueuedMessage as removeQueuedMessageApi, renameProject as renameProjectApi, renameThread, sendMessage, setBoardConfig, setProjectArchived as setProjectArchivedApi, setThreadFavorite } from "./api";
+import type { CreateProjectInput } from "@codex-board/protocol";
 import type { BoardNotification, ProjectCustomer } from "@codex-board/protocol";
 import { turnPreferences } from "./lib/turnSettings";
 import { setTurnSettings } from "./api";
@@ -424,13 +425,15 @@ function App() {
     localStorage.setItem(PROJECT_BOARD_KEY, key);
   }, []);
 
-  function createProject(cwd: string) {
-    const next = [...projectPathsRef.current, cwd];
+  async function createProject(input: CreateProjectInput, openChat: boolean) {
+    const created = await createProjectApi(input);
+    const cwd = created.cwd;
+    const next = created.config.projects;
     projectPathsRef.current = next;
     setProjectPaths(next);
-    persistBoardConfig(categoryOrder, approvalModeRef.current, next);
     setNewProjectDialog(false);
     selectProjectBoard(buildProjectMap([], [cwd]).keys().next().value || ALL_PROJECTS);
+    if (openChat) setNewTaskDialog(true);
   }
 
   async function renameProject(projectKey: string, name: string) {

@@ -37,6 +37,8 @@ Non leggere o includere in diff estesi salvo necessita esplicita:
 - Progetti: le cartelle registrate persistono in `BoardConfig.projects`; `src/lib/projects.ts` unisce queste board ai progetti scoperti dalle conversazioni, così le board vuote non scompaiono. I nomi visibili persistono separatamente in `BoardConfig.projectNames` usando il path normalizzato come chiave; Tauri `rename_project` e `PUT /v1/projects/name` aggiornano solo il nome, senza cambiare cwd, clienti o thread. `save_board_config` preserva la mappa contro scritture stale.
 - Archivio progetti: `BoardConfig.archivedProjects` conserva le chiavi dei percorsi normalizzati. La mutazione dedicata Tauri `set_project_archived` / `PUT /v1/projects/archive` archivia o ripristina in modo idempotente senza toccare thread, clienti, nomi o file; `save_board_config` preserva lo stato contro scritture stale. Desktop e mobile separano la lista attiva dalla tendina Archiviati e nascondono i thread archiviati dalla vista General e dal selettore di nuova chat.
 
+- Creazione progetti: `packages/protocol/src/projectSetup.ts` costruisce l'anteprima Windows/WSL; `src-tauri/src/project_setup.rs` valida il percorso e crea la cartella, con WSL vincolato a `/var/www/`. Tauri `create_project` e `POST /v1/projects/create` registrano poi la board in `src-tauri/src/remote.rs`. Desktop e mobile possono aprire subito la creazione della chat nel nuovo progetto.
+
 ### Tauri / Rust core
 
 - Tipo: backend locale Rust per comandi Tauri, processo `codex app-server`, gateway remoto, automazioni e persistenza.

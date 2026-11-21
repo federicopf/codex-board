@@ -27,6 +27,7 @@ use crate::{
     automations::{AutomationEnabledInput, AutomationStore, CreateAutomationInput},
     codex::{CodexClient, CodexErrorDto, TurnCoordinator, TurnSettings},
     notifications::NotificationStore,
+    project_setup::CreateProjectInput,
 };
 
 pub const GATEWAY_PORT: u16 = 47_821;
@@ -78,6 +79,13 @@ pub struct ProjectNameInput {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectPathInput {
     pub cwd: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedProject {
+    pub cwd: String,
+    pub config: BoardConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -304,11 +312,14 @@ impl RemoteGateway {
         save_board_config(&self.config, &self.config_path, config)
     }
 
+    pub fn register_project(&self, cwd: String) -> Result<CreatedProject, String> {
+        register_project_config(&self.config, &self.config_path, cwd)
+    }
+
     pub fn delete_customer(&self, customer_id: &str) -> Result<BoardConfig, String> {
         delete_customer_config(&self.config, &self.config_path, customer_id)?
             .ok_or_else(|| "Customer not found".into())
     }
-
     pub fn rename_project(&self, input: ProjectNameInput) -> Result<BoardConfig, String> {
         save_project_name(&self.config, &self.config_path, input)
     }
@@ -391,6 +402,7 @@ impl RemoteGateway {
                 .route("/v1/board", get(get_board).put(put_board))
                 .route("/v1/customers/{id}", delete(delete_customer))
                 .route("/v1/projects/name", put(put_project_name))
+                .route("/v1/projects/create", post(post_create_project))
                 .route("/v1/projects/remove", post(remove_project))
                 .route("/v1/projects/archive", put(put_project_archive))
                 .route("/v1/turn-settings", put(put_turn_settings))
@@ -591,6 +603,23 @@ fn project_identity(cwd: &str) -> String {
     if key.len() == 2 && key.as_bytes().get(1) == Some(&b':') { key.push('/'); }
     if key.as_bytes().get(1) == Some(&b':') { key = key.to_lowercase(); }
     key
+}
+
+fn register_project_config(
+    state: &Arc<RwLock<BoardConfig>>,
+    path: &Path,
+    cwd: String,
+) -> Result<CreatedProject, String> {
+    let mut current = state.write().map_err(|error| error.to_string())?;
+    if current.projects.iter().any(|project| project_identity(project) == project_identity(&cwd)) {
+        return Err("This project already exists".into());
+    }
+    let mut next = current.clone();
+    next.projects.push(cwd.clone());
+    next.revision = current.revision.saturating_add(1);
+    persist_config(path, &next)?;
+    *current = next.clone();
+    Ok(CreatedProject { cwd, config: next })
 }
 
 fn unique_customers(customers: Vec<ProjectCustomer>) -> Result<Vec<ProjectCustomer>, String> {
@@ -1246,6 +1275,26 @@ async fn remove_project(
     Ok(Json(config))
 }
 
+async fn post_create_project(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(input): Json<CreateProjectInput>,
+) -> Result<Json<CreatedProject>, ApiError> {
+    authorized(&headers, &state)?;
+    let cwd = tokio::task::spawn_blocking(move || crate::project_setup::create_project_directory(&input))
+        .await.map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error))?;
+    let created = register_created_project(&state, cwd)?;
+    state.client.emit_local_event("board/config/updated", serde_json::to_value(&created.config)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?).await;
+    Ok(Json(created))
+}
+
+fn register_created_project(state: &ApiState, cwd: String) -> Result<CreatedProject, ApiError> {
+    register_project_config(&state.config, &state.config_path, cwd)
+        .map_err(|error| ApiError(StatusCode::BAD_REQUEST, error))
+}
+
 async fn put_project_archive(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -1539,6 +1588,23 @@ mod tests {
             unique_projects(vec![" C:\\work\\demo\\ ".into(), "C:\\work\\demo".into()]).unwrap(),
             vec!["C:\\work\\demo"]
         );
+    }
+
+    #[test]
+    fn registering_project_preserves_board_and_rejects_duplicates() {
+        let directory = std::env::temp_dir().join(format!("codex-board-project-create-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        let gateway = RemoteGateway::prepare(&directory).unwrap();
+        let mut initial = gateway.board_config();
+        initial.categories = vec!["Review".into()];
+        gateway.set_board_config(initial).unwrap();
+        let created = gateway.register_project(r"\\wsl$\Debian\var\www\client".into()).unwrap();
+        assert_eq!(created.cwd, r"\\wsl$\Debian\var\www\client");
+        assert_eq!(created.config.categories, vec!["Review"]);
+        assert_eq!(created.config.projects, vec![created.cwd.clone()]);
+        assert!(gateway.register_project(created.cwd.clone()).is_err());
+        let disk: BoardConfig = crate::persistence::load_json_or_default(&directory.join("board-config.json"));
+        assert_eq!(disk.projects, created.config.projects);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

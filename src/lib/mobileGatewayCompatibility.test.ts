@@ -23,6 +23,19 @@ describe("OTA compatibility with installed desktop gateways",()=>{
     }));
   });
 
+  it("creates a WSL folder through the authenticated project endpoint", async () => {
+    const cwd = "\\\\wsl$\\Debian\\var\\www\\personal-projects\\tkss-valencia";
+    const config = { ...board(9, { model: "default" }), projects: [cwd] };
+    const fetch = vi.fn().mockResolvedValue(reply({ cwd, config }));
+    vi.stubGlobal("fetch", fetch);
+    const api = new BoardApi({ baseUrl: "http://fixture", token: "fixture" });
+    expect((await api.createProject({ kind: "wsl", distribution: "Debian", path: "personal-projects/tkss-valencia" })).cwd).toBe(cwd);
+    expect(fetch).toHaveBeenCalledExactlyOnceWith("http://fixture/v1/projects/create", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ kind: "wsl", distribution: "Debian", path: "personal-projects/tkss-valencia" }),
+      headers: expect.objectContaining({ Authorization: "Bearer fixture" }),
+    }));
+  });
+
   it("keeps model choices on the phone when the gateway has no shared settings endpoint",async()=>{
     const fetch=vi.fn().mockImplementation(()=>Promise.resolve(reply(legacyBoard)));
     vi.stubGlobal("fetch",fetch);
