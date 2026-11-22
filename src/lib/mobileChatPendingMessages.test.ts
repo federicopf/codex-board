@@ -22,4 +22,9 @@ describe("mobile pending chat messages", () => {
     const thread = { messages: [{ index: 0, item: { type: "userMessage", content: [{ type: "text", text: "Ciao" }] } }] };
     expect(reconcilePendingChatMessages(pending, thread)).toEqual(pending);
   });
+
+  it("removes a local message after the newest server page has passed it", () => {
+    const pending = [{ id: "sent", text: "Start", imageCount: 0, afterIndex: 12, accepted: true }];
+    expect(reconcilePendingChatMessages(pending, { pagination: { start: 15, total: 25 }, messages: [{ index: 15, item: { type: "agentMessage", text: "Working" } }] })).toEqual([]);
+  });
 });

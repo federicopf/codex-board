@@ -11,8 +11,9 @@ export interface PendingChatMessage {
 
 export function reconcilePendingChatMessages(pending: PendingChatMessage[], thread: Record<string, JsonValue>): PendingChatMessage[] {
   if (!pending.length || !Array.isArray(thread.messages)) return pending;
-  const pagination = thread._pagination && typeof thread._pagination === "object" && !Array.isArray(thread._pagination)
-    ? thread._pagination as Record<string, JsonValue> : {};
+  const metadata = thread.pagination || thread._pagination;
+  const pagination = metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? metadata as Record<string, JsonValue> : {};
   const start = typeof pagination.start === "number" ? pagination.start : 0;
   const received = thread.messages.flatMap((raw, position) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
@@ -23,6 +24,7 @@ export function reconcilePendingChatMessages(pending: PendingChatMessage[], thre
   });
   return pending.filter((message) => {
     if (!message.accepted) return true;
+    if (start > message.afterIndex) return false;
     const match = received.findIndex((item) => item.index >= message.afterIndex && item.text === message.text);
     if (match < 0) return true;
     received.splice(match, 1);

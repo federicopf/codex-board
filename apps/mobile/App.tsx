@@ -439,12 +439,17 @@ function Chat({ thread, projectName, api, queue, requests, eventRevision, prefer
   const allowOlderPageRef = useRef(false);
   const historyRequest = useRef(0);
   const historyNetworkPendingRef = useRef(false);
+  const historyRefreshQueuedRef = useRef(false);
+  const chatListRef = useRef<FlatList<ChatLine>>(null);
+  const newestLineIdRef = useRef<string | null>(null);
+  const scrollForNewLineRef = useRef<string | null>(null);
   const lines = useMemo(() => conversation(loaded), [loaded]);
   const timeline = useMemo(() => [
     ...pendingSent.map((message): ChatLine => ({ id: message.id, role: "user", text: message.text || `${message.imageCount} image${message.imageCount === 1 ? "" : "s"} attached` })).reverse(),
     ...lines.slice().reverse(),
   ], [lines, pendingSent]);
   const refresh = useCallback(() => {
+    if (historyNetworkPendingRef.current) { historyRefreshQueuedRef.current = true; return; }
     const request = ++historyRequest.current;
     historyNetworkPendingRef.current = true;
     if (hasHistory.current) setHistoryRefreshing(true);
@@ -453,13 +458,18 @@ function Chat({ thread, projectName, api, queue, requests, eventRevision, prefer
         if (request !== historyRequest.current) return;
         const merged = loadedRef.current?._staleCache === true ? next : mergeThreadPage(loadedRef.current, next);
         rememberThread(thread.id, merged); loadedRef.current = merged; hasHistory.current = true; setLoaded(merged); setHistoryError(null);
-        setPendingSent(current => reconcilePendingChatMessages(current, merged));
+        setPendingSent(current => reconcilePendingChatMessages(current, next));
         void writeChatHistoryCache(api.historyCacheScope(), thread.id, merged);
       })
       .catch((error) => { if (request === historyRequest.current) setHistoryError(error instanceof Error ? error.message : String(error)); })
       .finally(() => {
         if (request !== historyRequest.current) return;
         historyNetworkPendingRef.current = false;
+        if (historyRefreshQueuedRef.current) {
+          historyRefreshQueuedRef.current = false;
+          refresh();
+          return;
+        }
         setHistoryLoading(false); setHistoryRefreshing(false);
       });
   }, [api, thread.id]);
@@ -497,6 +507,19 @@ function Chat({ thread, projectName, api, queue, requests, eventRevision, prefer
   useEffect(refresh, [refresh]);
   useEffect(() => { if (eventRevision > 0) refresh(); }, [eventRevision, refresh]);
   useEffect(() => () => { historyRequest.current += 1; }, []);
+  const newestLineId = timeline[0]?.id || null;
+  useEffect(() => {
+    if (!newestLineId || newestLineId === newestLineIdRef.current) return;
+    const hadPreviousLine = newestLineIdRef.current !== null;
+    newestLineIdRef.current = newestLineId;
+    scrollForNewLineRef.current = newestLineId;
+    const frame = requestAnimationFrame(() => {
+      if (scrollForNewLineRef.current !== newestLineId) return;
+      scrollForNewLineRef.current = null;
+      chatListRef.current?.scrollToOffset({ offset: 0, animated: hadPreviousLine });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [newestLineId]);
   const onPending = useCallback((id: string, text: string, imageCount: number) => {
     const pagination = object(loadedRef.current?._pagination);
     const messages = Array.isArray(loadedRef.current?.messages) ? loadedRef.current.messages : [];
@@ -513,21 +536,23 @@ function Chat({ thread, projectName, api, queue, requests, eventRevision, prefer
   }, [refresh]);
 
   const turnId = activeTurnId(loaded);
+  const working = Boolean(turnId || pendingSent.length || isWorking(thread));
   return <ChatKeyboardFrame>
     <View style={styles.header}>
       <Pressable accessibilityRole="button" accessibilityLabel="Back to board" style={styles.chatBackButton} onPress={onClose}><MobileIcon name="chevron-left" size={25} color={colors.text}/></Pressable>
-      <View style={styles.headerCopy}><View style={styles.chatTitleRow}><Text style={styles.headerTitle} numberOfLines={1}>{displayTitle(thread.name, thread.preview)}</Text><View style={[styles.chatState, turnId && styles.chatStateLive]}><Text style={[styles.chatStateText, turnId && styles.chatStateTextLive]}>{turnId ? "Working" : "Ready"}</Text></View></View><Text style={styles.headerMeta} numberOfLines={1}>{projectName}{thread.forkedFromId?" · Forked conversation":""}</Text></View>
+      <View style={styles.headerCopy}><View style={styles.chatTitleRow}><Text style={styles.headerTitle} numberOfLines={1}>{displayTitle(thread.name, thread.preview)}</Text><View style={[styles.chatState, working && styles.chatStateLive]}><Text style={[styles.chatStateText, working && styles.chatStateTextLive]}>{working ? "Working" : "Ready"}</Text></View></View><Text style={styles.headerMeta} numberOfLines={1}>{projectName}{thread.forkedFromId?" · Forked conversation":""}</Text></View>
       <View style={styles.topbarActions}>
         <Pressable accessibilityRole="button" accessibilityLabel="Conversation actions" style={styles.chatBackButton} onPress={()=>setActionsOpen(true)}><MobileIcon name="more-horizontal" size={23} color={colors.text}/></Pressable>
       </View>
     </View>
-    {historyRefreshing && <View accessibilityRole="progressbar" accessibilityLabel="Updating conversation" style={{ minHeight: 32, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#F6F6FF", borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#E1E3EA" }}><ActivityIndicator size="small" color={colors.primary}/><Text style={{ color: colors.textMuted, fontSize: 11 }}>Updating messages…</Text></View>}
+    {working && <View accessibilityRole="progressbar" accessibilityLabel="Codex is working" style={styles.chatWorkingBanner}><ActivityIndicator size="small" color={colors.primary}/><Text style={styles.chatWorkingText}>Codex is working…</Text></View>}
+    {historyRefreshing && !working && <View accessibilityRole="progressbar" accessibilityLabel="Updating conversation" style={{ minHeight: 32, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#F6F6FF", borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#E1E3EA" }}><ActivityIndicator size="small" color={colors.primary}/><Text style={{ color: colors.textMuted, fontSize: 11 }}>Updating messages…</Text></View>}
     {historyError&&<Pressable style={styles.connectionBanner} onPress={refresh} accessibilityRole="button"><Text style={styles.connectionBannerText}>Could not refresh the conversation · Tap to retry</Text></Pressable>}
-    <FlatList inverted style={styles.chat} contentContainerStyle={styles.chatContent} data={timeline} keyExtractor={(item) => item.id} maintainVisibleContentPosition={{ minIndexForVisible: 0 }} onScrollBeginDrag={() => { allowOlderPageRef.current = true; }} onEndReached={loadOlder} onEndReachedThreshold={0.35} ListFooterComponent={historyLoadingOlder?<ActivityIndicator style={{padding:12}} color={colors.primary}/>:null} ListEmptyComponent={historyLoading?<ActivityIndicator style={{padding:24}} color={colors.primary}/>:<Text style={styles.empty}>{historyError?"Conversation unavailable":"No messages yet."}</Text>} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" renderItem={({ item }) => <ChatMessage line={item} api={api}/>} ListHeaderComponent={<>
+    <FlatList ref={chatListRef} inverted style={styles.chat} contentContainerStyle={styles.chatContent} data={timeline} keyExtractor={(item) => item.id} maintainVisibleContentPosition={{ minIndexForVisible: 0 }} onContentSizeChange={() => { if (scrollForNewLineRef.current) { scrollForNewLineRef.current = null; chatListRef.current?.scrollToOffset({ offset: 0, animated: true }); } }} onScrollBeginDrag={() => { allowOlderPageRef.current = true; }} onEndReached={loadOlder} onEndReachedThreshold={0.35} ListFooterComponent={historyLoadingOlder?<ActivityIndicator style={{padding:12}} color={colors.primary}/>:null} ListEmptyComponent={historyLoading?<ActivityIndicator style={{padding:24}} color={colors.primary}/>:<Text style={styles.empty}>{historyError?"Conversation unavailable":"No messages yet."}</Text>} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" renderItem={({ item }) => <ChatMessage line={item} api={api}/>} ListHeaderComponent={<>
       {queue.length > 0 && <View style={styles.queueBox}><Text style={styles.requestTitle}>{queue.length} queued</Text>{queue.map((message, index) => { const count = message.imageUrls?.length || Number(Boolean(message.imageUrl)); return <View key={message.id} style={styles.queueRow}><Text style={styles.queueIndex}>{index + 1}</Text><Text style={styles.queueText}>{message.text || `${count} image${count === 1 ? "" : "s"} attached`}</Text><Pressable onPress={() => void api.removeQueued(thread.id, message.id).then(() => { onQueueChanged(); onChanged(); })}><MobileIcon name="x" size={18} color={colors.textMuted}/></Pressable></View>; })}</View>}
       {requests.map((request) => <RequestCard key={JSON.stringify(request.requestId)} request={request} api={api} onDone={onChanged} />)}
     </>} />
-    <View style={{ backgroundColor: "white" }}><MobileChatComposer drafts={drafts} key={thread.id} threadId={thread.id} api={api} working={Boolean(turnId)} preferences={preferences} onChanged={onChanged} onQueueChanged={onQueueChanged} onPending={onPending} onSendFinished={onSendFinished} /></View>
+    <View style={{ backgroundColor: "white" }}><MobileChatComposer drafts={drafts} key={thread.id} threadId={thread.id} api={api} working={working} preferences={preferences} onChanged={onChanged} onQueueChanged={onQueueChanged} onPending={onPending} onSendFinished={onSendFinished} /></View>
     {actionsOpen&&<MobileActionSheet title="Conversation" onClose={()=>setActionsOpen(false)} actions={[
       {label:"Rename conversation",icon:"edit-2",onPress:onRename},
       {label:"Fork conversation",icon:"git-branch",onPress:onFork},
@@ -902,6 +927,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
   const selectedThreadIdRef = useRef<string | null>(null);
   selectedThreadIdRef.current = selected?.id || null;
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chatRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notificationIds = useRef<Set<string> | null>(null);
   const pendingCreatedThreads = useRef(new Map<string, ThreadDto>());
   const refreshInFlight = useRef(false);
@@ -956,8 +982,14 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
     void refresh();
     const unsubscribe = api.subscribe(event=>{
       const eventThreadId = string(object(event.params).threadId);
-      if (eventThreadId && eventThreadId === selectedThreadIdRef.current && (event.method === "turn/started" || event.method === "turn/completed")) {
-        setEventRevision((value) => value + 1);
+      if (eventThreadId && eventThreadId === selectedThreadIdRef.current) {
+        if (event.method === "turn/started" || event.method === "turn/completed") {
+          if (chatRefreshTimer.current) clearTimeout(chatRefreshTimer.current);
+          chatRefreshTimer.current = null;
+          setEventRevision((value) => value + 1);
+        } else if ((event.method === "item/started" || event.method === "item/completed") && !chatRefreshTimer.current) {
+          chatRefreshTimer.current = setTimeout(() => { chatRefreshTimer.current = null; setEventRevision((value) => value + 1); }, 600);
+        }
       }
       if (event.method === "board/queue/updated") {
         const value = object(event.params);
@@ -983,6 +1015,7 @@ function Board({ credential, onDisconnect, onOpenTour }: { credential: PairingCr
       unsubscribe();
       foreground.remove();
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      if (chatRefreshTimer.current) clearTimeout(chatRefreshTimer.current);
     };
   }, [api, preferences, refresh, scheduleRefresh]);
   useEffect(() => {
@@ -1275,7 +1308,7 @@ const styles = StyleSheet.create({
   taskList: { flex: 1 }, taskListContent: { paddingHorizontal: 16, paddingBottom: 28 }, listHeading: { marginTop: 7, marginBottom: 12, paddingHorizontal: 3, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, listTitle: { color: "#242630", fontSize: 14, fontWeight: "800" }, listCount: { color: "#858A96", fontSize: 10, fontWeight: "600" },
   cardTop: { minHeight: 24, marginBottom: 9, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, projectPill: { maxWidth: "68%", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, overflow: "hidden", color: "#747987", backgroundColor: "#F1F2F6", fontSize: 9, fontWeight: "700" }, workingPill: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: "#EEEFFF" }, workingPillText: { color: "#6266EA", fontSize: 9, fontWeight: "800" }, cardBottom: { marginTop: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, openArrow: { color: "#6266EA", fontSize: 18, fontWeight: "700" }, moveLinkText: { color: "#858A96", fontSize: 10, fontWeight: "700" },
   emptyColumn: { minHeight: 240, marginTop: 5, alignItems: "center", justifyContent: "center", borderWidth: 1, borderStyle: "dashed", borderColor: "#D8DAE3", borderRadius: 18, backgroundColor: "rgba(255,255,255,.45)" }, emptyIcon: { color: "#A1A5B1", fontSize: 31 }, emptyTitle: { marginTop: 9, color: "#333640", fontSize: 15, fontWeight: "700" }, emptyText: { maxWidth: 230, marginTop: 5, textAlign: "center", color: "#858A96", fontSize: 11, lineHeight: 17 },
-  chatBackButton: { width: 48, height: 48, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 14, borderWidth: 1, borderColor: "#E1E3EA", backgroundColor: "#FAFAFC" }, chatTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 }, chatState: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8, backgroundColor: "#F0F1F5" }, chatStateLive: { backgroundColor: "#EEEFFF" }, chatStateText: { color: "#7C818E", fontSize: 8, fontWeight: "800" }, chatStateTextLive: { color: "#6266EA" }, stopButton: { paddingHorizontal: 11, paddingVertical: 8, borderRadius: 10, backgroundColor: "#FFF0ED" },
+  chatBackButton: { width: 48, height: 48, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 14, borderWidth: 1, borderColor: "#E1E3EA", backgroundColor: "#FAFAFC" }, chatTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 }, chatState: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8, backgroundColor: "#F0F1F5" }, chatStateLive: { backgroundColor: "#EEEFFF" }, chatStateText: { color: "#7C818E", fontSize: 8, fontWeight: "800" }, chatStateTextLive: { color: "#6266EA" }, chatWorkingBanner: { minHeight: 40, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: "#F0F1FF", borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#DBDDF6" }, chatWorkingText: { color: "#4C50BB", fontSize: 12, fontWeight: "700" }, stopButton: { paddingHorizontal: 11, paddingVertical: 8, borderRadius: 10, backgroundColor: "#FFF0ED" },
   choiceDialog: { maxHeight: "78%", padding: 20, paddingTop: 10, borderRadius: 24, backgroundColor: "#F8F8FB" }, choiceList: { marginTop: 16 }, choiceRow: { minHeight: 60, marginBottom: 8, paddingHorizontal: 15, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderColor: "#E1E3EA", borderRadius: 14, backgroundColor: "white" }, choiceRowSelected: { borderColor: "#8D90ED", backgroundColor: "#F1F1FF" }, choiceMain: { flex: 1, minHeight: 58, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, archiveProjectButton: { width: 34, height: 34, alignItems: "center", justifyContent: "center", borderRadius: 9, backgroundColor: "#FDEDEC" }, archiveIcon: { color: "#B54A3C", fontSize: 18, lineHeight: 20 }, choiceLabel: { color: "#262832", fontSize: 14, fontWeight: "700" }, choiceCheck: { color: "#6266EA", fontSize: 17, fontWeight: "800" },
   forkSourceMobile:{padding:14,borderRadius:13,backgroundColor:"white",borderWidth:1,borderColor:"#E1E3EA"},forkHistoryChoice:{minHeight:58,marginBottom:8,paddingHorizontal:14,flexDirection:"row",alignItems:"center",justifyContent:"space-between",borderWidth:1,borderColor:"#E1E3EA",borderRadius:13,backgroundColor:"white"},forkHistoryChoiceActive:{borderColor:"#8D90ED",backgroundColor:"#F1F1FF"},forkHistoryLabel:{flex:1,paddingRight:10,color:"#3A3D48",fontSize:12,lineHeight:17,fontWeight:"600"},forkNoteMobile:{marginVertical:8,color:"#7C818E",fontSize:11,lineHeight:17},
   automationHeaderNew: { width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 12, backgroundColor: "#1B1E2B" }, automationHeaderNewIcon: { color: "white", fontSize: 20, lineHeight: 22, fontWeight: "600" }, workflowCreateChoices: { gap: 9, marginBottom: 20 }, workflowCreateCard: { minHeight: 68, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 11, borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 15, backgroundColor: "white" }, automationEmpty: { minHeight: 260, alignItems: "center", justifyContent: "center", borderWidth: 1, borderStyle: "dashed", borderColor: "#D8DAE3", borderRadius: 18, backgroundColor: "rgba(255,255,255,.45)" }, automationComposer: { padding: 14, gap: 10, borderWidth: 1, borderColor: "#E0E2EA", borderRadius: 17, backgroundColor: "white" }, segmented: { padding: 3, flexDirection: "row", borderRadius: 12, backgroundColor: "#EFF0F4" }, segment: { flex: 1, minHeight: 38, alignItems: "center", justifyContent: "center", borderRadius: 9 }, segmentActive: { backgroundColor: "#1B1E2B" }, segmentText: { color: "#727784", fontSize: 11, fontWeight: "700" }, segmentTextActive: { color: "white" }, fieldLabel: { marginTop: 5, color: "#8A8F9B", fontSize: 8, fontWeight: "800", letterSpacing: 1 }, miniChoices: { gap: 7 }, miniChoice: { maxWidth: 190, minHeight: 36, paddingHorizontal: 11, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E0E2E9", borderRadius: 11, backgroundColor: "#F9F9FB" }, miniChoiceActive: { borderColor: "#8588EC", backgroundColor: "#EEEFFF" }, miniChoiceText: { color: "#696E7B", fontSize: 10, fontWeight: "700" }, miniChoiceTextActive: { color: "#5559D8" }, promptInput: { minHeight: 76, textAlignVertical: "top" }, automationSectionTitle: { marginTop: 24, marginBottom: 10, marginLeft: 3, color: "#858A96", fontSize: 9, fontWeight: "800", letterSpacing: 1 }, automationCard: { marginBottom: 10, padding: 14, borderWidth: 1, borderColor: "#E1E3EA", borderRadius: 15, backgroundColor: "white" }, automationCardTop: { flexDirection: "row", alignItems: "center", gap: 11 }, automationIcon: { width: 36, height: 36, alignItems: "center", justifyContent: "center", borderRadius: 11, backgroundColor: "#EEEFFF" }, automationName: { color: "#252832", fontSize: 13, fontWeight: "800" }, automationDescription: { marginTop: 3, color: "#7F8491", fontSize: 10, lineHeight: 15 }, automationError: { marginTop: 4, color: "#B54A3C", fontSize: 9 }, toggle: { width: 42, height: 24, padding: 3, justifyContent: "center", borderRadius: 12, backgroundColor: "#D8DAE1" }, toggleOn: { backgroundColor: "#6266EA" }, toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: "white" }, toggleKnobOn: { alignSelf: "flex-end" }, deleteAutomation: { marginTop: 10, alignSelf: "flex-end", color: "#B54A3C", fontSize: 10, fontWeight: "700" },

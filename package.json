@@ -1,7 +1,7 @@
 {
   "name": "codex-board",
   "private": true,
-  "version": "0.2.36",
+  "version": "0.2.37",
   "type": "module",
   "workspaces": [
     "apps/mobile",
